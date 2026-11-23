@@ -351,6 +351,17 @@ describe("auth.code", () => {
     expect(e.calls.secret).toEqual(["1password:abc:totp"]);
   });
 
+  it("totp uses the account the last auth.login used on this tab; two TOTP items and no login → BAD_REQUEST with masked ids", async () => {
+    const a = GH("a1", "alice@gmail.com", { hasTotp: true });
+    const b = GH("b2", "bob@gmail.com", { hasTotp: true });
+    const e = fakeEnv({ accounts: [a, b], secrets: { totp: "123456" } });
+    await expect(authCode(e.env, codePage().page, { source: "totp" }, newMemory())).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("1password:a1 (a•••@gmail.com)") });
+    const mem = newMemory();
+    mem.lastAccount.set(5, { id: "1password:b2", origin: "https://github.com" });
+    await authCode(e.env, codePage().page, { source: "totp" }, mem);
+    expect(e.calls.secret).toEqual(["1password:b2:totp"]);
+  });
+
   it("auto order totp → email → sms: no TOTP item, Gmail not signed in → falls through to sms", async () => {
     const pg = codePage();
     const e = fakeEnv({ accounts: [GH()], codeSources: [{ name: "sms", state: "available" }], email: async () => Promise.reject(Object.assign(new Error("Gmail is not signed in"), { code: "NOT_FOUND" })), sms: async () => "778899" });
