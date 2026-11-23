@@ -154,7 +154,8 @@ test("lite mode (no debugger): snapshot, click, fill, form.fill", async ({ h }) 
   const info = await h.ok(c, "session.info");
   expect(info.json.tabs.find((t: any) => t.active).mode).toBe("lite");
   const s = await h.ok(c, "page.snapshot");
-  expect(s.text).toMatch(/\[ref=l\d+\]/);
+  // D22: lite refs come from the same table as CDP refs
+  expect(s.text).toMatch(/\[ref=e\d+\]/);
   const email = Harness.ref(s.text, /textbox "Email address"/);
   await h.ok(c, "act.fill", { ref: email, value: "lite@example.com" });
   await h.ok(c, "form.fill", { fields: { Country: "Mexico", "Subscribe to newsletter": true, Plan: "Free" } });
@@ -163,10 +164,12 @@ test("lite mode (no debugger): snapshot, click, fill, form.fill", async ({ h }) 
   expect(txt).toContain('"email":"lite@example.com"');
   expect(txt).toContain('"country":"mx"');
   expect(txt).toContain('"subscribe":true');
+  // #21: registry lite=unsupported tools return UNSUPPORTED without touching the page
   const net = await h.call(c, "network.list");
-  expect(net.text).toContain("full (debugger) mode");
-  const shot = await h.ok(c, "page.screenshot");
-  expect(shot.image).toBeTruthy();
+  expect(net.text).toContain("UNSUPPORTED");
+  // viewport capture needs the tab to be the visible one; TabAgent never focuses it (D10)
+  const shot = await h.call(c, "page.screenshot");
+  expect(!!shot.image || shot.text.includes("UNSUPPORTED")).toBe(true);
   // no debugger attached to the lite tab
   const liteTab = info.json.tabs.find((t: any) => t.active).tabId;
   const attached: number[] = await h.sw.evaluate(() => (globalThis as any).__tabagent.attachedTabs());
