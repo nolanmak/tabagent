@@ -26,6 +26,8 @@ export interface AuthServer {
   received: Received[];
   /** Messages the fake mailbox serves (stand-in for Gmail). */
   mailbox: { from: string; subject: string; body: string; ts: number }[];
+  /** Make /auth/login answer with a one-time-code step that expects this code ("" = no 2FA). */
+  setCode(code: string): void;
   close(): Promise<void>;
 }
 
@@ -111,6 +113,9 @@ export async function authServer(opts: { https?: { names: string[] }; password?:
     cert: tls?.cert,
     received,
     mailbox,
+    setCode: (c: string) => {
+      state.code = c;
+    },
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }

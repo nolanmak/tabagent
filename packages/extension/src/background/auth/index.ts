@@ -7,7 +7,7 @@ import { disposeDrivers, driverFor, type Driver } from "../driver";
 import { onKilled, registerHandlers } from "../handlerRegistry";
 import { requireSensitive } from "../permissions";
 import { AUTH_DENY_HOSTS } from "../policy";
-import { endHandoff, inHandoff, markPrivateTab, startHandoff, unmarkPrivateTab } from "../sessions";
+import { endHandoff, inHandoff, listHandoffs, markPrivateTab, startHandoff, unmarkPrivateTab } from "../sessions";
 import { getSettings } from "../settings";
 import { clearAuthMasks, isAuthMaskedNode, markAuthMaskedNode } from "./mask";
 import { createAuthChannel, type Sender } from "./pure/channel";
@@ -318,4 +318,5 @@ let testHandoffTimeout: number | null = null;
     testHandoffTimeout = ms;
   },
   pendingSecrets: () => channel.pendingCount(),
+  handoffs: () => listHandoffs(),
 };

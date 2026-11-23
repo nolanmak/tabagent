@@ -24,7 +24,7 @@ export interface Spike {
   close(): Promise<void>;
 }
 
-function spkiOf(certPem: Buffer): string {
+export function spkiOf(certPem: Buffer): string {
   const dir = mkdtempSync(join(tmpdir(), "tabagent-spki-"));
   const certFile = join(dir, "c.pem");
   writeFileSync(certFile, certPem);

@@ -9,7 +9,7 @@
 //  (5) re-check the tab's origin (it may have navigated during the prompt) and fill
 //  (6) optional submit, (7) classify `next`.
 // A secret lives in one local variable between the channel and page.type(); nothing else sees it.
-import { CODE_SINCE_SLACK_MS, CODE_MAX_AGE_MS, httpsOrigin, itemMatches, maskAccount, TabAgentError, type AuthAccount, type AuthProviderName, type CodeSourceName, type ProviderStatus, type CodeSourceStatus } from "@tabagent/protocol";
+import { CODE_SINCE_SLACK_MS, CODE_MAX_AGE_MS, httpsOrigin, itemMatches, maskAccount, selectTotpAccount, TabAgentError, type AuthAccount, type AuthProviderName, type CodeSourceName, type ProviderStatus, type CodeSourceStatus } from "@tabagent/protocol";
 import type { AuthChannel } from "./channel";
 import { detectCodeField, detectLogin, type FieldDesc } from "./fields";
 import { classifyNext, type Next } from "./next";
@@ -57,9 +57,11 @@ export interface AuthEnv {
 /** Per-tab memory shared across calls: when auth.login last ran (DA8 `since`), sources approved this run. */
 export interface AuthMemory {
   lastLogin: Map<number, number>;
+  /** Account the last auth.login used on a tab, with its origin (TOTP picks it first, #37). */
+  lastAccount: Map<number, { id: string; origin: string }>;
   approvedSources: Set<string>;
 }
-export const newMemory = (): AuthMemory => ({ lastLogin: new Map(), approvedSources: new Set() });
+export const newMemory = (): AuthMemory => ({ lastLogin: new Map(), lastAccount: new Map(), approvedSources: new Set() });
 
 export const CHROME_AUTOFILL_ID = "chrome-autofill:saved";
 
@@ -224,6 +226,7 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
     }
   }
   mem.lastLogin.set(env.tabId, env.now());
+  mem.lastAccount.set(env.tabId, { id: chosen.id, origin });
 
   let submitted = false;
   const submit = p.submit !== false;
@@ -276,8 +279,13 @@ export async function authCode(
   if (want === "auto" || want === "totp") {
     const res = await env.channel.accounts(env.cmdId, origin);
     const matched = (res.accounts ?? []).filter((a) => a.provider !== "chrome-autofill" && (a.uris === undefined || itemMatches(a.uris, url0)));
-    totpAccount = matched.filter((a) => a.hasTotp).length === 1 ? matched.find((a) => a.hasTotp) : undefined;
-    if (want === "totp" && !totpAccount) throw new TabAgentError("NOT_FOUND", `No single saved item for ${origin} has a TOTP`, "Check auth.status, or use source=email / sms.");
+    const last = mem.lastAccount.get(env.tabId);
+    const pick = selectTotpAccount(matched, last?.origin === origin ? last.id : null);
+    if ("account" in pick) totpAccount = pick.account;
+    else if (want === "totp") {
+      if (pick.error === "BAD_REQUEST") throw new TabAgentError("BAD_REQUEST", `${pick.candidates.length} saved items for ${origin} have a TOTP: ${pick.candidates.map((c) => `${c.id} (${c.accountMasked})`).join(", ")}`, "Call auth.login with account= first; auth.code then uses that account.");
+      throw new TabAgentError("NOT_FOUND", `No saved item for ${origin} has a TOTP`, "Check auth.status, or use source=email / sms.");
+    }
     smsAvailable = (res.codeSources ?? []).some((s) => s.name === "sms" && s.state === "available");
   }
   const order: CodeSourceName[] = want === "auto" ? (["totp", "email", "sms"] as CodeSourceName[]).filter((s) => (s === "totp" ? !!totpAccount : s === "email" ? !!env.email : smsAvailable)) : [want];
