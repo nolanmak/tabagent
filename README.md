@@ -1,5 +1,8 @@
 # TabAgent
 
+
+![TabAgent: an agent fills and submits a form through MCP](docs/demo.gif)
+
 **Let any AI agent drive your real Chrome.** TabAgent is an open-source Chrome extension plus a
 small local bridge that exposes your browser to Claude Code, Codex, Cursor, and any MCP or HTTP
 client. Agents can navigate, read pages, pull structured data, fill forms, upload and download
