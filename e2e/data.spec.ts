@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test, expect, Harness } from "./fixture";
 import { isWrapped, payload } from "./payload";
 
-test.describe.configure({ mode: "serial" });
+test.describe.configure({ mode: "default" });
 
 /** Sensitive gates pass without prompting (pre-#13 setting name and the D17 dev flag). */
 const passGates = (h: Harness) => h.trustFixtures({ devAllowSensitive: true, sensitiveAllowed: { [h.A]: true, [h.B]: true } });
@@ -51,7 +51,7 @@ test("multi-step signup: each step in <= 3 calls (describe, fill, submit)", asyn
   await step("form.describe");
   const f1 = payload(await step("form.fill", { fields: { "Full name": "Ada Lovelace", Country: "Canada", "Account type": "Business", "Company name": "Analytical Engines", "Accept terms": true } }));
   expect(f1.failed).toEqual([]);
-  expect(f1.filled.map((x: any) => x.key)).toEqual(["Full name", "Country", "Account type", "Accept terms", "Company name"]);
+  expect(f1.filled.map((x: any) => x.key)).toEqual(["Full name", "Country", "Account type", "Company name", "Accept terms"]);
   await step("form.submit");
   expect(calls).toBeLessThanOrEqual(3);
 

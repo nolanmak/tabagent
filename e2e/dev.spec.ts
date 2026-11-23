@@ -1,7 +1,7 @@
 import { test, expect, Harness } from "./fixture";
 import { payload } from "./payload";
 
-test.describe.configure({ mode: "serial" });
+test.describe.configure({ mode: "default" });
 
 /** Dialogs reported by an action: envelope `dialogs` (D14), or the pre-D14 `dialog` field. */
 const dialogsOf = (p: any) => p.dialogs ?? (p.dialog ? [p.dialog] : []);
