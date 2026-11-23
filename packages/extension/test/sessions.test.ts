@@ -178,3 +178,37 @@ describe("sessions + tab ownership (#5)", () => {
     expect(s.active).toBeUndefined();
   });
 });
+
+describe("M6 hooks: private auth tabs and handoff", () => {
+  it("a private tab is owned by no session and refused for every command", async () => {
+    const s = await S.getSession(meta("a"));
+    const t = await S.newTab(s);
+    await S.markPrivateTab(t.id!);
+    expect(S.ownerOf(t.id!)).toBeUndefined();
+    expect(s.tabIds).not.toContain(t.id);
+    await expect(S.resolveTab(s, t.id)).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    await expect(S.addTab(s, t.id!)).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(S.isPrivateTab(t.id!)).toBe(true);
+    S.unmarkPrivateTab(t.id!);
+    expect(S.isPrivateTab(t.id!)).toBe(false);
+  });
+  it("a tab in handoff returns TAB_BUSY until the user presses Done", async () => {
+    const s = await S.getSession(meta("a"));
+    const t = await S.newTab(s);
+    const done = S.startHandoff({ tabId: t.id!, sessionId: "a", sessionLabel: "a", origin: "https://x", reason: "finish sign-in" });
+    expect(S.listHandoffs()).toHaveLength(1);
+    await expect(S.resolveTab(s, t.id)).rejects.toMatchObject({ code: "TAB_BUSY" });
+    await expect(S.resolveTab(s)).rejects.toMatchObject({ code: "TAB_BUSY" });
+    expect(S.endHandoff(t.id!, "done")).toBe(true);
+    expect(await done).toBe("done");
+    expect(S.endHandoff(t.id!, "done")).toBe(false);
+    expect(await S.resolveTab(s, t.id)).toBe(t.id);
+  });
+  it("kill ends every open handoff", async () => {
+    const p1 = S.startHandoff({ tabId: 1, sessionId: "a", sessionLabel: "a", origin: "https://x", reason: "r" });
+    const p2 = S.startHandoff({ tabId: 2, sessionId: "a", sessionLabel: "a", origin: "https://x", reason: "r" });
+    S.endAllHandoffs();
+    expect(await Promise.all([p1, p2])).toEqual(["cancel", "cancel"]);
+    expect(S.listHandoffs()).toEqual([]);
+  });
+});

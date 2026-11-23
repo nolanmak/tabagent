@@ -118,6 +118,8 @@ export interface GateRequest {
   summary: string;
   reasons: string[];
   tabId?: number;
+  /** Category g only. */
+  auth?: { accountId: string; accountMasked: string; provider: string };
 }
 
 /** Resolve -> prompt -> apply answer, until allowed or denied. */
@@ -125,7 +127,7 @@ export async function authorize(g: GateRequest): Promise<void> {
   const meta = g.meta;
   for (let round = 0; round < 4; round++) {
     const st = await policyState();
-    const d = resolve(st, { sessionId: meta.id, cap: (meta.cap as Level) ?? "full", sites: meta.sites ?? [], url: g.url, level: g.level, sensitive: g.sensitive });
+    const d = resolve(st, { sessionId: meta.id, cap: (meta.cap as Level) ?? "full", sites: meta.sites ?? [], url: g.url, level: g.level, sensitive: g.sensitive, accountId: g.auth?.accountId });
     if (d.decision === "allow") return;
     if (d.decision === "deny") throw err(d.code, d.message, d.hint);
     if (d.kind === "sensitive" && held.has(`${meta.id}|${d.origin}|${d.category}`)) return;
@@ -147,10 +149,11 @@ export async function authorize(g: GateRequest): Promise<void> {
     // sensitive
     const cat = d.category;
     const kind: PromptKind = cat === "f" ? "attach" : "sensitive";
-    const { outcome } = prompts.request({ kind, sessionId: meta.id, sessionLabel: meta.label, origin: d.origin, sensitive: { category: cat, description: CATEGORY_TEXT[cat] }, tool: g.tool, summary: g.summary, reasons: g.reasons, tabId: g.tabId });
+    const summary = cat === "g" && g.auth ? `sign in to ${d.origin} as ${g.auth.accountMasked} with ${g.auth.provider}` : g.summary;
+    const { outcome } = prompts.request({ kind, sessionId: meta.id, sessionLabel: meta.label, origin: d.origin, sensitive: { category: cat, description: CATEGORY_TEXT[cat] }, ...(cat === "g" && g.auth ? { auth: g.auth } : {}), tool: g.tool, summary, reasons: g.reasons, tabId: g.tabId });
     const o = await outcome;
     if (o === "always") {
-      const next = applySensitiveAnswer(st, d.origin, cat, o);
+      const next = applySensitiveAnswer(st, d.origin, cat, o, g.auth?.accountId);
       if (next !== st) await updateSettings({ sites: next.sites });
     }
     const e = outcomeError(o, `this action (${CATEGORY_TEXT[cat].toLowerCase()})`);
@@ -165,10 +168,12 @@ export async function requireSite(meta: SessionMeta, url: string, level: Level, 
   return authorize({ meta, url, level, tool, summary, reasons: [] });
 }
 
-const CATS = new Set(["a", "b", "c", "d", "e", "f"]);
+const CATS = new Set(["a", "b", "c", "d", "e", "f", "g"]);
 
 export interface SensitiveOpts {
   tabId?: number;
+  /** Category g: the account (masked for display) and provider. */
+  auth?: { accountId: string; accountMasked: string; provider: string };
 }
 
 /**
@@ -194,7 +199,8 @@ export async function requireSensitive(meta: SessionMeta, url: string, a: string
     reasons = (c as string[]) ?? [];
     category = d === "attach" ? "f" : legacyCategory(tool, reasons);
   }
-  return authorize({ meta, url, level: null, sensitive: category, tool, summary, reasons, tabId: opts?.tabId });
+  if (category === "g" && !opts?.auth) throw err("BAD_REQUEST", "Sign-in confirmation needs the account");
+  return authorize({ meta, url, level: null, sensitive: category, tool, summary, reasons, tabId: opts?.tabId, auth: opts?.auth });
 }
 
 function legacyCategory(tool: string, reasons: string[]): SensitiveCategory {

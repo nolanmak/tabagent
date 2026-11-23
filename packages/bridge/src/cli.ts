@@ -12,6 +12,7 @@ import { Daemon } from "./daemon";
 import { buildMcpServer } from "./mcp";
 import { auditTail, configCommand, formatAuditLine, helpText, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out } from "./commands";
 import { BRIDGE_VERSION } from "./version";
+import { authCli } from "./auth/cli-entry";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = fileURLToPath(import.meta.url);
@@ -219,7 +220,11 @@ switch (cmd) {
     print(skillCommand(pos, f, skillSource()));
     break;
   case "config":
-    print(configCommand(pos));
+    print(pos[0]?.startsWith("auth") ? await authCli.config(pos) : configCommand(pos));
+    break;
+  case "doctor":
+  case "bitwarden":
+    print(await authCli[cmd](pos, f, CLI_PATH));
     break;
   case undefined:
   case "help":

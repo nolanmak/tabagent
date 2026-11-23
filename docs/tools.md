@@ -55,6 +55,10 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`session.info`](#sessioninfo) | `session_info` | none | — | full only | supported | extension |
 | [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
+| [`auth.status`](#authstatus) | `auth_status` | read | — | auth | supported | both |
+| [`auth.login`](#authlogin) | `auth_login` | act | — | auth | unsupported | both |
+| [`auth.code`](#authcode) | `auth_code` | act | — | auth | unsupported | both |
+| [`auth.handoff`](#authhandoff) | `auth_handoff` | read | — | auth | supported | extension |
 
 ## tabs
 
@@ -602,3 +606,53 @@ End this session and release its tabs.
 MCP name `session_end` · level none · profiles full only · lite supported · handled by extension
 
 No parameters.
+
+## auth
+
+### auth.status
+
+Sign-in options for the tab's site: login form present, matching saved accounts (masked), code sources. Fetches no secrets.
+
+MCP name `auth_status` · level read · profiles auth · lite supported · handled by both
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+
+### auth.login
+
+Sign in: fill username/password from a saved account for this site (asks you), optionally submit. Never returns the secret.
+
+MCP name `auth_login` · level act · profiles auth · lite unsupported · handled by both
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `account` | string |  | Account id from auth.status when several match |
+| `submit` | boolean |  | Default true |
+
+### auth.code
+
+Fetch a one-time code (totp, email, sms; auto tries in that order) and type it into the code field. Never returns the code.
+
+MCP name `auth_code` · level act · profiles auth · lite unsupported · handled by both
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `ref` | string |  | Code field ref; default: the detected one-time-code field |
+| `source` | "auto" \| "totp" \| "email" \| "sms" |  | Default auto |
+| `from` | string |  | Sender domain filter for email codes |
+| `timeout` | integer |  | ms to wait for the code, default 60000 |
+| `submit` | boolean |  | Default true |
+
+### auth.handoff
+
+Hand the tab to the user for a human-only step (passkey, CAPTCHA, phone approval); waits up to 5 min for Done.
+
+MCP name `auth_handoff` · level read · profiles auth · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `reason` | string | yes |  |

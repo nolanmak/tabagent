@@ -14,6 +14,7 @@ export const CATEGORY_TEXT: Record<SensitiveCategory, string> = {
   d: "Read credentials (cookies, web storage, network bodies)",
   e: "Transfer a local file (upload or read a download)",
   f: "Take over a tab you opened",
+  g: "Sign in to a site with one of your saved accounts",
 };
 
 export interface PromptInfo {
@@ -28,6 +29,8 @@ export interface PromptInfo {
   origin: string;
   level?: Level;
   sensitive?: { category: SensitiveCategory; description: string };
+  /** Category g: which account and provider (masked, never the secret). */
+  auth?: { accountId: string; accountMasked: string; provider: string };
   tool: string;
   summary: string;
   reasons: string[];
@@ -53,7 +56,7 @@ interface Pending {
 }
 
 export function promptKey(r: PromptRequest): string {
-  return [r.kind, r.sessionId, r.origin, r.level ?? "", r.sensitive?.category ?? "", r.kind === "site" ? "" : r.summary].join("|");
+  return [r.kind, r.sessionId, r.origin, r.level ?? "", r.sensitive?.category ?? "", r.kind === "site" ? "" : r.summary, r.auth?.accountId ?? ""].join("|");
 }
 
 export class PromptQueue {
