@@ -105,13 +105,15 @@ function chromeDisabled(providers: ProviderStatus[] | undefined) {
 async function gatherAccounts(env: AuthEnv, page: AuthPage, origin: string, url: string) {
   const res = await env.channel.accounts(env.cmdId, origin);
   // DA3, extension side: the bridge narrowed by domain; decide on the full URL with the item's match types.
-  const bridged = (res.accounts ?? []).filter((a) => a.provider !== "chrome-autofill" && (a.uris === undefined || itemMatches(a.uris, url)));
+  const fromBridge = (res.accounts ?? []).filter((a) => a.provider !== "chrome-autofill");
+  const bridged = fromBridge.filter((a) => a.uris === undefined || itemMatches(a.uris, url));
+  const rejected = fromBridge.length - bridged.length;
   const out: AuthAccount[] = [...bridged];
   if (!chromeDisabled(res.providers)) {
     const af = await page.chromeAutofill().catch(() => null);
     if (af) out.push({ id: CHROME_AUTOFILL_ID, provider: "chrome-autofill", accountMasked: af.usernameMasked ?? maskAccount("") });
   }
-  return { accounts: out, providers: res.providers, codeSources: res.codeSources };
+  return { accounts: out, providers: res.providers, codeSources: res.codeSources, rejected };
 }
 
 export async function authStatus(env: AuthEnv, page: AuthPage) {
@@ -160,7 +162,7 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
   await env.siteCheck(url0); // (1)
   const form0 = detectLogin(await page.fields());
   if (!form0.ok) throw new TabAgentError("NOT_FOUND", form0.reason, form0.signup ? "auth.login only signs in; it never fills sign-up or change-password forms." : "Navigate to the site's sign-in page first.");
-  const { accounts, providers } = await gatherAccounts(env, page, origin, url0); // (2)
+  const { accounts, providers, rejected } = await gatherAccounts(env, page, origin, url0); // (2)
 
   let chosen: AuthAccount | undefined;
   if (p.account) {
@@ -179,6 +181,7 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
       }
     }
   }
+  if (!chosen && rejected > 0) throw new TabAgentError("PERMISSION_DENIED", `No saved item is bound to ${origin}; credentials are only filled on the site they were saved for`, "DA3: registrable-domain match, https only. Look-alike domains never match.");
   if (!chosen) {
     const why = (providers ?? []).filter((x) => x.state !== "unlocked" && x.state !== "disabled").map((x) => `${x.name}: ${x.state}`);
     throw new TabAgentError("NOT_FOUND", `No saved account matches ${origin}`, why.length ? `Providers not ready (${why.join(", ")}); see auth.status.` : "Save the login in 1Password or Bitwarden for this site, or use auth.handoff.");
