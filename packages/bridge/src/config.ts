@@ -61,7 +61,9 @@ function readRaw(): Partial<Config> | null {
 export function loadConfig(): Config {
   ensureDir(home());
   const raw = readRaw() ?? {};
+  // Unknown top-level keys (e.g. `auth`, owned by the auth bridge) are kept as they are.
   const full: Config = {
+    ...(raw as object),
     port: raw.port ?? DEFAULT_PORT,
     secret: raw.secret ?? randomBytes(24).toString("base64url"),
     extensionIds: raw.extensionIds ?? [],
@@ -85,7 +87,7 @@ export function saveConfig(cfg: Config) {
   if (raw && typeof raw.port === "number") port = raw.port;
   else if (process.env.TABAGENT_PORT && Number(process.env.TABAGENT_PORT) === cfg.port) port = DEFAULT_PORT;
   const tmp = `${p}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ ...cfg, port }, null, 2), { mode: 0o600 });
+  writeFileSync(tmp, JSON.stringify({ ...(raw ?? {}), ...cfg, port }, null, 2), { mode: 0o600 });
   renameSync(tmp, p);
   try {
     chmodSync(p, 0o600);
