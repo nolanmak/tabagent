@@ -4,6 +4,7 @@
 // reference elements inside `value` as { el: <index> }; the background maps those
 // indexes to refs.
 
+import { authApi } from "./auth";
 type El = Element;
 interface Ret<T = unknown> {
   value: T;
@@ -1430,6 +1431,7 @@ async function callLite(_self: unknown, name: string, ref: string | null, args: 
 }
 
 const api = {
+  ...authApi, // M6 auth (pagelib/auth.ts)
   invoke: (self: El | null, name: string, args: unknown[]) => invoke(self, name, args),
   callLite,
   // lite registry

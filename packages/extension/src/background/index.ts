@@ -5,6 +5,7 @@ import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionM
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
+import { onAuthBridgeMessage, rejectAllAuth, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
 import { disposeDrivers, driverFor } from "./driver";
 import { getDownload } from "./downloads";
@@ -48,6 +49,7 @@ const bridge = createBridgeClient({
   clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 });
 setFilesSender((m) => bridge.send(m));
+setAuthSender((m) => bridge.send(m));
 
 function sendEvent(event: string, data: Record<string, unknown> = {}) {
   bridge.send({ type: "event", event, data });
@@ -63,6 +65,10 @@ function onBridgeMessage(msg: any) {
       break;
     case "files.resolved":
       onFilesResolved(msg);
+      break;
+    case "auth.accounts.result":
+    case "secret":
+      onAuthBridgeMessage(msg);
       break;
   }
 }
@@ -209,6 +215,7 @@ async function kill() {
   router.abortAll();
   prompts.dropAll("killed");
   rejectAllFiles(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
+  rejectAllAuth(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
   for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
   await clearGrants();
