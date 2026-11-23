@@ -1,5 +1,5 @@
 {
-  "name": "tabagent",
+  "name": "@nolmak/tabagent",
   "version": "0.1.0",
   "description": "Let any AI agent drive your real Chrome: MCP server + CLI bridge for the TabAgent extension.",
   "type": "module",

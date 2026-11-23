@@ -207,5 +207,5 @@ export function normalizeHello(raw: unknown): unknown {
 export function versionMismatchHint(extProtocol: number, bridgeProtocol: number = PROTOCOL_VERSION): string {
   return extProtocol < bridgeProtocol
     ? `Update the TabAgent extension (it speaks protocol ${extProtocol}; the bridge speaks ${bridgeProtocol}).`
-    : `Update the tabagent npm package: npm i -g tabagent@latest (bridge speaks protocol ${bridgeProtocol}; the extension speaks ${extProtocol}).`;
+    : `Update the @nolmak/tabagent npm package: npm i -g @nolmak/tabagent@latest (bridge speaks protocol ${bridgeProtocol}; the extension speaks ${extProtocol}).`;
 }

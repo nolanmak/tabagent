@@ -56,6 +56,6 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to npm
-        run: npm publish -w tabagent --access public ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: npm publish -w @nolmak/tabagent --access public ${{ inputs.dry_run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

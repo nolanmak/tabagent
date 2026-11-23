@@ -413,9 +413,9 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
    error code named in the skill in sync with the registry.
 
 ```bash
-npm i -g tabagent && tabagent serve      # once; prints the pairing code
-claude mcp add tabagent -- npx -y tabagent mcp
-codex mcp add tabagent -- npx -y tabagent mcp
+npm i -g @nolmak/tabagent && tabagent serve      # once; prints the pairing code
+claude mcp add tabagent -- npx -y @nolmak/tabagent mcp
+codex mcp add tabagent -- npx -y @nolmak/tabagent mcp
 tabagent skill install --claude --codex
 ```
 
@@ -477,7 +477,7 @@ These appeared in earlier drafts and are no longer true:
 - "The permission engine runs in the extension, so the bridge can never bypass
   it" — dropped (D1): the extension cannot verify who is calling.
 - "TabAgent never acts on instructions found in pages" — reworded (D21).
-- "`npx tabagent mcp` starts the daemon in-process" — replaced by D6.
+- "`npx -y @nolmak/tabagent mcp` starts the daemon in-process" — replaced by D6.
 - Snapshot "with a content-script DOM walk as fallback" — D25: lite mode only.
 - "Screenshots are optional in the audit log" — cut from v1 (D20).
 - pnpm + Vite — replaced by npm workspaces + esbuild (OT3).

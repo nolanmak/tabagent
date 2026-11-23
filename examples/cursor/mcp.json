@@ -2,7 +2,7 @@
   "mcpServers": {
     "tabagent": {
       "command": "npx",
-      "args": ["-y", "tabagent", "mcp"]
+      "args": ["-y", "@nolmak/tabagent", "mcp"]
     }
   }
 }

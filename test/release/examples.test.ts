@@ -1,5 +1,5 @@
 // #23: each example config's command starts a working MCP server.
-// The published command is `npx -y tabagent mcp ...`; here `npx [-y] tabagent`
+// The published command is `npx -y @nolmak/tabagent mcp ...`; here `npx [-y] @nolmak/tabagent`
 // is mapped to the locally built CLI so the test exercises this checkout.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,12 +34,12 @@ export function fromCodexToml(text: string): ServerCmd {
   return { command, args };
 }
 
-/** `npx [-y] tabagent <rest>` → `node <built cli> <rest>`. */
+/** `npx [-y] @nolmak/tabagent <rest>` → `node <built cli> <rest>`. */
 export function toLocal(cmd: ServerCmd): { command: string; args: string[] } {
   if (cmd.command === "tabagent") return { command: process.execPath, args: [CLI, ...cmd.args] };
   if (cmd.command !== "npx") throw new Error(`unexpected command ${cmd.command}`);
   const args = cmd.args.filter((a) => a !== "-y" && a !== "--yes");
-  if (args[0] !== "tabagent") throw new Error(`expected npx tabagent, got ${cmd.args.join(" ")}`);
+  if (args[0] !== "@nolmak/tabagent") throw new Error(`expected npx @nolmak/tabagent, got ${cmd.args.join(" ")}`);
   return { command: process.execPath, args: [CLI, ...args.slice(1)] };
 }
 
@@ -57,15 +57,15 @@ afterEach(async () => {
 
 describe("agent examples", () => {
   it("toLocal maps npx forms and rejects others", () => {
-    expect(toLocal({ command: "npx", args: ["-y", "tabagent", "mcp"] }).args.slice(1)).toEqual(["mcp"]);
+    expect(toLocal({ command: "npx", args: ["-y", "@nolmak/tabagent", "mcp"] }).args.slice(1)).toEqual(["mcp"]);
     expect(toLocal({ command: "tabagent", args: ["mcp", "--profile", "dev"] }).args.slice(1)).toEqual(["mcp", "--profile", "dev"]);
     expect(() => toLocal({ command: "npx", args: ["other"] })).toThrow();
     expect(() => toLocal({ command: "python", args: [] })).toThrow();
   });
 
   it("codex toml reader stops at the next table", () => {
-    const t = '[mcp_servers.tabagent]\ncommand = "npx"\nargs = ["tabagent", "mcp"]\n[other]\nargs = ["x"]\n';
-    expect(fromCodexToml(t)).toEqual({ command: "npx", args: ["tabagent", "mcp"] });
+    const t = '[mcp_servers.tabagent]\ncommand = "npx"\nargs = ["@nolmak/tabagent", "mcp"]\n[other]\nargs = ["x"]\n';
+    expect(fromCodexToml(t)).toEqual({ command: "npx", args: ["@nolmak/tabagent", "mcp"] });
   });
 
   for (const [name, load] of EXAMPLES) {

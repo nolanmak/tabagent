@@ -8,7 +8,7 @@
     "packages/extension"
   ],
   "scripts": {
-    "build": "npm run build -w @tabagent/extension && npm run build -w tabagent",
+    "build": "npm run build -w @tabagent/extension && npm run build -w @nolmak/tabagent",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint . && node scripts/gen-docs.mjs --check",
     "test": "vitest run --project unit",
