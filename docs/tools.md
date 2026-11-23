@@ -67,7 +67,7 @@ MCP name `tabs` · level list: none, new: act, select: none, close: none, attach
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `action` | "list" \| "new" \| "select" \| "close" \| "attach" | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `url` | string |  | For new |
 
 ## nav
@@ -81,9 +81,9 @@ MCP name `nav_goto` · level act · profiles core · lite supported · handled b
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `url` | string | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `waitUntil` | "load" \| "domcontentloaded" \| "networkidle" \| "none" |  |  |
-| `timeout` | integer |  | ms, default 30000 |
+| `timeout` | number |  | ms, default 30000 |
 
 ### nav.back
 
@@ -93,8 +93,8 @@ MCP name `nav_back` · level act · profiles full only · lite supported · hand
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 30000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 30000 |
 
 ### nav.forward
 
@@ -104,8 +104,8 @@ MCP name `nav_forward` · level act · profiles full only · lite supported · h
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 30000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 30000 |
 
 ### nav.reload
 
@@ -115,8 +115,8 @@ MCP name `nav_reload` · level act · profiles full only · lite supported · ha
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 30000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 30000 |
 
 ### nav.wait
 
@@ -128,8 +128,8 @@ MCP name `nav_wait` · level read · profiles core · lite supported · sensitiv
 |---|---|---|---|
 | `for` | "load" \| "networkidle" \| "selector" \| "text" \| "url" \| "fn" | yes |  |
 | `value` | string |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 30000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 30000 |
 
 ## page
 
@@ -141,10 +141,10 @@ MCP name `page_snapshot` · level read · profiles core · lite supported · han
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `mode` | "interactive" \| "full" |  |  |
-| `root` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `maxTokens` | integer |  |  |
+| `root` | string |  | Element ref, e.g. e12 |
+| `maxTokens` | number |  |  |
 | `diff` | boolean |  |  |
 
 ### page.screenshot
@@ -155,11 +155,11 @@ MCP name `page_screenshot` · level read · profiles core · lite degraded · ha
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `target` | "viewport" \| "full" \| "ref" |  | default viewport |
-| `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
+| `ref` | string |  | Element ref, e.g. e12 |
 | `format` | "png" \| "jpeg" |  |  |
-| `quality` | integer |  |  |
+| `quality` | number |  |  |
 | `marks` | boolean |  |  |
 
 ### page.text
@@ -170,8 +170,8 @@ MCP name `page_text` · level read · profiles data · lite supported · handled
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
+| `ref` | string |  | Element ref, e.g. e12 |
 
 ### page.markdown
 
@@ -181,8 +181,8 @@ MCP name `page_markdown` · level read · profiles core · lite supported · han
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `maxChars` | integer |  |  |
+| `tabId` | number |  | Default: active tab |
+| `maxChars` | number |  |  |
 
 ### page.find
 
@@ -192,12 +192,12 @@ MCP name `page_find` · level read · profiles data · lite supported · handled
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `by` | "text" \| "role" \| "label" \| "css" \| "xpath" | yes |  |
 | `value` | string | yes |  |
 | `name` | string |  | Accessible name, with by=role |
-| `root` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `timeout` | integer |  | ms, default 5000 |
+| `root` | string |  | Element ref, e.g. e12 |
+| `timeout` | number |  | ms, default 5000 |
 
 ## act
 
@@ -209,12 +209,12 @@ MCP name `act_click` · level act · profiles core · lite supported · handled 
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `ref` | string | yes | Element ref, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
 | `button` | "left" \| "right" \| "middle" |  |  |
-| `clickCount` | integer |  |  |
+| `clickCount` | number |  |  |
 | `modifiers` | "Alt" \| "Control" \| "Meta" \| "Shift"[] |  |  |
-| `timeout` | integer |  | ms, default 5000 |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.dblclick
 
@@ -224,9 +224,9 @@ MCP name `act_dblclick` · level act · profiles full only · lite degraded · h
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `ref` | string | yes | Element ref, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.hover
 
@@ -236,9 +236,9 @@ MCP name `act_hover` · level act · profiles full only · lite degraded · hand
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `ref` | string | yes | Element ref, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.type
 
@@ -249,11 +249,11 @@ MCP name `act_type` · level act · profiles core · lite supported · handled b
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `text` | string | yes |  |
-| `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `ref` | string |  | Element ref, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
 | `submit` | boolean |  |  |
 | `clear` | boolean |  |  |
-| `timeout` | integer |  | ms, default 5000 |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.fill
 
@@ -263,10 +263,10 @@ MCP name `act_fill` · level act · profiles forms · lite supported · handled 
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
+| `ref` | string | yes | Element ref, e.g. e12 |
 | `value` | string | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.press
 
@@ -277,9 +277,9 @@ MCP name `act_press` · level act · profiles core · lite supported · handled 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `key` | string | yes |  |
-| `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `ref` | string |  | Element ref, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.select
 
@@ -289,10 +289,10 @@ MCP name `act_select` · level act · profiles core · lite supported · handled
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
+| `ref` | string | yes | Element ref, e.g. e12 |
 | `values` | string[] | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.check
 
@@ -302,10 +302,10 @@ MCP name `act_check` · level act · profiles forms · lite supported · handled
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
+| `ref` | string | yes | Element ref, e.g. e12 |
 | `checked` | boolean |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.scroll
 
@@ -315,10 +315,10 @@ MCP name `act_scroll` · level read · profiles full only · lite supported · h
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
+| `ref` | string |  | Element ref, e.g. e12 |
 | `dx` | number |  |  |
 | `dy` | number |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 
 ### act.drag
 
@@ -328,10 +328,10 @@ MCP name `act_drag` · level act · profiles full only · lite degraded · handl
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `from` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `to` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `from` | string | yes | Element ref, e.g. e12 |
+| `to` | string | yes | Element ref, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### act.upload
 
@@ -341,10 +341,10 @@ MCP name `act_upload` · level act · profiles forms · lite unsupported · sens
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
+| `ref` | string | yes | Element ref, e.g. e12 |
 | `paths` | string[] | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ## form
 
@@ -356,7 +356,7 @@ MCP name `form_describe` · level read · profiles forms · lite supported · ha
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `ref` | string |  | A form or container ref; default: all forms |
 
 ### form.fill
@@ -368,9 +368,9 @@ MCP name `form_fill` · level act · profiles core · lite supported · handled 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `fields` | object | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `ref` | string |  | Limit to this form/container |
-| `timeout` | integer |  | ms per field, default 5000 |
+| `timeout` | number |  | ms per field, default 5000 |
 
 ### form.submit
 
@@ -380,9 +380,9 @@ MCP name `form_submit` · level act · profiles forms · lite supported · handl
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `ref` | string |  | Element ref, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ## extract
 
@@ -394,9 +394,9 @@ MCP name `extract_table` · level read · profiles core · lite supported · han
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `index` | integer |  |  |
+| `tabId` | number |  | Default: active tab |
+| `ref` | string |  | Element ref, e.g. e12 |
+| `index` | number |  |  |
 | `format` | "json" \| "csv" |  |  |
 
 ### extract.links
@@ -407,10 +407,10 @@ MCP name `extract_links` · level read · profiles data · lite supported · han
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `root` | string |  | Element ref from page.snapshot, e.g. e12 |
+| `tabId` | number |  | Default: active tab |
+| `root` | string |  | Element ref, e.g. e12 |
 | `filter` | string |  |  |
-| `limit` | integer |  |  |
+| `limit` | number |  |  |
 
 ### extract.schema
 
@@ -423,7 +423,7 @@ MCP name `extract_schema` · level read · profiles data · lite supported · ha
 | `schema` | object |  |  |
 | `hint` | string |  |  |
 | `selectors` | object |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 
 ### extract.paginate
 
@@ -435,11 +435,11 @@ MCP name `extract_paginate` · level read · profiles data · lite supported · 
 |---|---|---|---|
 | `extractor` | "table" \| "links" \| "schema" | yes |  |
 | `next` | string |  |  |
-| `maxPages` | integer |  |  |
+| `maxPages` | number |  |  |
 | `schema` | object |  |  |
 | `selectors` | object |  |  |
-| `timeout` | integer |  | ms per page, default 5000 |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | number |  | ms per page, default 5000 |
+| `tabId` | number |  | Default: active tab |
 
 ## dialog
 
@@ -453,7 +453,7 @@ MCP name `dialog_handle` · level act · profiles core · lite unsupported · ha
 |---|---|---|---|
 | `action` | "accept" \| "dismiss" | yes |  |
 | `promptText` | string |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 
 ## dev
 
@@ -467,8 +467,8 @@ MCP name `js_eval` · level full · profiles dev · lite unsupported · sensitiv
 |---|---|---|---|
 | `expression` | string | yes |  |
 | `world` | "main" \| "isolated" |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### console.list
 
@@ -478,9 +478,9 @@ MCP name `console_list` · level read · profiles dev · lite unsupported · han
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `level` | string |  |  |
-| `limit` | integer |  |  |
+| `limit` | number |  |  |
 
 ### network.list
 
@@ -490,12 +490,12 @@ MCP name `network_list` · level read · profiles dev · lite unsupported · han
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 | `url` | string |  |  |
 | `method` | string |  |  |
-| `status` | integer |  |  |
+| `status` | number |  |  |
 | `type` | string |  |  |
-| `limit` | integer |  |  |
+| `limit` | number |  |  |
 
 ### network.get
 
@@ -506,7 +506,7 @@ MCP name `network_get` · level full · profiles dev · lite unsupported · sens
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `id` | string | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 
 ### network.waitFor
 
@@ -518,9 +518,9 @@ MCP name `network_waitFor` · level read · profiles dev · lite unsupported · 
 |---|---|---|---|
 | `url` | string |  |  |
 | `method` | string |  |  |
-| `status` | integer |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `status` | number |  |  |
+| `tabId` | number |  | Default: active tab |
+| `timeout` | number |  | ms, default 5000 |
 
 ### cookies.get
 
@@ -531,7 +531,7 @@ MCP name `cookies_get` · level full · profiles dev · lite unsupported · sens
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `url` | string |  |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 
 ### storage.get
 
@@ -542,7 +542,7 @@ MCP name `storage_get` · level full · profiles dev · lite unsupported · sens
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `kind` | "local" \| "session" | yes |  |
-| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `tabId` | number |  | Default: active tab |
 
 ## files
 
@@ -562,8 +562,8 @@ MCP name `downloads_wait` · level none · profiles data · lite supported · ha
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `id` | integer |  |  |
-| `timeout` | integer |  | ms, default 30000 |
+| `id` | number |  |  |
+| `timeout` | number |  | ms, default 30000 |
 
 ### downloads.read
 
@@ -573,7 +573,7 @@ MCP name `downloads_read` · level none · profiles data · lite supported · se
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `id` | integer | yes |  |
+| `id` | number | yes |  |
 
 ## session
 
