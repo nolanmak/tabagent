@@ -138,8 +138,8 @@ async function groupTab(s: Session, tabId: number) {
   } catch {
     /* windows without tab-group support (popups) */
   } finally {
-    // the onUpdated event for our own grouping may land a tick later
-    setTimeout(() => grouping.delete(tabId), 500);
+    // events for our own grouping carry s.groupId once it is set, so the guard can end here
+    grouping.delete(tabId);
   }
 }
 
