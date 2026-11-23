@@ -1,84 +1,153 @@
-// The bridge daemon: WebSocket for the extension, MCP Streamable HTTP at /mcp,
-// REST at /v1. Binds 127.0.0.1 only.
+// The bridge daemon: WebSocket for the extension at /ext, MCP Streamable HTTP at /mcp, REST at /v1.
+// Binds 127.0.0.1 only. Trusted for *who is calling* (D1); the extension enforces site policy.
 import { randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { getTool, redact, TabAgentError, toolsForProfiles, validateParams, type BridgeToExt, type Cap, type ExtToBridge, type SessionMeta, type ToolError } from "@tabagent/protocol";
-import { auditPath, configPath, hashToken, newPairCode, saveConfig, type Config } from "./config";
-import { readDownload, validateUploads } from "./files";
+import {
+  defaultTimeout,
+  FilesResolveSchema,
+  getTool,
+  HelloSchema,
+  normalizeHello,
+  PROTOCOL_VERSION,
+  ResultEnvelopeSchema,
+  TabAgentError,
+  TIMEOUTS,
+  toolsForProfiles,
+  toTabAgentError,
+  validateParams,
+  versionMismatchHint,
+  wrapResponse,
+  type BridgeToExt,
+  type ErrorCode,
+  type OutputResponse,
+  type SessionMeta,
+} from "@tabagent/protocol";
+import { AuditWriter } from "./audit";
+import { auditPath, configPath, saveConfig, type Config } from "./config";
+import { readDownload, resolveUploads, SessionDownloads } from "./files";
 import { buildMcpServer } from "./mcp";
-
+import { Pairing } from "./pairing";
+import { authenticate, bearerOf, type Principal } from "./tokens";
 import { BRIDGE_VERSION } from "./version";
+
 export { BRIDGE_VERSION };
+export type { Principal };
 
-export interface Principal {
-  name: string;
-  cap: Cap;
-  sites: string[];
-}
-
-export type Dispatch = (meta: SessionMeta, tool: string, params: unknown) => Promise<unknown>;
+export const PAIRING_HINT =
+  "Open Chrome with the TabAgent extension installed, open its side panel and enter the pairing code shown by `tabagent status` (or mint one with `tabagent pair`).";
 
 interface Pending {
-  resolve: (v: unknown) => void;
-  reject: (e: TabAgentError) => void;
+  resolve: (r: OutputResponse) => void;
   timer: ReturnType<typeof setTimeout>;
+  ws: WebSocket;
+  meta: SessionMeta;
+  tool: string;
+  params: Record<string, unknown>;
+}
+
+interface ExtConn {
+  ws: WebSocket;
+  id: string;
+  version: string;
+  features: Set<string>;
+  lastSeen: number;
+}
+
+interface RestSession {
+  meta: SessionMeta;
+  lastSeen: number;
+  /** stdio MCP proxy sessions live until the proxy ends them (D8: one per MCP connection). */
+  persistent: boolean;
 }
 
 export interface DaemonOpts {
   log?: (msg: string) => void;
+  /** Default MCP profile for HTTP clients that don't pass ?profile=. */
   profile?: string;
+  now?: () => number;
+  /** How long a call waits for the extension to (re)connect before NO_EXTENSION. */
+  extWaitMs?: number;
+  /** Heartbeat check interval (the 45s rule itself is TIMEOUTS.silentSocket). */
+  heartbeatCheckMs?: number;
+  audit?: AuditWriter;
 }
+
+const STATUS: Partial<Record<ErrorCode, number>> = {
+  BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
+  PERMISSION_DENIED: 403,
+  NOT_FOUND: 404,
+  TOO_LARGE: 413,
+  NO_EXTENSION: 503,
+  VERSION_MISMATCH: 503,
+  TIMEOUT: 504,
+  PROMPT_TIMEOUT: 504,
+  INTERNAL: 500,
+};
 
 export class Daemon {
   server: Server | null = null;
+  port: number;
+  readonly pairing: Pairing;
+  readonly audit: AuditWriter;
+  readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
-  private ext: WebSocket | null = null;
-  extVersion: string | null = null;
+  private ext: ExtConn | null = null;
   private pending = new Map<string, Pending>();
-  pairCode: string;
-  pairExpires: number;
   private mcpSessions = new Map<string, { transport: StreamableHTTPServerTransport; meta: SessionMeta }>();
-  private restSessions = new Map<string, { meta: SessionMeta; lastSeen: number }>();
-  private log: (m: string) => void;
+  private restSessions = new Map<string, RestSession>();
   private extWaiters = new Set<() => void>();
+  private timers: ReturnType<typeof setInterval>[] = [];
+  private log: (m: string) => void;
+  private now: () => number;
+  private cfgMtime = 0;
 
   constructor(
     public cfg: Config,
     private opts: DaemonOpts = {},
   ) {
     this.log = opts.log ?? ((m) => process.stderr.write(m + "\n"));
-    this.pairCode = newPairCode();
-    this.pairExpires = Date.now() + 10 * 60_000;
+    this.now = opts.now ?? Date.now;
+    this.pairing = new Pairing(this.now);
+    this.audit = opts.audit ?? new AuditWriter(auditPath());
+    this.port = cfg.port;
   }
 
   get extensionConnected() {
-    return !!this.ext && this.ext.readyState === 1;
+    return !!this.ext && this.ext.ws.readyState === 1;
   }
-
+  get extensionVersion() {
+    return this.ext?.version ?? null;
+  }
+  get pairCode() {
+    return this.pairing.current();
+  }
   newPairCode() {
-    this.pairCode = newPairCode();
-    this.pairExpires = Date.now() + 10 * 60_000;
-    return this.pairCode;
+    return this.pairing.mint();
   }
 
   async start(): Promise<void> {
-    const server = createServer((req, res) => this.onHttp(req, res).catch((e) => this.sendJson(res, 500, { ok: false, error: { code: "INTERNAL", message: String(e?.message ?? e) } })));
+    const server = createServer((req, res) =>
+      this.onHttp(req, res).catch((e) => this.sendJson(res, 500, { ok: false, error: toTabAgentError(e).toJSON() })),
+    );
     server.on("upgrade", (req, socket, head) => {
       if (!this.hostOk(req) || new URL(req.url ?? "/", "http://x").pathname !== "/ext") {
-        socket.destroy();
-        return;
-      }
-      const origin = String(req.headers.origin ?? "");
-      if (!origin.startsWith("chrome-extension://")) {
-        // Web pages can open WebSockets to localhost; only extensions may connect.
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
       }
-      this.wss.handleUpgrade(req, socket, head, (ws) => this.onExtSocket(ws, origin.slice("chrome-extension://".length).replace(/\/$/, "")));
+      const origin = String(req.headers.origin ?? "");
+      const m = origin.match(/^chrome-extension:\/\/([a-p]{32}|[\w-]+)\/?$/);
+      if (!m) {
+        // Web pages can open WebSockets to loopback; only extensions may connect.
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      this.wss.handleUpgrade(req, socket, head, (ws) => this.onExtSocket(ws, m[1]));
     });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -88,96 +157,218 @@ export class Daemon {
       });
     });
     this.server = server;
-    setInterval(() => this.gcRestSessions(), 60_000).unref();
+    this.port = (server.address() as { port: number }).port;
+    try {
+      this.cfgMtime = statSync(configPath()).mtimeMs;
+    } catch {
+      /* no file yet */
+    }
+    this.timers.push(setInterval(() => this.gcRestSessions(), 60_000));
+    this.timers.push(setInterval(() => this.checkSilent(), this.opts.heartbeatCheckMs ?? 5_000));
+    for (const t of this.timers) t.unref();
   }
 
   async stop() {
+    for (const t of this.timers) clearInterval(t);
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
-    this.ext?.close();
+    this.ext?.ws.terminate();
+    for (const c of this.wss.clients) c.terminate();
     await new Promise<void>((r) => (this.server ? this.server.close(() => r()) : r()));
+    this.server?.closeAllConnections?.();
   }
 
   // -------------------------------------------------------------------------
-  // Extension link
+  // Extension link (D4, D5, D11)
   // -------------------------------------------------------------------------
+  private sendTo(ws: WebSocket, m: BridgeToExt) {
+    if (ws.readyState === 1) ws.send(JSON.stringify(m));
+  }
+
+  private refuse(ws: WebSocket, code: ErrorCode, message: string, hint?: string) {
+    this.sendTo(ws, { type: "error", error: { code, message, ...(hint ? { hint } : {}) } });
+    setTimeout(() => ws.close(4001, message.slice(0, 100)), 50);
+  }
+
   private onExtSocket(ws: WebSocket, extId: string) {
     let authed = false;
-    const fail = (message: string) => {
-      const m: BridgeToExt = { type: "error", error: { code: "UNAUTHORIZED", message } };
-      ws.send(JSON.stringify(m));
-      setTimeout(() => ws.close(4001, message.slice(0, 100)), 50);
-    };
     const helloTimer = setTimeout(() => !authed && ws.close(4000, "no hello"), 5000);
     ws.on("message", (data) => {
-      let msg: ExtToBridge;
+      let raw: unknown;
       try {
-        msg = JSON.parse(String(data));
+        raw = JSON.parse(String(data));
       } catch {
         return;
       }
-      if (!authed) {
-        if (msg.type !== "hello") return fail("Expected hello");
-        clearTimeout(helloTimer);
-        if (msg.secret && msg.secret === this.cfg.secret && this.cfg.extensionIds.includes(extId)) {
-          authed = true;
-          this.attachExt(ws, msg.version);
-          ws.send(JSON.stringify({ type: "welcome", bridgeVersion: BRIDGE_VERSION } satisfies BridgeToExt));
-          return;
-        }
-        if (msg.pairCode) {
-          const ok = msg.pairCode.replace(/[^A-Z0-9]/gi, "").toUpperCase() === this.pairCode.replace(/-/g, "") && Date.now() < this.pairExpires;
-          if (!ok) return fail("Wrong or expired pairing code. Run `tabagent pair` for a new one.");
-          authed = true;
-          if (!this.cfg.extensionIds.includes(extId)) this.cfg.extensionIds.push(extId);
-          saveConfig(this.cfg);
-          this.newPairCode(); // single use
-          this.attachExt(ws, msg.version);
-          ws.send(JSON.stringify({ type: "welcome", secret: this.cfg.secret, bridgeVersion: BRIDGE_VERSION } satisfies BridgeToExt));
-          this.log(`Paired with extension ${extId}`);
-          return;
-        }
-        return fail(msg.secret ? "Unknown secret or extension id; pair again with a code from `tabagent pair`." : "Not paired. Enter the pairing code from `tabagent serve`.");
+      if (authed) {
+        if (this.ext?.ws === ws) this.ext.lastSeen = this.now();
+        this.onExtMessage(ws, raw);
+        return;
       }
-      this.onExtMessage(msg);
+      clearTimeout(helloTimer);
+      authed = this.onHello(ws, extId, raw);
     });
     ws.on("close", () => {
       clearTimeout(helloTimer);
-      if (this.ext === ws) {
+      if (this.ext?.ws === ws) {
         this.ext = null;
         this.log("Extension disconnected");
-        for (const [id, p] of this.pending) {
-          clearTimeout(p.timer);
-          p.reject(new TabAgentError("NO_EXTENSION", "The TabAgent extension disconnected"));
-          this.pending.delete(id);
-        }
       }
+      this.failPending(ws, "The TabAgent extension disconnected");
     });
+    ws.on("error", () => {});
   }
 
-  private attachExt(ws: WebSocket, version: string) {
-    if (this.ext && this.ext !== ws) this.ext.close(4002, "replaced by a newer connection");
-    this.ext = ws;
-    this.extVersion = version;
+  /** Returns true when the socket is now the authenticated extension link. */
+  private onHello(ws: WebSocket, extId: string, raw: unknown): boolean {
+    const h = HelloSchema.safeParse(normalizeHello(raw));
+    if (!h.success) {
+      this.refuse(ws, "UNAUTHORIZED", "Expected hello as the first message");
+      return false;
+    }
+    const hello = h.data;
+    if (hello.protocolVersion !== PROTOCOL_VERSION) {
+      const hint = versionMismatchHint(hello.protocolVersion);
+      this.refuse(ws, "VERSION_MISMATCH", `Protocol version mismatch: extension ${hello.protocolVersion}, bridge ${PROTOCOL_VERSION}`, hint);
+      this.log(`Refused extension ${extId}: ${hint}`);
+      return false;
+    }
+    if (this.extensionConnected && this.ext!.id !== extId) {
+      this.refuse(
+        ws,
+        "UNAUTHORIZED",
+        `Another TabAgent extension (${this.ext!.id}) is already connected to this bridge; v1 allows one connection.`,
+        "Disable the other TabAgent extension or close that Chrome profile, then reconnect.",
+      );
+      return false;
+    }
+    const known = this.cfg.extensionIds.includes(extId);
+    if (hello.secret && hello.secret === this.cfg.secret && known) {
+      this.attachExt(ws, extId, hello.extensionVersion, hello.features);
+      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION });
+      return true;
+    }
+    if (hello.pairCode) {
+      const r = this.pairing.check(hello.pairCode);
+      if (r !== "ok") {
+        const msg =
+          r === "wrong"
+            ? "Wrong pairing code."
+            : r === "expired"
+              ? "The pairing code expired."
+              : "No valid pairing code (it was used, or invalidated after 5 wrong attempts).";
+        this.refuse(ws, "UNAUTHORIZED", msg, "Run `tabagent pair` for a new code.");
+        return false;
+      }
+      if (!known) this.cfg.extensionIds.push(extId);
+      saveConfig(this.cfg);
+      this.attachExt(ws, extId, hello.extensionVersion, hello.features);
+      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION, secret: this.cfg.secret });
+      this.log(`Paired with extension ${extId}`);
+      return true;
+    }
+    if (hello.secret && hello.secret === this.cfg.secret) {
+      this.refuse(ws, "UNAUTHORIZED", `Extension ${extId} is not paired with this bridge.`, "Pair it with a code from `tabagent pair`.");
+    } else if (hello.secret) {
+      this.refuse(ws, "UNAUTHORIZED", "Unknown secret; pair again with a code from `tabagent pair`.");
+    } else {
+      this.refuse(ws, "UNAUTHORIZED", "Not paired. Enter the pairing code from `tabagent status` or `tabagent pair`.");
+    }
+    return false;
+  }
+
+  private attachExt(ws: WebSocket, id: string, version: string, features: string[] = []) {
+    const old = this.ext;
+    if (old && old.ws !== ws) {
+      // Same ID reconnecting: the new socket replaces the old one; its in-flight commands fail.
+      this.failPending(old.ws, "The TabAgent extension reconnected; the command was lost");
+      old.ws.close(4002, "replaced by a newer connection");
+    }
+    this.ext = { ws, id, version, features: new Set(features), lastSeen: this.now() };
     this.log(`Extension connected (v${version})`);
     for (const w of this.extWaiters) w();
     this.extWaiters.clear();
   }
 
-  private onExtMessage(msg: ExtToBridge) {
-    if (msg.type === "ping") {
-      this.ext?.send(JSON.stringify({ type: "pong" } satisfies BridgeToExt));
-      return;
-    }
-    if (msg.type === "result") {
-      const p = this.pending.get(msg.id);
-      if (!p) return;
-      this.pending.delete(msg.id);
+  private failPending(ws: WebSocket, message: string) {
+    for (const [id, p] of this.pending) {
+      if (p.ws !== ws) continue;
       clearTimeout(p.timer);
-      if (msg.ok) p.resolve(msg.result);
-      else p.reject(new TabAgentError(msg.error?.code ?? "INTERNAL", msg.error?.message ?? "Unknown error", msg.error?.hint));
-      return;
+      this.pending.delete(id);
+      p.resolve({ ok: false, error: { code: "NO_EXTENSION", message, hint: PAIRING_HINT } });
     }
-    if (msg.type === "event") this.log(`extension event: ${msg.event}`);
+  }
+
+  /** D11: close a socket silent for 45s and fail its in-flight commands with NO_EXTENSION. */
+  checkSilent(now = this.now()) {
+    const e = this.ext;
+    if (!e || now - e.lastSeen <= TIMEOUTS.silentSocket) return;
+    this.log("Extension silent for 45s; closing the socket");
+    this.ext = null;
+    this.failPending(e.ws, "The TabAgent extension stopped responding (no ping for 45s)");
+    e.ws.terminate();
+  }
+
+  private onExtMessage(ws: WebSocket, msg: any) {
+    switch (msg?.type) {
+      case "ping":
+        this.sendTo(ws, { type: "pong" });
+        return;
+      case "result":
+        return this.onResult(msg);
+      case "event":
+        this.audit.event(String(msg.event), msg.data && typeof msg.data === "object" ? msg.data : undefined, { caller: "extension" });
+        this.log(`extension event: ${msg.event}`);
+        return;
+      case "files.resolve":
+        return this.onFilesResolve(ws, msg);
+    }
+  }
+
+  /** #11: validate upload paths only once the extension (after its gates) asks for them. */
+  private onFilesResolve(ws: WebSocket, raw: unknown) {
+    const r = FilesResolveSchema.safeParse(raw);
+    if (!r.success) return;
+    const { id, commandId, paths } = r.data;
+    const reply = (m: Omit<Extract<BridgeToExt, { type: "files.resolved" }>, "type" | "id">) => this.sendTo(ws, { type: "files.resolved", id, ...m });
+    const p = this.pending.get(commandId);
+    if (!p || p.ws !== ws || p.tool !== "act.upload") return reply({ ok: false, error: { code: "BAD_REQUEST", message: "No in-flight act.upload with that id" } });
+    const asked = new Set((p.params.paths as string[]) ?? []);
+    if (!paths.every((x) => asked.has(x))) return reply({ ok: false, error: { code: "BAD_REQUEST", message: "Paths differ from the act.upload command" } });
+    try {
+      reply({ ok: true, paths: resolveUploads(paths, this.cfg.uploadDirs) });
+    } catch (e) {
+      reply({ ok: false, error: toTabAgentError(e).toJSON() });
+    }
+  }
+
+  private onResult(raw: any) {
+    const p = this.pending.get(String(raw?.id));
+    if (!p) return;
+    this.pending.delete(raw.id);
+    clearTimeout(p.timer);
+    const who = { caller: p.meta.label, session: p.meta.id };
+    const env = ResultEnvelopeSchema.safeParse(raw);
+    if (env.success) this.audit.record(env.data.audit, who);
+    else {
+      // Legacy extension (no audit record): log a minimal record without params (D20).
+      const code = raw?.error?.code;
+      this.audit.minimal(p.tool, raw?.ok ? "ok" : code === "PERMISSION_DENIED" ? "denied" : "error", who, raw?.ok ? undefined : TabAgentError.from(raw?.error ?? {}).code, "extension sent no audit record");
+    }
+    const out: OutputResponse = { ok: !!raw.ok };
+    if (raw.ok) out.result = raw.result;
+    else out.error = TabAgentError.from(raw.error ?? {}).toJSON();
+    if (typeof raw.snapshotDiff === "string") out.snapshotDiff = raw.snapshotDiff;
+    if (raw.navigation && typeof raw.navigation === "object") out.navigation = raw.navigation;
+    if (Array.isArray(raw.dialogs)) out.dialogs = raw.dialogs;
+    if (Array.isArray(raw.downloads)) out.downloads = raw.downloads;
+    // Pre-D14 extensions put the diff inside the result; lift it so it is wrapped the same way.
+    const res = out.result as Record<string, unknown> | undefined;
+    if (res && typeof res === "object" && typeof res.snapshotDiff === "string" && out.snapshotDiff === undefined) {
+      const { snapshotDiff, ...rest } = res;
+      out.snapshotDiff = snapshotDiff as string;
+      out.result = rest;
+    }
+    p.resolve(out);
   }
 
   waitForExtension(ms: number): Promise<boolean> {
@@ -198,61 +389,79 @@ export class Daemon {
   // -------------------------------------------------------------------------
   // Dispatch
   // -------------------------------------------------------------------------
-  dispatch: Dispatch = async (meta, toolName, rawParams) => {
-    const started = Date.now();
+  /** Run one tool call; never throws. The response is NOT yet wrapped. */
+  async dispatchRaw(meta: SessionMeta, toolName: string, rawParams: unknown): Promise<OutputResponse> {
+    const who = { caller: meta.label, session: meta.id };
     const tool = getTool(toolName);
-    let params: Record<string, unknown> = (rawParams ?? {}) as Record<string, unknown>;
     try {
-      if (!tool) throw new TabAgentError("NOT_FOUND", `Unknown tool "${toolName}"`, "GET /v1/tools lists tools.");
-      params = validateParams(tool, rawParams);
-      if (tool.name === "act.upload") params.paths = validateUploads(params.paths as string[], this.cfg.uploadDirs);
-      if (!this.extensionConnected && !(await this.waitForExtension(3000))) {
-        throw new TabAgentError("NO_EXTENSION", "The TabAgent Chrome extension is not connected", "Open Chrome with the TabAgent extension installed and paired (side panel → Pair). `tabagent status` shows the pairing state.");
+      if (!tool) throw new TabAgentError("BAD_REQUEST", `Unknown tool "${toolName}"`, "GET /v1/tools lists tools.");
+      const params = validateParams(tool, rawParams);
+      if (!this.extensionConnected && !(await this.waitForExtension(this.opts.extWaitMs ?? 3000))) {
+        throw new TabAgentError("NO_EXTENSION", "The TabAgent Chrome extension is not connected", PAIRING_HINT);
       }
-      let result = await this.send(meta, tool.name, params, Number(params.timeout ?? 0));
-      if (result && typeof result === "object" && "__bridgeRead" in result) {
-        const { __bridgeRead, ...rest } = result as { __bridgeRead: { path: string; mime: string; maxBytes: number } };
-        result = { ...rest, ...readDownload(__bridgeRead.path, __bridgeRead.mime, Math.min(__bridgeRead.maxBytes, this.cfg.maxReadBytes)) };
-      }
-      this.audit(meta, tool.name, params, true, Date.now() - started);
-      return result;
+      // Legacy extensions can't ask for path validation after approval; validate up front for them only.
+      if (tool.name === "act.upload" && !this.ext!.features.has("files.resolve")) params.paths = resolveUploads(params.paths as string[], this.cfg.uploadDirs);
+      const resp = await this.send(meta, tool.name, params);
+      if (resp.ok) return this.afterResult(meta, tool.name, resp);
+      return resp;
     } catch (e) {
-      const err = e instanceof TabAgentError ? e : new TabAgentError("INTERNAL", String((e as Error)?.message ?? e));
-      this.audit(meta, toolName, params, false, Date.now() - started, err.toJSON());
-      throw err;
+      const err = toTabAgentError(e);
+      this.audit.minimal(tool?.name ?? String(toolName).slice(0, 64), err.code === "PERMISSION_DENIED" ? "denied" : "error", who, err.code);
+      return { ok: false, error: err.toJSON() };
     }
-  };
+  }
 
-  private send(meta: SessionMeta, tool: string, params: unknown, timeoutHint: number): Promise<unknown> {
+  /** Wrapped response for the output edge (D21). MCP, REST and CLI all go through here. */
+  async call(meta: SessionMeta, toolName: string, params: unknown): Promise<OutputResponse> {
+    return wrapResponse(await this.dispatchRaw(meta, toolName, params), getTool(toolName)).response;
+  }
+
+  private afterResult(meta: SessionMeta, tool: string, resp: OutputResponse): OutputResponse {
+    this.downloads.note(meta.id, resp.downloads);
+    const r = resp.result as Record<string, any> | undefined;
+    if (tool === "downloads.wait" && r) this.downloads.noteOne(meta.id, r);
+    if (tool === "downloads.list" && r) this.downloads.note(meta.id, r.downloads);
+    if (r && typeof r === "object" && Array.isArray(r.downloads) && tool !== "downloads.list") this.downloads.note(meta.id, r.downloads);
+    if (r && typeof r === "object" && r.__bridgeRead) {
+      const { __bridgeRead: br, ...rest } = r;
+      try {
+        const id = Number(br.id ?? rest.id);
+        const path = this.downloads.check(meta.id, id, String(br.path));
+        const content = readDownload(path, this.cfg.maxReadBytes);
+        return { ...resp, result: { id, mime: br.mime ?? rest.mime, ...content } };
+      } catch (e) {
+        const err = toTabAgentError(e);
+        this.audit.minimal(tool, "error", { caller: meta.label, session: meta.id }, err.code, "bridge file read");
+        return { ok: false, error: err.toJSON() };
+      }
+    }
+    return resp;
+  }
+
+  private send(meta: SessionMeta, tool: string, params: Record<string, unknown>): Promise<OutputResponse> {
     const id = randomUUID();
-    // Generous: covers user permission prompts (120s) plus the tool's own timeout.
-    const ms = 135_000 + timeoutHint;
-    return new Promise((resolve, reject) => {
+    const t = Number(params.timeout ?? 0) || defaultTimeout(tool);
+    // Generous: a permission prompt (120s) plus the tool's own timeout plus slack.
+    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000;
+    const ws = this.ext!.ws;
+    return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new TabAgentError("TIMEOUT", `${tool} did not finish in ${Math.round(ms / 1000)}s`));
+        resolve({ ok: false, error: { code: "TIMEOUT", message: `${tool} did not finish in ${Math.round(ms / 1000)}s` } });
       }, ms);
-      this.pending.set(id, { resolve, reject, timer });
-      this.ext!.send(JSON.stringify({ type: "command", id, session: meta, tool, params } satisfies BridgeToExt));
+      this.pending.set(id, { resolve, timer, ws, meta, tool, params });
+      this.sendTo(ws, { type: "command", id, session: meta, tool, params });
     });
   }
 
   endSession(sessionId: string) {
-    if (this.extensionConnected) this.ext!.send(JSON.stringify({ type: "session.closed", sessionId } satisfies BridgeToExt));
+    this.downloads.drop(sessionId);
+    if (this.extensionConnected) this.sendTo(this.ext!.ws, { type: "session.closed", sessionId });
   }
 
-  private audit(meta: SessionMeta, tool: string, params: unknown, ok: boolean, ms: number, error?: ToolError) {
-    try {
-      appendFileSync(auditPath(), JSON.stringify({ ts: new Date().toISOString(), session: meta.id, client: meta.label, tool, params: redact(params), ok, ms, ...(error ? { error } : {}) }) + "\n", { mode: 0o600 });
-    } catch {
-      /* best effort */
-    }
-  }
-
-  private gcRestSessions() {
-    const now = Date.now();
+  gcRestSessions(now = this.now()) {
     for (const [k, s] of this.restSessions) {
-      if (now - s.lastSeen > 30 * 60_000) {
+      if (!s.persistent && now - s.lastSeen > TIMEOUTS.restSessionIdle) {
         this.restSessions.delete(k);
         this.endSession(s.meta.id);
       }
@@ -260,36 +469,37 @@ export class Daemon {
   }
 
   // -------------------------------------------------------------------------
-  // HTTP
+  // HTTP (D2)
   // -------------------------------------------------------------------------
   private hostOk(req: IncomingMessage) {
     const host = String(req.headers.host ?? "");
-    return host === `127.0.0.1:${this.cfg.port}` || host === `localhost:${this.cfg.port}`;
+    return host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`;
   }
 
-  private tokensMtime = 0;
-  /** Pick up tokens created/revoked by the CLI while the daemon runs. */
-  private refreshTokens() {
+  /** Browser Origin allowed only if it is the paired extension. No Origin (CLI, agents) is fine. */
+  private originOk(req: IncomingMessage) {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    return this.cfg.extensionIds.some((id) => origin === `chrome-extension://${id}`);
+  }
+
+  /** Live reload of tokens (and newly paired IDs) when the CLI edits config.json. */
+  private refreshConfig() {
     try {
       const m = statSync(configPath()).mtimeMs;
-      if (m === this.tokensMtime) return;
-      this.tokensMtime = m;
-      this.cfg.tokens = JSON.parse(readFileSync(configPath(), "utf8")).tokens ?? [];
+      if (m === this.cfgMtime) return;
+      this.cfgMtime = m;
+      const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+      this.cfg.tokens = raw.tokens ?? [];
+      if (Array.isArray(raw.uploadDirs)) this.cfg.uploadDirs = raw.uploadDirs;
     } catch {
       /* keep current */
     }
   }
 
   principal(req: IncomingMessage): Principal | null {
-    this.refreshTokens();
-    const auth = String(req.headers.authorization ?? "");
-    const m = auth.match(/^Bearer\s+(.+)$/i);
-    if (!m) return null;
-    const tok = m[1].trim();
-    if (tok === this.cfg.secret) return { name: "local", cap: "full", sites: [] };
-    const h = hashToken(tok);
-    const rec = this.cfg.tokens.find((t) => t.hash === h);
-    return rec ? { name: rec.name, cap: rec.cap, sites: rec.sites } : null;
+    this.refreshConfig();
+    return authenticate(this.cfg, bearerOf(req.headers.authorization));
   }
 
   private sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -298,12 +508,16 @@ export class Daemon {
     res.end(JSON.stringify(body));
   }
 
+  private err(res: ServerResponse, code: ErrorCode, message: string, status = STATUS[code] ?? 200) {
+    this.sendJson(res, status, { ok: false, error: { code, message } });
+  }
+
   private async readBody(req: IncomingMessage): Promise<unknown> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const c of req) {
       size += (c as Buffer).length;
-      if (size > 10 * 1024 * 1024) throw new TabAgentError("BAD_REQUEST", "Body too large");
+      if (size > 10 * 1024 * 1024) throw new TabAgentError("TOO_LARGE", "Body too large");
       chunks.push(c as Buffer);
     }
     const s = Buffer.concat(chunks).toString("utf8");
@@ -316,78 +530,97 @@ export class Daemon {
   }
 
   private async onHttp(req: IncomingMessage, res: ServerResponse) {
-    if (!this.hostOk(req)) return this.sendJson(res, 403, { ok: false, error: { code: "UNAUTHORIZED", message: "Bad Host header" } });
-    const origin = req.headers.origin;
-    if (origin && !String(origin).startsWith("chrome-extension://")) return this.sendJson(res, 403, { ok: false, error: { code: "UNAUTHORIZED", message: "Browser origins are not allowed" } });
-    const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.cfg.port}`);
+    if (!this.hostOk(req)) return this.err(res, "UNAUTHORIZED", "Bad Host header", 403);
+    if (!this.originOk(req)) return this.err(res, "UNAUTHORIZED", "Browser origins are not allowed", 403);
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
     const path = url.pathname;
 
-    if (path === "/health" && req.method === "GET") {
-      return this.sendJson(res, 200, { ok: true, name: "tabagent", version: BRIDGE_VERSION, extension: this.extensionConnected, extensionVersion: this.extVersion });
+    if (path === "/v1/health" && req.method === "GET") {
+      return this.sendJson(res, 200, { ok: true, bridgeVersion: BRIDGE_VERSION, protocolVersion: PROTOCOL_VERSION });
     }
 
     const who = this.principal(req);
-    if (!who) return this.sendJson(res, 401, { ok: false, error: { code: "UNAUTHORIZED", message: "Missing or invalid bearer token" } });
+    if (!who) return this.err(res, "UNAUTHORIZED", "Missing or invalid bearer token", 401);
 
     if (path === "/mcp") return this.onMcp(req, res, who, url);
 
     if (path === "/v1/tools" && req.method === "GET") {
-      const tools = toolsForProfiles(url.searchParams.get("profile") ?? "full").map((t) => ({ name: t.name, group: t.group, description: t.description, level: t.level, sensitive: !!t.sensitive, profiles: t.profiles }));
+      let list;
+      try {
+        list = toolsForProfiles(url.searchParams.get("profile") ?? "full");
+      } catch (e) {
+        return this.err(res, "BAD_REQUEST", (e as Error).message);
+      }
+      const tools = list.map((t) => ({ name: t.name, group: t.group, description: t.description, level: t.level, sensitive: t.sensitive ?? null, profiles: t.profiles }));
       return this.sendJson(res, 200, { ok: true, tools });
     }
     if (path === "/v1/status" && req.method === "GET") {
       return this.sendJson(res, 200, {
         ok: true,
-        version: BRIDGE_VERSION,
+        bridgeVersion: BRIDGE_VERSION,
+        protocolVersion: PROTOCOL_VERSION,
         extension: this.extensionConnected,
-        extensionVersion: this.extVersion,
+        extensionVersion: this.extensionVersion,
         paired: this.cfg.extensionIds.length > 0,
-        pairCode: who.name === "local" ? this.pairCode : undefined,
+        pairCode: who.kind === "secret" ? this.pairCode : undefined,
         mcpSessions: this.mcpSessions.size,
         restSessions: this.restSessions.size,
       });
     }
     if (path === "/v1/pair" && req.method === "POST") {
-      if (who.name !== "local") return this.sendJson(res, 403, { ok: false, error: { code: "UNAUTHORIZED", message: "Only the local owner can create pairing codes" } });
-      return this.sendJson(res, 200, { ok: true, pairCode: this.newPairCode(), expiresInSec: 600 });
+      if (who.kind !== "secret") return this.err(res, "UNAUTHORIZED", "Only the local owner can create pairing codes", 403);
+      return this.sendJson(res, 200, { ok: true, pairCode: this.newPairCode(), expiresInSec: TIMEOUTS.pairCode / 1000 });
     }
-    if (path === "/v1/session/end" && req.method === "POST") {
-      const body = (await this.readBody(req)) as { sessionId?: string } | undefined;
-      const meta = this.restMeta(req, who, body?.sessionId);
-      this.restSessions.delete(meta.id);
-      this.endSession(meta.id);
-      return this.sendJson(res, 200, { ok: true });
-    }
-    const callMatch = path.match(/^\/v1\/call\/?([\w.]*)$/) ?? path.match(/^\/v1\/([a-z]+\.[A-Za-z]+|tabs)$/);
-    if (callMatch && req.method === "POST") {
-      let body: any;
+    let body: any;
+    if (req.method === "POST") {
       try {
         body = (await this.readBody(req)) ?? {};
       } catch (e) {
-        return this.sendJson(res, 400, { ok: false, error: (e as TabAgentError).toJSON?.() ?? { code: "BAD_REQUEST", message: String(e) } });
-      }
-      const toolName = callMatch[1] || body.tool;
-      const params = callMatch[1] ? (body.params ?? body) : body.params;
-      const meta = this.restMeta(req, who, body.session);
-      try {
-        const result = await this.dispatch(meta, toolName, params);
-        return this.sendJson(res, 200, { ok: true, result });
-      } catch (e) {
-        const err = e as TabAgentError;
-        const status = err.code === "BAD_REQUEST" ? 400 : err.code === "NOT_FOUND" ? 404 : err.code === "PERMISSION_DENIED" || err.code === "UNAUTHORIZED" ? 403 : err.code === "NO_EXTENSION" ? 503 : 200;
-        return this.sendJson(res, status, { ok: false, error: err.toJSON ? err.toJSON() : { code: "INTERNAL", message: String(e) } });
+        const er = toTabAgentError(e);
+        return this.err(res, er.code, er.message);
       }
     }
-    return this.sendJson(res, 404, { ok: false, error: { code: "NOT_FOUND", message: `No route ${req.method} ${path}` } });
+    if (path === "/v1/session/end" && req.method === "POST") {
+      const meta = this.restMeta(req, who, url, body?.session ?? body?.sessionId);
+      this.restSessions.delete(this.restKey(req, who, url, body?.session ?? body?.sessionId));
+      this.endSession(meta.id);
+      return this.sendJson(res, 200, { ok: true });
+    }
+    // POST /v1/<tool> (canonical: body = params), /v1/call/<tool> and /v1/call {tool, params} (legacy).
+    const m = path.match(/^\/v1\/call(?:\/([\w.]+))?$/) ?? path.match(/^\/v1\/([\w.]+)$/);
+    if (m && req.method === "POST") {
+      const legacy = path.startsWith("/v1/call");
+      const toolName = m[1] ?? body.tool;
+      if (!getTool(String(toolName ?? ""))) return this.err(res, "NOT_FOUND", `No tool "${toolName}"`);
+      const params = legacy ? (body.params ?? (m[1] ? body : {})) : body;
+      const meta = this.restMeta(req, who, url, legacy ? body.session : undefined);
+      const out = await this.call(meta, String(toolName), params);
+      return this.sendJson(res, out.ok ? 200 : (STATUS[out.error!.code] ?? 200), out);
+    }
+    return this.err(res, "NOT_FOUND", `No route ${req.method} ${path}`);
   }
 
-  private restMeta(req: IncomingMessage, who: Principal, bodySession?: string): SessionMeta {
-    const sid = String(req.headers["x-tabagent-session"] ?? bodySession ?? `rest-${who.name}`).slice(0, 100);
-    const label = String(req.headers["x-tabagent-label"] ?? (who.name === "local" ? sid.replace(/^stdio-/, "").replace(/-[a-z0-9]{6}$/, "") : who.name)).slice(0, 40);
-    const key = `${who.name}:${sid}`;
-    const meta: SessionMeta = { id: who.name === "local" ? sid : `${who.name}:${sid}`, label: label || "agent", cap: who.cap, sites: who.sites };
-    this.restSessions.set(key, { meta, lastSeen: Date.now() });
-    return meta;
+  private restKey(req: IncomingMessage, who: Principal, url: URL, bodySession?: string) {
+    const sess = String(req.headers["x-tabagent-session"] ?? url.searchParams.get("session") ?? bodySession ?? "default").slice(0, 100);
+    return `${who.name}:${sess}`;
+  }
+
+  /**
+   * D8 sessions for REST/CLI: one per credential name plus an optional session name, 30 min idle expiry.
+   * The stdio MCP proxy marks its session persistent (x-tabagent-mcp: 1) and ends it on exit.
+   */
+  restMeta(req: IncomingMessage, who: Principal, url: URL, bodySession?: string): SessionMeta {
+    const key = this.restKey(req, who, url, bodySession);
+    const proxy = req.headers["x-tabagent-mcp"] === "1";
+    const client = String(req.headers["x-tabagent-client"] ?? "").replace(/[^\w .-]/g, "").slice(0, 40);
+    let s = this.restSessions.get(key);
+    if (!s) {
+      const label = who.kind === "token" ? who.name : (proxy && client) || "local";
+      s = { meta: { id: `${proxy ? "mcp" : "rest"}:${key}`, label, cap: who.cap, sites: who.sites }, lastSeen: this.now(), persistent: proxy };
+      this.restSessions.set(key, s);
+    } else if (proxy && who.kind === "secret" && client && s.meta.label === "local") s.meta.label = client;
+    s.lastSeen = this.now();
+    return s.meta;
   }
 
   private async onMcp(req: IncomingMessage, res: ServerResponse, who: Principal, url: URL) {
@@ -399,7 +632,13 @@ export class Daemon {
       if (sid) return this.sendJson(res, 404, { jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null });
       const isInit = Array.isArray(body) ? body.some((m: any) => m?.method === "initialize") : (body as any)?.method === "initialize";
       if (req.method !== "POST" || !isInit) return this.sendJson(res, 400, { jsonrpc: "2.0", error: { code: -32000, message: "No session; send initialize first" }, id: null });
-      const meta: SessionMeta = { id: `mcp-${randomUUID().slice(0, 8)}`, label: who.name === "local" ? "agent" : who.name, cap: who.cap, sites: who.sites };
+      const profile = url.searchParams.get("profile") ?? this.opts.profile ?? "core";
+      try {
+        toolsForProfiles(profile);
+      } catch (e) {
+        return this.sendJson(res, 400, { jsonrpc: "2.0", error: { code: -32602, message: (e as Error).message }, id: null });
+      }
+      const meta: SessionMeta = { id: `mcp-${randomUUID().slice(0, 8)}`, label: who.kind === "token" ? who.name : "local", cap: who.cap, sites: who.sites };
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
@@ -411,11 +650,11 @@ export class Daemon {
         this.endSession(meta.id);
       };
       const server = buildMcpServer({
-        dispatch: this.dispatch,
-        meta: () => meta,
-        profile: url.searchParams.get("profile") ?? this.opts.profile ?? "core",
+        call: (tool, args) => this.call(meta, tool, args),
+        profile,
         onClientInfo: (name) => {
-          if (who.name === "local" && name) meta.label = name;
+          const n = String(name ?? "").replace(/[^\w .-]/g, "").slice(0, 40);
+          if (who.kind === "secret" && n) meta.label = n;
         },
       });
       await server.connect(transport);
