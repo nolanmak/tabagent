@@ -7,6 +7,8 @@ const reg = (n: string) => getTool(n) as unknown as ToolLike;
 describe("requirementsFor: every D18 static path reaches the gate", () => {
   it.each([
     ["nav.wait", { for: "fn", value: "true" }, "c"],
+    ["act.upload", { ref: "e1", paths: ["/x"] }, "e"],
+    ["downloads.read", { id: 1 }, "e"],
     ["tabs", { action: "attach" }, "f"],
   ])("%s -> %s", (tool, params, cat) => {
     expect(requirementsFor(reg(tool), params as any).sensitive).toBe(cat);
@@ -36,11 +38,12 @@ describe("requirementsFor: levels and tab resolution", () => {
     expect(requirementsFor(reg("nav.goto"), { url: "x" })).toMatchObject({ level: "act", urlSource: "param", needsTab: false, tabOptional: true });
   });
   it("tools with no tab", () => {
-    for (const n of ["session.info", "session.permissions", "session.end"]) expect(requirementsFor(reg(n), {})).toMatchObject({ needsTab: false, level: null });
+    for (const n of ["downloads.list", "downloads.wait", "session.info", "session.permissions", "session.end"]) expect(requirementsFor(reg(n) ?? { name: n, level: "none" }, {})).toMatchObject({ needsTab: false, level: null });
+    expect(requirementsFor(reg("downloads.read"), { id: 1 })).toMatchObject({ urlSource: "download" });
   });
   it("every other site-scoped registry tool needs a tab and its registry level", () => {
     for (const t of TOOLS as unknown as ToolLike[]) {
-      if (["tabs", "nav.goto"].includes(t.name) || t.name.startsWith("session.")) continue;
+      if (["tabs", "nav.goto", "downloads.read"].includes(t.name) || t.name.startsWith("downloads.") || t.name.startsWith("session.")) continue;
       const r = requirementsFor(t, {});
       expect(r.needsTab).toBe(true);
       expect(r.level).toBe(t.level === "none" ? null : t.level);

@@ -1,7 +1,7 @@
 // E2E harness: fixture servers + real bridge process + Chromium with the
 // unpacked extension + real pairing through the side panel + MCP stdio client.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, extname } from "node:path";
@@ -23,6 +23,11 @@ function fixtureServer(host: string): Promise<{ server: Server; origin: string }
     if (u.pathname === "/api/data.json") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ items: ["alpha", "beta", "gamma"] }));
+      return;
+    }
+    if (u.pathname === "/download/data.csv") {
+      res.writeHead(200, { "content-type": "text/csv", "content-disposition": 'attachment; filename="data.csv"' });
+      res.end("name,qty\nwidget,3\ngadget,5\n");
       return;
     }
     if (u.pathname.startsWith("/p/")) {
@@ -78,8 +83,10 @@ export class Harness {
     this.A = a.origin;
     this.B = b.origin;
     this.home = mkdtempSync(join(tmpdir(), "tabagent-e2e-"));
+    mkdirSync(join(this.home, "uploads"), { recursive: true });
     this.port = await freePort();
-    writeFileSync(join(this.home, "config.json"), JSON.stringify({ port: this.port }));
+    // Write config up-front so uploads dir is our temp dir.
+    writeFileSync(join(this.home, "config.json"), JSON.stringify({ port: this.port, uploadDirs: [join(this.home, "uploads")] }));
     this.bridge = spawn(process.execPath, [CLI, "serve"], { env: { ...process.env, TABAGENT_HOME: this.home }, stdio: ["ignore", "pipe", "pipe"] });
     this.pairCode = await new Promise<string>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("bridge did not start: " + this.bridgeLog)), 10000);

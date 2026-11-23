@@ -10,7 +10,7 @@ const SKILL = join(__dirname, "../skill/SKILL.md");
 
 describe("CLI commands", () => {
   it("tools lists a profile; bad profile fails", () => {
-    expect(toolsCommand("core").out.at(-1)).toMatch(/^9 tools/);
+    expect(toolsCommand("core").out.at(-1)).toMatch(/^13 tools/);
     expect(toolsCommand("nope").code).toBe(1);
   });
   it("skill install/uninstall/print", () => {
@@ -37,10 +37,12 @@ describe("CLI commands", () => {
       else process.env.CODEX_HOME = prevCodex;
     }
   });
-  it("config show hides secrets; set port", () => {
+  it("config show hides secrets; add-upload-dir; set port", () => {
     const h = tempHome();
     const show = JSON.parse(configCommand([]).out[0]);
     expect(show.secret).toBe("(set)");
+    expect(show.uploadDirs).toEqual([join(h, "uploads")]);
+    expect(configCommand(["add-upload-dir", h]).out[0]).toContain(h);
     expect(configCommand(["set", "port", "5555"]).code).toBe(0);
     expect(JSON.parse(readFileSync(join(h, "config.json"), "utf8")).port).toBe(5555);
     expect(configCommand(["set", "port", "x"]).code).toBe(1);

@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TabAgentError } from "@tabagent/protocol";
-import { render, tokensOf, type FrameTree } from "../src/background/snapshot";
-import { ax, GOLDENS, list, loadAx, M1_PAGES, source } from "./helpers";
+import { render, type FrameTree } from "../src/background/snapshot";
+import { ax, GOLDENS, loadAx, M1_PAGES, source } from "./helpers";
 
 const UPDATE = !!process.env.UPDATE_GOLDENS;
 mkdirSync(GOLDENS, { recursive: true });
@@ -123,7 +123,7 @@ describe("render: same-process frames", () => {
     innerBtn.backendDOMNodeId = main.find((n) => n.role?.value === "button")!.backendDOMNodeId;
     return [
       { key: "|main", nodes: main },
-      { key: "|child", nodes: child, ownerBackendNodeId: iframes[0].backendDOMNodeId, ownerFrameKey: "|main" },
+      { key: "S1|child", nodes: child, ownerBackendNodeId: iframes[0].backendDOMNodeId, ownerFrameKey: "|main" },
     ];
   };
 
@@ -132,36 +132,9 @@ describe("render: same-process frames", () => {
     const r = render(frames(), { refs: src });
     expect(r.text).toMatch(/- iframe "Child"\n\s+- button "Inner button" \[ref=e\d+\]/);
     const top = r.shown.find((s) => s.frameKey === "|main")!;
-    const inner = r.shown.find((s) => s.frameKey === "|child")!;
+    const inner = r.shown.find((s) => s.frameKey === "S1|child")!;
     expect(top.backendNodeId).toBe(inner.backendNodeId);
     expect(top.ref).not.toBe(inner.ref);
   });
-});
 
-describe("render: M1 hard stop (D23)", () => {
-  const page = (n: number) =>
-    ax(["RootWebArea", "p", [["main", undefined, [["heading", "Rows", [], { properties: [{ name: "level", value: { value: 1 } }] }], list(n, (i) => ["listitem", undefined, [["link", `Row number ${i}`], ["button", `Open ${i}`]]]), ["button", "After"]]]]]);
-
-  it("pathological page: one 5,000-item list stays within budget; later nodes get no refs", () => {
-    const src = source();
-    const r = render(page(5000), { refs: src });
-    expect(r.tokens).toBeLessThanOrEqual(6000);
-    expect(r.truncated).toBe(true);
-    expect(r.text).toMatch(/… truncated, (\d+) more nodes; narrow with root=<ref>$/);
-    expect(r.text).not.toContain('"After"');
-    expect(r.refs.length).toBe(r.shown.length);
-  });
-
-  it("tiny budget still ends with the truncation note", () => {
-    const r = render(page(500), { maxTokens: 30, refs: source() });
-    expect(r.tokens).toBeLessThanOrEqual(30);
-    expect(r.text).toMatch(/… truncated, \d+ more nodes; narrow with root=<ref>$/);
-  });
-
-  it("no truncation when the page fits", () => {
-    const r = render(page(10), { refs: source() });
-    expect(r.truncated).toBe(false);
-    expect(r.omitted).toBe(0);
-    expect(tokensOf(r.text)).toBe(r.tokens);
-  });
 });

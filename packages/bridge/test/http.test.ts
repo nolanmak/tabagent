@@ -57,14 +57,12 @@ describe("HTTP auth (D2)", () => {
     expect(r.status).toBe(200);
     expect(Object.keys(r.body).sort()).toEqual(["bridgeVersion", "ok", "protocolVersion"]);
   });
-  it("/v1/status shows the pair code to the secret holder; /v1/pair mints a new one", async () => {
+  it("/v1/status shows the pair code to the secret holder; anything else is 401", async () => {
     const { base, cfg, d } = await boot();
     const s = await rest(base, "/v1/status", cfg.secret);
     expect(s.body).toMatchObject({ ok: true, extension: false, paired: false, pairCode: d.pairCode });
-    const p = await rest(base, "/v1/pair", cfg.secret, {});
-    expect(p.status).toBe(200);
-    expect(p.body.pairCode).toBe(d.pairCode);
-    expect((await rest(base, "/v1/pair", "wrong", {})).status).toBe(401);
+    expect((await rest(base, "/v1/status", "tab_not-a-credential")).status).toBe(401);
+    expect((await rest(base, "/v1/pair", "tab_not-a-credential", {})).status).toBe(401);
   });
 });
 

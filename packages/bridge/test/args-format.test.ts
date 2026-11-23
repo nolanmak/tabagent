@@ -13,6 +13,7 @@ describe("CLI args (D30)", () => {
     ["act.select", ["--json", '{"ref":"e1","values":["a"]}'], ["--ref", "e1", "--values", '["a"]']],
     ["act.type", ["--json", '{"text":"42","submit":true}'], ["--text", "42", "--submit"]],
     ["act.check", ["--json", '{"ref":"e1","checked":false}'], ["--ref", "e1", "--checked", "false"]],
+    ["form.fill", ["--json", '{"fields":{"Email":"a@b.c"}}'], ["--fields", '{"Email":"a@b.c"}']],
     ["tabs", ["--json", '{"action":"list"}'], ["--action", "list"]],
   ])("%s: --json and flags give the same params", (tool, json, flags) => {
     expect(p(tool, flags)).toEqual(p(tool, json));
@@ -31,6 +32,9 @@ describe("CLI args (D30)", () => {
   });
   it("parseFlags: positional, short flags, = form", () => {
     expect(parseFlags(["tail", "-n", "5", "--follow", "--a=b", "-f"])).toEqual({ f: { n: "5", follow: true, a: "b", f: true }, rest: ["tail"] });
+  });
+  it("unparseable values for loose schemas stay strings", () => {
+    expect(p("extract.schema", ["--schema", "nope"])).toEqual({ schema: "nope" });
   });
 });
 

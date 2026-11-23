@@ -15,9 +15,9 @@ describe("wrap()", () => {
   it("wraps nested array paths and non-string values as JSON", () => {
     const tabs = wrap({ tabs: [{ tabId: 1, url: "u1", title: "t1", active: true }] }, getTool("tabs")!, "n") as any;
     expect(tabs.tabs[0]).toEqual({ tabId: 1, url: wrapText("u1", "n"), title: wrapText("t1", "n"), active: true });
-    const found = wrap({ matches: [{ ref: "e1", role: "button", name: "Go" }] }, getTool("page.find")!, "Q7") as any;
-    expect(found.matches).toBe(wrapText('[{"ref":"e1","role":"button","name":"Go"}]', "Q7"));
-    expect(unwrap(found.matches)).toBe('[{"ref":"e1","role":"button","name":"Go"}]');
+    const table = wrap({ rows: [{ a: 1 }], headers: ["a"] }, getTool("extract.table")!, "n") as any;
+    expect(table.rows).toBe(wrapText('[{"a":1}]', "n"));
+    expect(unwrap(table.headers)).toBe('["a"]');
   });
   it("tolerates missing fields, primitives and odd shapes", () => {
     expect(wrap({}, snapTool, "n")).toEqual({});
