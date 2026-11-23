@@ -363,7 +363,7 @@ MCP name `form_describe` · level read · profiles forms · lite supported · ha
 
 Fill many fields in one call: fields maps label or ref -> value (string; boolean for checkboxes; string[] for multi-select).
 
-MCP name `form_fill` · level act · profiles core · lite supported · handled by extension
+MCP name `form_fill` · level act · profiles core · lite supported · handled by extension · page content `failed[].message`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
@@ -416,7 +416,7 @@ MCP name `extract_links` · level read · profiles data · lite supported · han
 
 Extract structured data (JSON-LD, microdata, then repeated items). Returns data plus selectors; pass selectors back to skip detection.
 
-MCP name `extract_schema` · level read · profiles data · lite supported · handled by extension · page content `data`
+MCP name `extract_schema` · level read · profiles data · lite supported · handled by extension · page content `data`, `selectors`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
@@ -429,7 +429,7 @@ MCP name `extract_schema` · level read · profiles data · lite supported · ha
 
 Run an extractor (table\|links\|schema) across pages, following next (ref or CSS; default: a Next control) up to maxPages (5).
 
-MCP name `extract_paginate` · level read · profiles data · lite supported · handled by extension · page content `rows`, `links`, `data`, `headers`
+MCP name `extract_paginate` · level read · profiles data · lite supported · handled by extension · page content `rows`, `links`, `data`, `headers`, `urls`, `error.message`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
