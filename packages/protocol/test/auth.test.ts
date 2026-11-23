@@ -22,6 +22,7 @@ import {
   parseAccountId,
   registrableDomain,
   SecretMessageSchema,
+  selectTotpAccount,
   TOOLS,
   toolsForProfiles,
   uriMatches,
@@ -293,6 +294,18 @@ describe("secret-channel wire", () => {
     expect(
       AuthAccountsResultSchema.safeParse({ type: "auth.accounts.result", id: "r", ok: true, accounts: [{ id: "bitwarden:a1", provider: "bitwarden", accountMasked: "n•••k", password: "x" }] }).success,
     ).toBe(false);
+  });
+  it("#37 TOTP account selection: last login, single TOTP item, several → BAD_REQUEST, none → NOT_FOUND", () => {
+    const a = (id: string, o: Record<string, unknown> = {}) => ({ id: `bitwarden:${id}`, provider: "bitwarden" as const, accountMasked: "a•••", ...o });
+    const x = a("x", { hasTotp: true });
+    const y = a("y", { hasTotp: true });
+    const n = a("n", { hasTotp: false });
+    expect(selectTotpAccount([x, y], "bitwarden:y")).toEqual({ account: y });
+    expect(selectTotpAccount([x, n])).toEqual({ account: x });
+    expect(selectTotpAccount([x, y])).toEqual({ error: "BAD_REQUEST", candidates: [{ id: "bitwarden:x", accountMasked: "a•••" }, { id: "bitwarden:y", accountMasked: "a•••" }] });
+    expect(selectTotpAccount([n])).toEqual({ error: "NOT_FOUND" });
+    expect(selectTotpAccount([a("r", { hasTotp: true, reprompt: true })])).toEqual({ error: "NOT_FOUND" });
+    expect(selectTotpAccount([x, y], "bitwarden:gone")).toMatchObject({ error: "BAD_REQUEST" });
   });
   it("isAuthExtMessage", () => {
     expect(isAuthExtMessage({ type: "auth.accounts" })).toBe(true);
