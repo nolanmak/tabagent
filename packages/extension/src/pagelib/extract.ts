@@ -529,7 +529,7 @@ export function nextControl(_self: unknown, selector?: string): Ret<{ el: number
   if (!el) return { value: null, elements: [] };
   const isLink = el.tagName === "A";
   const rawHref = el.getAttribute("href");
-  const disabled = isDisabled(el) || (isLink && !rawHref) || /\bdisabled\b/.test(typeof el.className === "string" ? el.className : "") || (typeof (el as HTMLElement).checkVisibility === "function" && !isVisible(el));
+  const disabled = isDisabled(el) || (isLink && !rawHref) || /\bdisabled\b/.test(typeof el.className === "string" ? el.className : "");
   return { value: { el: 0, disabled, href: isLink && rawHref && !/^\s*(#|javascript:)/i.test(rawHref) ? absUrl(rawHref) : null }, elements: [el] };
 }
 

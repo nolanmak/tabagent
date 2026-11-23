@@ -2,36 +2,31 @@
 // Every sensitive path in the extension goes through sensitiveGate().
 import type { SessionMeta } from "@tabagent/protocol";
 import { keySensitivity, submitConfirmation, submitSensitivity, type Detection, type FieldLike } from "../../pure/sensitive";
+import { resolveFiles } from "../bridgeFiles";
 import { requireSensitive } from "../permissions";
 import type { Ctx, TabCtx } from "./ctx";
 
 export type Category = "a" | "b" | "c" | "d" | "e" | "f";
 
-/**
- * Ask the user (unless pre-approved for this origin + category). Integration point:
- * once agent B's permissions.ts lands this becomes
- * `requireSensitive(meta, url, category, tool, summary, reasons)`.
- */
-export async function sensitiveGate(meta: SessionMeta, url: string, category: Category, tool: string, summary: string, reasons: string[]) {
-  void category;
-  await requireSensitive(meta, url, tool, summary, reasons);
+/** Ask the user (unless pre-approved for this origin + category, or devAllowSensitive is on). */
+export async function sensitiveGate(meta: SessionMeta, url: string, category: Exclude<Category, "f">, tool: string, summary: string, reasons: string[]) {
+  await requireSensitive(meta, url, category, tool, summary, reasons);
 }
 
 /**
- * Static categories (c, d, e) are gated by the router from the registry (D17/D18).
- * Until that router lands on this branch, handlers gate them here. Set to false when
- * the router's static gate is in place, or users get asked twice.
+ * Static categories (c, d, e) are gated by the router from the registry `sensitive`
+ * field (D17/D18) before the handler runs, so handlers must not ask again.
  */
-export const HANDLERS_GATE_STATIC = true;
+export const HANDLERS_GATE_STATIC = false;
 
-export async function staticGate(c: Ctx, url: string, category: Category, summary: string, reasons: string[]) {
+export async function staticGate(c: Ctx, url: string, category: Exclude<Category, "f">, summary: string, reasons: string[]) {
   if (HANDLERS_GATE_STATIC) await sensitiveGate(c.meta, url, category, c.tool.name, summary, reasons);
 }
 
-/** Upload paths -> canonical paths from the bridge (#11). Integration point: agent B's resolveFiles(cmdId, paths). */
-export async function canonicalUploadPaths(_c: Ctx, paths: string[]): Promise<string[]> {
-  // On this branch the bridge validates act.upload paths before sending the command.
-  return paths;
+/** Upload paths -> canonical paths, validated by the bridge against uploadDirs (#11, D31). */
+export async function canonicalUploadPaths(c: Ctx, paths: string[]): Promise<string[]> {
+  if (!c.cmdId) return paths; // a bridge without files.resolve validated them before sending
+  return resolveFiles(c.cmdId, paths);
 }
 
 interface GateInput {

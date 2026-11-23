@@ -3,7 +3,7 @@ import { TabAgentError } from "@tabagent/protocol";
 import { paginate, type PageOps } from "../src/pure/paginate";
 
 /** A fake site: pages[i] = rows on page i; next on page i goes to page i+1 unless overridden. */
-function site(pages: string[][], o: { disabledOn?: number; noNextOn?: number; sameUrlOn?: number; failOn?: number; denyUrl?: string } = {}) {
+function site(pages: unknown[][], o: { disabledOn?: number; noNextOn?: number; sameUrlOn?: number; failOn?: number; denyUrl?: string } = {}) {
   let cur = 0;
   const authorize = vi.fn(async (url: string, _level: "read" | "act") => {
     if (o.denyUrl && url.includes(o.denyUrl)) throw new TabAgentError("PERMISSION_DENIED", `denied ${url}`);

@@ -24,5 +24,9 @@ export function downloadsSince(sessionId: string, ts: number) {
   return list.map(wireDownload);
 }
 
+export function getDownload(id: number) {
+  return tracker.get(id);
+}
+
 /** Kept for older callers; attribution no longer depends on the last action. */
 export function noteAction(_sessionId: string) {}
