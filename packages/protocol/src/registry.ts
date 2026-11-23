@@ -20,7 +20,7 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   f: "Taking over one of your tabs",
 };
 
-export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session";
+export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "files" | "session";
 export type Profile = "core" | "forms" | "data" | "dev" | "full";
 export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full"];
 
