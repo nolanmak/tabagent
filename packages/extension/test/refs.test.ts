@@ -13,6 +13,18 @@ function code(f: () => unknown) {
   return "ok";
 }
 
+describe("errors helpers", () => {
+  it("taErr carries code, hint and pageText; isCode / codeOf", async () => {
+    const { codeOf, isCode, taErr } = await import("../src/background/errors");
+    const e = taErr("NOT_ACTIONABLE", "covered by <div>", "close it", { pageText: true });
+    expect(e.toJSON()).toEqual({ code: "NOT_ACTIONABLE", message: "covered by <div>", hint: "close it", untrusted: true });
+    expect(isCode(e, "NOT_ACTIONABLE")).toBe(true);
+    expect(isCode(new Error("x"), "NOT_ACTIONABLE")).toBe(false);
+    expect(codeOf(e)).toBe("NOT_ACTIONABLE");
+    expect(codeOf("nope")).toBeUndefined();
+  });
+});
+
 describe("RefTable (D22)", () => {
   it("mints e<N>, keeps the same ref for the same node", async () => {
     const t = new RefTable(memoryStore());
