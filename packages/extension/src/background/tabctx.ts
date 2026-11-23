@@ -3,7 +3,7 @@
 // becomes the D14 side-effect fields via `__side` (contract §3, D24).
 import { levelFor, type Level, type SessionMeta, type ToolDef } from "@tabagent/protocol";
 import { peekCdpTab } from "./cdp";
-import { driverFor, type DialogInfo, type Driver } from "./driver";
+import { CdpDriver, driverFor, type DialogInfo, type Driver } from "./driver";
 import { downloadsSince, noteAction } from "./downloads";
 import { taErr } from "./errors";
 import { requireSensitive, requireSite } from "./permissions";
@@ -80,6 +80,12 @@ export function levelOf(c: Ctx, fallback: Level): Level {
   } catch {
     return fallback;
   }
+}
+
+/** Tools that need the CDP driver (console/network) reject lite tabs. */
+export function cdp(drv: Driver): CdpDriver {
+  if (drv instanceof CdpDriver) return drv;
+  throw taErr("UNSUPPORTED", "This tool needs full (debugger) mode; the site is in lite mode", "Turn lite mode off for this site in the TabAgent side panel.");
 }
 
 /** D28: while a dialog is open, everything on the tab except dialog.handle gets DIALOG_OPEN. */

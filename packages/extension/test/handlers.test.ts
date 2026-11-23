@@ -13,6 +13,7 @@ vi.mock("../src/background/permissions", () => ({
   },
   effectivePolicy: async () => ({ policy: "full" }),
 }));
+vi.mock("../src/background/bridgeFiles", () => ({ resolveFiles: async (_id: string, p: string[]) => p }));
 vi.mock("../src/background/downloads", () => ({ noteAction: () => {}, downloadsSince: () => [] }));
 vi.mock("../src/background/cdp", () => ({ peekCdpTab: () => (state.dialog ? { dialog: state.dialog } : undefined), getCdpTab: () => null, sleep: async () => {} }));
 vi.mock("../src/background/driver", () => ({ driverFor: async () => state.drv }));
@@ -43,8 +44,8 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     find: async () => ({ matches: [], truncated: false }),
     call: async (fn: string) => {
       log.push(`call:${fn}`);
-      if (fn === "clickSensitivity") return d.clickSens ?? { label: "Go", reasons: [] };
-      if (fn === "keySensitivity") return d.keySens ?? { reasons: [] };
+      if (fn === "clickGateInfo") return d.clickInfo ?? { role: "button", name: "Go" };
+      if (fn === "keyGateInfo") return d.keyInfo ?? { inForm: false };
       if (fn === "info") return { isSelect: false, visible: true };
       return null;
     },
@@ -137,24 +138,24 @@ describe("act.* through afterAction (D14/D24)", () => {
 
 describe("D18(a)(b) gates", () => {
   it("a click on the submit control of a password form hits the gate", async () => {
-    state.drv.clickSens = { label: "Log in", reasons: ["submits a form with a password field"] };
+    state.drv.clickInfo = { role: "button", name: "Log in", isSubmit: true, formFields: [{ type: "password", name: "pw", label: "Password" }] };
     await actHandlers["act.click"](ctx("act.click", { ref: "e1" }));
     expect(state.sensitive).toHaveLength(1);
     expect(state.sensitive[0][2]).toBe("a");
   });
 
   it("Enter inside a password form hits the gate (press and type submit)", async () => {
-    state.drv.keySens = { reasons: ["Enter submits a form with a password field"] };
+    state.drv.keyInfo = { inForm: true, formFields: [{ type: "password", name: "pw" }] };
     await actHandlers["act.press"](ctx("act.press", { key: "Enter" }));
     await actHandlers["act.type"](ctx("act.type", { text: "x", submit: true }));
     expect(state.sensitive.map((a) => a[2])).toEqual(["a", "a"]);
   });
 
   it("purchase/delete/send clicks are category b; plain clicks pass", async () => {
-    state.drv.clickSens = { label: "Delete account", reasons: ['"Delete account" looks like a purchase/delete/send action'] };
+    state.drv.clickInfo = { role: "button", name: "Delete account" };
     await actHandlers["act.dblclick"](ctx("act.dblclick", { ref: "e1" }));
     expect(state.sensitive[0][2]).toBe("b");
-    state.drv.clickSens = { label: "Go", reasons: [] };
+    state.drv.clickInfo = { role: "button", name: "Go" };
     state.sensitive = [];
     await actHandlers["act.click"](ctx("act.click", { ref: "e1" }));
     expect(state.sensitive).toEqual([]);

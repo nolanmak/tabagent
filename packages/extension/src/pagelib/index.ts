@@ -4,13 +4,15 @@
 // reference elements inside `value` as { el: <index> }; the background maps those
 // indexes to refs.
 
-type El = Element;
-interface Ret<T = unknown> {
+import { clickGateInfo, clickSensitivity, comboOptions, describeFields, fieldInfo, isFormControl, keyGateInfo, keySensitivity, requestSubmit, resolveFileInput, submitInfo } from "./forms";
+import { extractLinks, extractSchema, extractTable, markdown, nextControl, storage, text } from "./extract";
+
+export type El = Element;
+export interface Ret<T = unknown> {
   value: T;
   elements: El[];
 }
 
-const MAX_TEXT = 20000;
 
 // ---------------------------------------------------------------------------
 // Element registry (lite mode): numeric ids that stand in for backendNodeIds.
@@ -38,7 +40,7 @@ function byLiteId(id: number): El | null {
 // ---------------------------------------------------------------------------
 // Tree walking (pierces open shadow roots)
 // ---------------------------------------------------------------------------
-function* walk(root: Node): Generator<El> {
+export function* walk(root: Node): Generator<El> {
   const stack: Node[] = [root];
   while (stack.length) {
     const n = stack.pop()!;
@@ -47,14 +49,15 @@ function* walk(root: Node): Generator<El> {
       if (n !== root) yield n;
       if (n.shadowRoot) kids.push(...Array.from(n.shadowRoot.children));
     }
-    if (n instanceof Element || n.nodeType === 9 || n instanceof DocumentFragment) {
+    // nodeType, not instanceof: Document subclasses differ across realms (and in happy-dom).
+    if (n.nodeType === 1 || n.nodeType === 9 || n.nodeType === 11) {
       kids.push(...Array.from((n as ParentNode).children));
     }
     for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
   }
 }
 
-function deepQueryAll(root: ParentNode | null, selector: string): El[] {
+export function deepQueryAll(root: ParentNode | null, selector: string): El[] {
   const r = (root ?? document) as Node;
   const out: El[] = [];
   for (const el of walk(r)) {
@@ -67,13 +70,13 @@ function deepQueryAll(root: ParentNode | null, selector: string): El[] {
   return out;
 }
 
-function parentOf(el: El): El | null {
+export function parentOf(el: El): El | null {
   if (el.parentElement) return el.parentElement;
   const root = el.getRootNode();
   return root instanceof ShadowRoot ? root.host : null;
 }
 
-function closestDeep(el: El, selector: string): El | null {
+export function closestDeep(el: El, selector: string): El | null {
   let cur: El | null = el;
   while (cur) {
     if (cur.matches(selector)) return cur;
@@ -85,8 +88,8 @@ function closestDeep(el: El, selector: string): El | null {
 // ---------------------------------------------------------------------------
 // Roles + accessible names (simplified ARIA)
 // ---------------------------------------------------------------------------
-const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
-const lc = (s: string | null | undefined) => norm(s).toLowerCase();
+export const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+export const lc = (s: string | null | undefined) => norm(s).toLowerCase();
 
 function implicitRole(el: El): string {
   const tag = el.tagName.toLowerCase();
@@ -171,18 +174,18 @@ function implicitRole(el: El): string {
   return "generic";
 }
 
-function roleOf(el: El): string {
+export function roleOf(el: El): string {
   const r = el.getAttribute("role");
   if (r) return r.split(/\s+/)[0].toLowerCase();
   return implicitRole(el);
 }
 
-function textOf(el: El): string {
+export function textOf(el: El): string {
   const h = el as HTMLElement;
   return norm(typeof h.innerText === "string" ? h.innerText : el.textContent);
 }
 
-function nameOf(el: El): string {
+export function nameOf(el: El): string {
   const by = el.getAttribute("aria-labelledby");
   if (by) {
     const root = el.getRootNode() as Document | ShadowRoot;
@@ -259,7 +262,7 @@ function labelText(label: HTMLLabelElement, control: El): string {
   return norm(clone.textContent);
 }
 
-function isVisible(el: El): boolean {
+export function isVisible(el: El): boolean {
   const h = el as HTMLElement;
   if (!el.isConnected) return false;
   if (typeof h.checkVisibility === "function") {
@@ -272,7 +275,7 @@ function isVisible(el: El): boolean {
   return r.width > 0 && r.height > 0;
 }
 
-function isDisabled(el: El): boolean {
+export function isDisabled(el: El): boolean {
   if ((el as HTMLInputElement).disabled) return true;
   if (el.getAttribute("aria-disabled") === "true") return true;
   const fs = el.closest("fieldset[disabled]");
@@ -280,7 +283,7 @@ function isDisabled(el: El): boolean {
   return false;
 }
 
-function isEditable(el: El): boolean {
+export function isEditable(el: El): boolean {
   const tag = el.tagName.toLowerCase();
   if (tag === "textarea") return !(el as HTMLTextAreaElement).readOnly;
   if (tag === "input") {
@@ -290,7 +293,7 @@ function isEditable(el: El): boolean {
   return (el as HTMLElement).isContentEditable;
 }
 
-function describeEl(el: El): string {
+export function describeEl(el: El): string {
   const tag = el.tagName.toLowerCase();
   const id = el.id ? "#" + el.id : "";
   const cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
@@ -343,7 +346,7 @@ export function asRegex(s: string): RegExp | null {
   }
 }
 
-function matchText(hay: string, needle: string): boolean {
+export function matchText(hay: string, needle: string): boolean {
   const re = asRegex(needle);
   if (re) return re.test(hay);
   return lc(hay).includes(lc(needle));
@@ -496,12 +499,12 @@ function scrollBy(el: El | null, dx: number, dy: number) {
 // ---------------------------------------------------------------------------
 // Values
 // ---------------------------------------------------------------------------
-function nativeSetter(el: El) {
+export function nativeSetter(el: El) {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
   return Object.getOwnPropertyDescriptor(proto, "value")!.set!;
 }
 
-function fire(el: El, type: string) {
+export function fire(el: El, type: string) {
   el.dispatchEvent(new Event(type, { bubbles: true, composed: true }));
 }
 
@@ -560,7 +563,7 @@ function focus(el: El, opts: { end?: boolean } = {}) {
   return true;
 }
 
-function valueOf(el: El) {
+export function valueOf(el: El) {
   if ("value" in el) return String((el as HTMLInputElement).value);
   return (el as HTMLElement).textContent ?? "";
 }
@@ -584,7 +587,7 @@ function selectOptions(el: El, values: string[]) {
   return { selected: chosen.map((o) => o.text.trim()) };
 }
 
-function getChecked(el: El): boolean | null {
+export function getChecked(el: El): boolean | null {
   if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) return el.checked;
   const a = el.getAttribute("aria-checked") ?? el.getAttribute("aria-pressed") ?? el.getAttribute("aria-selected");
   if (a === "true") return true;
@@ -603,602 +606,12 @@ function labelFor(el: El): Ret<{ el: number } | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Forms
+// Focus
 // ---------------------------------------------------------------------------
-function isFormControl(el: El): boolean {
-  const tag = el.tagName.toLowerCase();
-  if (tag === "input") return !["hidden", "submit", "button", "reset", "image"].includes((el as HTMLInputElement).type);
-  if (tag === "select" || tag === "textarea") return true;
-  if ((el as HTMLElement).isContentEditable && !(el.parentElement as HTMLElement | null)?.isContentEditable) return true;
-  const r = el.getAttribute("role");
-  return !!r && ["textbox", "combobox", "checkbox", "radio", "switch", "searchbox", "spinbutton", "slider", "listbox"].includes(r);
-}
-
-function controls(container: ParentNode | null): El[] {
-  return Array.from(walk((container ?? document) as Node)).filter(isFormControl);
-}
-
-function fieldType(el: El): string {
-  const tag = el.tagName.toLowerCase();
-  if (tag === "input") return (el as HTMLInputElement).type || "text";
-  if (tag === "select") return (el as HTMLSelectElement).multiple ? "select-multiple" : "select";
-  if (tag === "textarea") return "textarea";
-  if ((el as HTMLElement).isContentEditable) return "contenteditable";
-  return el.getAttribute("role") ?? tag;
-}
-
-function groupOf(el: El): string | null {
-  if (el instanceof HTMLInputElement && el.type === "radio") {
-    const fs = el.closest("fieldset");
-    const legend = fs?.querySelector("legend");
-    const rg = el.closest("[role=radiogroup]");
-    return norm(legend?.textContent) || (rg ? nameOf(rg) : "") || el.name || null;
-  }
-  if (el.getAttribute("role") === "radio") {
-    const rg = el.closest("[role=radiogroup]");
-    return rg ? nameOf(rg) : null;
-  }
-  return null;
-}
-
-function describeForm(container: El | null): Ret {
-  const els = controls(container);
-  const forms = container ? (container.tagName === "FORM" ? [container] : deepQueryAll(container, "form")) : deepQueryAll(document, "form");
-  const all: El[] = [...els];
-  const fields = els.map((el, i) => {
-    const f: Record<string, unknown> = {
-      el: i,
-      label: nameOf(el) || null,
-      type: fieldType(el),
-      name: el.getAttribute("name") || el.id || null,
-    };
-    if ((el as HTMLInputElement).required || el.getAttribute("aria-required") === "true") f.required = true;
-    if (isDisabled(el)) f.disabled = true;
-    if (!isVisible(el)) f.hidden = true;
-    const ch = getChecked(el);
-    if (ch !== null) f.checked = ch;
-    else if (el instanceof HTMLSelectElement) {
-      f.options = Array.from(el.options)
-        .slice(0, 50)
-        .map((o) => (o.selected ? `[${o.text.trim()}]` : o.text.trim()));
-    } else {
-      const v = valueOf(el);
-      const t = (el as HTMLInputElement).type;
-      f.value = t === "password" && v ? "••••" : v;
-    }
-    const g = groupOf(el);
-    if (g) f.group = g;
-    if ((el as HTMLInputElement).placeholder) f.placeholder = (el as HTMLInputElement).placeholder;
-    const ac = el.getAttribute("autocomplete");
-    if (ac && ac !== "off" && ac !== "on") f.autocomplete = ac;
-    return f;
-  });
-  const formInfo = forms.map((fm) => {
-    all.push(fm);
-    const f = fm as HTMLFormElement;
-    return { el: all.length - 1, name: f.getAttribute("name") || f.id || nameOf(f) || null, action: f.getAttribute("action"), method: (f.method || "get").toUpperCase(), sensitive: formSensitivity(f).length ? formSensitivity(f) : undefined };
-  });
-  return { value: { forms: formInfo, fields }, elements: all };
-}
-
-function candidates(el: El): string[] {
-  return [nameOf(el), el.getAttribute("name"), el.id, (el as HTMLInputElement).placeholder, el.getAttribute("aria-label"), el.getAttribute("data-testid"), el.getAttribute("autocomplete")]
-    .map((s) => lc(s).replace(/[*:]+$/g, "").trim())
-    .filter(Boolean);
-}
-
-function scoreMatch(key: string, el: El): number {
-  const k = lc(key).replace(/[*:]+$/g, "").trim();
-  let best = 0;
-  for (const c of candidates(el)) {
-    if (c === k) best = Math.max(best, 4);
-    else if (c.startsWith(k) || k.startsWith(c)) best = Math.max(best, 2.5);
-    else if (c.includes(k)) best = Math.max(best, 1.5);
-    else if (k.includes(c) && c.length > 2) best = Math.max(best, 1);
-  }
-  return best;
-}
-
-/** Resolve form.fill keys to concrete elements + actions. */
-function planFill(container: El | null, fields: Record<string, string | boolean | string[]>): Ret {
-  const els = controls(container).filter((e) => !isDisabled(e));
-  const elements: El[] = [];
-  const used = new Set<El>();
-  const plan: Record<string, unknown>[] = [];
-  const add = (e: El) => {
-    elements.push(e);
-    return elements.length - 1;
-  };
-  for (const [key, val] of Object.entries(fields)) {
-    // radio groups: key matches group label/name, value matches radio label/value
-    const radios = els.filter((e) => (e as HTMLInputElement).type === "radio" || e.getAttribute("role") === "radio");
-    const groupHits = radios.filter((r) => {
-      const g = groupOf(r);
-      return (g && (lc(g) === lc(key) || lc(g).includes(lc(key)))) || lc(r.getAttribute("name")) === lc(key);
-    });
-    if (groupHits.length && typeof val === "string") {
-      const pick = groupHits.find((r) => lc(nameOf(r)) === lc(val) || lc((r as HTMLInputElement).value) === lc(val)) ?? groupHits.find((r) => lc(nameOf(r)).includes(lc(val)));
-      if (!pick) {
-        plan.push({ key, status: "error", error: `No option "${val}" in group. Options: ${groupHits.map((r) => nameOf(r) || (r as HTMLInputElement).value).join(" | ")}` });
-        continue;
-      }
-      plan.push({ key, kind: "radio", el: add(pick), checked: getChecked(pick) });
-      continue;
-    }
-    let best: El | null = null;
-    let bestScore = 0;
-    for (const e of els) {
-      if (used.has(e)) continue;
-      if ((e as HTMLInputElement).type === "radio") continue;
-      const s = scoreMatch(key, e) + (isVisible(e) ? 0.1 : 0);
-      if (s > bestScore) {
-        best = e;
-        bestScore = s;
-      }
-    }
-    if (!best || bestScore < 1) {
-      plan.push({ key, status: "error", error: `No field matching "${key}". Fields: ${els.map((e) => nameOf(e) || e.getAttribute("name")).filter(Boolean).slice(0, 30).join(" | ")}` });
-      continue;
-    }
-    used.add(best);
-    const t = fieldType(best);
-    const kind =
-      t === "checkbox" || best.getAttribute("role") === "checkbox" || best.getAttribute("role") === "switch"
-        ? "checkbox"
-        : t.startsWith("select") || best.getAttribute("role") === "combobox" || best.getAttribute("role") === "listbox"
-          ? "select"
-          : t === "file"
-            ? "file"
-            : "text";
-    plan.push({ key, kind, el: add(best), checked: getChecked(best), label: nameOf(best) });
-  }
-  return { value: plan, elements };
-}
-
-const SENSITIVE_NAME = /card|cc-?num|ccnum|cvv|cvc|csc|security.?code|expir|ssn|social.?sec|iban|routing|account.?num|tax.?id/i;
-
-function formSensitivity(form: El | null): string[] {
-  if (!form) return [];
-  const reasons = new Set<string>();
-  for (const el of controls(form)) {
-    const inp = el as HTMLInputElement;
-    const ac = el.getAttribute("autocomplete") ?? "";
-    const hay = [el.getAttribute("name"), el.id, ac, nameOf(el)].join(" ");
-    if (inp.type === "password" && inp.value) reasons.add("password field");
-    if (/^cc-/.test(ac) || /card|cc-?num|ccnum|cvv|cvc|csc/i.test(hay)) reasons.add("payment card field");
-    if (/ssn|social.?sec/i.test(hay)) reasons.add("SSN field");
-    if (/iban|routing|account.?num/i.test(hay)) reasons.add("bank account field");
-    if (/^\d{3}-?\d{2}-?\d{4}$/.test(inp.value ?? "") && SENSITIVE_NAME.test(hay)) reasons.add("SSN-like value");
-  }
-  return Array.from(reasons);
-}
-
-const RISKY = /\b(buy|purchase|place (your )?order|pay(ment)?|pay now|checkout|check out|delete|remove|destroy|send|transfer|wire|withdraw|confirm (payment|order|purchase)|submit order|subscribe|unsubscribe|cancel (my )?(account|subscription)|close account|deactivate|book now|donate)\b/i;
-
-function clickSensitivity(el: El) {
-  const label = nameOf(el) || textOf(el).slice(0, 80);
-  const reasons: string[] = [];
-  if (RISKY.test(label)) reasons.push(`"${label.slice(0, 60)}" looks like a purchase/delete/send action`);
-  const isSubmit = (el instanceof HTMLButtonElement && (el.type === "submit" || !el.getAttribute("type"))) || (el instanceof HTMLInputElement && ["submit", "image"].includes(el.type));
-  if (isSubmit) {
-    const f = (el as HTMLButtonElement).form;
-    for (const r of formSensitivity(f)) reasons.push(`submits a form with a ${r}`);
-  }
-  return { label, reasons };
-}
-
-function keySensitivity(_self: unknown, key: string) {
-  const el = deepActive();
-  if (!el || !/enter/i.test(key)) return { reasons: [] };
-  const f = (el as HTMLInputElement).form;
-  return { reasons: formSensitivity(f ?? null).map((r) => `Enter submits a form with a ${r}`) };
-}
-
-function deepActive(): El | null {
+export function deepActive(): El | null {
   let a: El | null = document.activeElement;
   while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
   return a;
-}
-
-function formFor(el: El | null): Ret<{ el: number; submit: number | null; sensitive: string[] } | null> {
-  let form: HTMLFormElement | null = null;
-  if (el) form = el instanceof HTMLFormElement ? el : ((el as HTMLInputElement).form ?? (el.closest("form") as HTMLFormElement | null));
-  if (!form) {
-    const forms = deepQueryAll(document, "form").filter(isVisible) as HTMLFormElement[];
-    form = forms[0] ?? null;
-  }
-  if (!form) return { value: null, elements: [] };
-  const submit = Array.from(form.querySelectorAll('button[type=submit],input[type=submit],input[type=image],button:not([type])')).find(isVisible) ?? null;
-  const elements: El[] = [form];
-  if (submit) elements.push(submit);
-  return { value: { el: 0, submit: submit ? 1 : null, sensitive: formSensitivity(form) }, elements };
-}
-
-function requestSubmit(form: El) {
-  (form as HTMLFormElement).requestSubmit();
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Extraction
-// ---------------------------------------------------------------------------
-function cellText(c: El) {
-  return textOf(c);
-}
-
-function tableInfo(t: El) {
-  const isHtml = t.tagName === "TABLE";
-  let headerCells: El[] = [];
-  let bodyRows: El[][] = [];
-  if (isHtml) {
-    const tbl = t as HTMLTableElement;
-    const rows = Array.from(tbl.rows);
-    const theadRow = tbl.tHead?.rows[0];
-    if (theadRow) headerCells = Array.from(theadRow.cells);
-    else if (rows[0] && Array.from(rows[0].cells).every((c) => c.tagName === "TH")) headerCells = Array.from(rows[0].cells);
-    bodyRows = rows.filter((r) => r !== theadRow && !(headerCells.length && r === rows[0] && !theadRow) && r.parentElement?.tagName !== "THEAD").map((r) => Array.from(r.cells));
-  } else {
-    const rows = deepQueryAll(t, "[role=row]");
-    for (const r of rows) {
-      const ch = Array.from(r.querySelectorAll("[role=columnheader]"));
-      if (ch.length && !headerCells.length) headerCells = ch;
-      else bodyRows.push(Array.from(r.querySelectorAll("[role=cell],[role=gridcell],[role=rowheader]")));
-    }
-  }
-  return { headerCells, bodyRows };
-}
-
-function extractTable(root: El | null, index?: number) {
-  const tables = root && (root.matches("table,[role=table],[role=grid]")) ? [root] : deepQueryAll(root ?? document, "table,[role=table],[role=grid]").filter((t) => !t.parentElement?.closest("table"));
-  if (!tables.length) return { error: "No tables found on the page" };
-  let pick: El;
-  let pickIndex = 0;
-  if (index != null) {
-    if (!tables[index]) return { error: `Table index ${index} out of range (${tables.length} tables)` };
-    pick = tables[index];
-    pickIndex = index;
-  } else {
-    let bestSize = -1;
-    pick = tables[0];
-    tables.forEach((t, i) => {
-      const { bodyRows } = tableInfo(t);
-      const size = bodyRows.reduce((a, r) => a + r.length, 0);
-      if (size > bestSize) {
-        bestSize = size;
-        pick = t;
-        pickIndex = i;
-      }
-    });
-  }
-  const { headerCells, bodyRows } = tableInfo(pick);
-  const width = Math.max(headerCells.length, ...bodyRows.map((r) => r.length), 0);
-  const headers: string[] = [];
-  const seen = new Map<string, number>();
-  for (let i = 0; i < width; i++) {
-    let h = headerCells[i] ? cellText(headerCells[i]) : "";
-    if (!h) h = `col${i + 1}`;
-    const n = seen.get(h) ?? 0;
-    seen.set(h, n + 1);
-    headers.push(n ? `${h}_${n + 1}` : h);
-  }
-  const rows = bodyRows
-    .filter((r) => r.length)
-    .map((r) => {
-      const o: Record<string, string> = {};
-      r.forEach((c, i) => {
-        o[headers[i] ?? `col${i + 1}`] = cellText(c);
-      });
-      return o;
-    });
-  return { headers, rows, count: rows.length, tableIndex: pickIndex, totalTables: tables.length, caption: nameOf(pick) || undefined };
-}
-
-function extractLinks(_self: unknown, filter?: string, limit = 200) {
-  const seen = new Set<string>();
-  const out: { text: string; href: string }[] = [];
-  for (const a of deepQueryAll(document, "a[href]") as HTMLAnchorElement[]) {
-    const href = a.href;
-    if (!href || href.startsWith("javascript:")) continue;
-    const text = nameOf(a) || textOf(a);
-    if (filter && !matchText(text, filter) && !matchText(href, filter)) continue;
-    const k = text + "\u0000" + href;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push({ text: text.slice(0, 200), href });
-    if (out.length >= limit) break;
-  }
-  return { links: out, count: out.length };
-}
-
-function cssPath(el: El, stopAt?: El | null): string {
-  if (el.id && /^[A-Za-z][\w-]*$/.test(el.id) && !stopAt) return "#" + el.id;
-  const parts: string[] = [];
-  let cur: El | null = el;
-  while (cur && cur !== stopAt && cur.tagName !== "HTML") {
-    let seg = cur.tagName.toLowerCase();
-    const cls = typeof cur.className === "string" ? cur.className.trim().split(/\s+/).filter((c) => /^[A-Za-z_-][\w-]*$/.test(c)).slice(0, 2) : [];
-    if (cls.length) seg += "." + cls.join(".");
-    const parent: El | null = cur.parentElement;
-    if (parent) {
-      const same = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName && (cls.length ? cls.every((k) => c.classList.contains(k)) : true));
-      if (same.length > 1) seg += `:nth-of-type(${Array.from(parent.children).filter((c) => c.tagName === cur!.tagName).indexOf(cur) + 1})`;
-    }
-    parts.unshift(seg);
-    if (cur.id && /^[A-Za-z][\w-]*$/.test(cur.id) && !stopAt) {
-      parts[0] = "#" + cur.id;
-      break;
-    }
-    cur = parent;
-  }
-  return parts.join(" > ");
-}
-
-function signature(el: El): string {
-  const cls = typeof el.className === "string" ? el.className.trim().split(/\s+/).filter((c) => c && !/\d{3,}/.test(c)).sort().join(".") : "";
-  return el.tagName.toLowerCase() + (cls ? "." + cls : "");
-}
-
-function propSelectors(p: string): string[] {
-  const k = p.replace(/[^\w-]/g, "");
-  const kebab = k.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-  const set = new Set([k, kebab, k.toLowerCase()]);
-  const out: string[] = [];
-  for (const s of set) {
-    out.push(`[itemprop="${s}"]`, `[data-field="${s}"]`, `[data-testid="${s}"]`, `[name="${s}"]`, `.${CSS.escape(s)}`, `[class*="${s}"]`, `[data-testid*="${s}"]`, `[aria-label*="${s}" i]`);
-  }
-  return out;
-}
-
-function findPropEl(scope: El | Document, p: string): { el: El; sel: string } | null {
-  for (const sel of propSelectors(p)) {
-    let el: El | null = null;
-    try {
-      el = scope.querySelector(sel);
-    } catch {
-      continue;
-    }
-    if (el) return { el, sel };
-  }
-  // label/value pairs: <dt>Price</dt><dd>..</dd>, <th>Price</th><td>..</td>, "Price: x"
-  const k = lc(p.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]/g, " "));
-  const labelEls = Array.from((scope as ParentNode).querySelectorAll("dt,th,label,strong,b,span,div")).filter((e) => lc(textOf(e)).replace(/:$/, "") === k);
-  for (const le of labelEls) {
-    const sib = le.nextElementSibling;
-    if (sib && textOf(sib)) return { el: sib, sel: `${le.tagName.toLowerCase()}:contains(${p}) + *` };
-  }
-  return null;
-}
-
-function coerce(el: El, p: string, schema: Record<string, unknown>): unknown {
-  const type = (schema?.type as string) ?? "string";
-  const fmt = schema?.format as string | undefined;
-  const pl = p.toLowerCase();
-  if (fmt === "uri" || /url|link|href/.test(pl)) {
-    const a = el.closest("a[href]") ?? el.querySelector("a[href]");
-    if (a) return (a as HTMLAnchorElement).href;
-    if (el instanceof HTMLImageElement) return el.src;
-  }
-  if (/image|img|photo|thumbnail|src/.test(pl)) {
-    const img = el instanceof HTMLImageElement ? el : el.querySelector("img");
-    if (img) return (img as HTMLImageElement).currentSrc || (img as HTMLImageElement).src;
-  }
-  const txt = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el.value : el.getAttribute("content") ?? textOf(el);
-  if (type === "number" || type === "integer") {
-    const m = txt.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
-    if (!m) return null;
-    return type === "integer" ? Math.round(parseFloat(m[0])) : parseFloat(m[0]);
-  }
-  if (type === "boolean") return /^(true|yes|1|in stock|available)$/i.test(txt.trim());
-  return txt;
-}
-
-function extractSchema(_self: unknown, schema: Record<string, unknown>, hint?: string) {
-  const isArray = schema.type === "array";
-  const itemSchema = (isArray ? (schema.items as Record<string, unknown>) : schema) ?? {};
-  const props = (itemSchema.properties as Record<string, Record<string, unknown>>) ?? {};
-  const names = Object.keys(props);
-  if (!names.length) return { error: "Schema needs properties (an object, or an array whose items have properties)" };
-
-  let items: El[] = [];
-  let itemSel: string | null = hint ?? null;
-  if (hint) items = deepQueryAll(document, hint);
-  else if (isArray) {
-    // auto-detect a repeated container
-    const counts = new Map<string, Set<El>>();
-    const cover = new Map<string, Set<string>>();
-    for (const p of names) {
-      for (const sel of propSelectors(p)) {
-        let hits: El[] = [];
-        try {
-          hits = Array.from(document.querySelectorAll(sel));
-        } catch {
-          continue;
-        }
-        if (hits.length < 2) continue;
-        for (const h of hits) {
-          let a: El | null = h.parentElement;
-          let depth = 0;
-          while (a && a !== document.body && depth < 6) {
-            const sig = signature(a);
-            if (!counts.has(sig)) counts.set(sig, new Set());
-            counts.get(sig)!.add(a);
-            if (!cover.has(sig)) cover.set(sig, new Set());
-            cover.get(sig)!.add(p);
-            a = a.parentElement;
-            depth++;
-          }
-        }
-        break;
-      }
-    }
-    let best: string | null = null;
-    let bestScore = 0;
-    for (const [sig, set] of counts) {
-      const n = set.size;
-      if (n < 2) continue;
-      // prefer sigs that cover the most props, then the innermost (most items)
-      const score = (cover.get(sig)!.size / names.length) * 1000 + n;
-      if (score > bestScore) {
-        bestScore = score;
-        best = sig;
-      }
-    }
-    if (best) {
-      items = Array.from(counts.get(best)!);
-      itemSel = best;
-    }
-  }
-  if (!isArray && !items.length) items = [document.documentElement];
-  if (!items.length) return { error: "Could not detect repeated items; pass hint (CSS selector of each item)" };
-
-  const fieldSel: Record<string, string> = {};
-  const data = items.slice(0, 500).map((it) => {
-    const o: Record<string, unknown> = {};
-    for (const p of names) {
-      const hit = findPropEl(it, p);
-      if (hit) {
-        fieldSel[p] ??= hit.sel;
-        o[p] = coerce(hit.el, p, props[p]);
-      } else o[p] = null;
-    }
-    return o;
-  });
-  return { data: isArray ? data : data[0], count: isArray ? data.length : 1, selectors: { item: itemSel, fields: fieldSel } };
-}
-
-function nextLink(_self: unknown, text?: string, selector?: string): Ret<{ el: number } | null> {
-  let el: El | null = null;
-  if (selector) el = deepQueryAll(document, selector).find(isVisible) ?? null;
-  if (!el) el = deepQueryAll(document, "a[rel=next],link[rel=next]").find((e) => e.tagName === "A" && isVisible(e)) ?? null;
-  if (!el) {
-    const re = text ? null : /^(next( page)?|›|»|→|>)$/i;
-    el =
-      deepQueryAll(document, "a[href],button,[role=button],[role=link]").find((e) => {
-        if (!isVisible(e) || isDisabled(e)) return false;
-        const n = nameOf(e) || textOf(e);
-        return text ? lc(n) === lc(text) || lc(n).startsWith(lc(text)) : re!.test(norm(n)) || /next/i.test(e.getAttribute("aria-label") ?? "");
-      }) ?? null;
-  }
-  return el ? { value: { el: 0 }, elements: [el] } : { value: null, elements: [] };
-}
-
-// ---------------------------------------------------------------------------
-// Markdown / text
-// ---------------------------------------------------------------------------
-const SKIP_TAGS = new Set(["script", "style", "noscript", "template", "svg", "canvas", "iframe", "head", "button", "input", "select", "textarea"]);
-
-function mainRoot(): El {
-  const m = document.querySelector("main,[role=main]");
-  if (m && textOf(m).length > 200) return m;
-  const arts = Array.from(document.querySelectorAll("article"));
-  if (arts.length) return arts.sort((a, b) => textOf(b).length - textOf(a).length)[0];
-  return document.body;
-}
-
-function md(el: Node, ctx: { list?: string; depth: number }, skipChrome: boolean): string {
-  if (el.nodeType === Node.TEXT_NODE) return (el.textContent ?? "").replace(/\s+/g, " ");
-  if (!(el instanceof Element)) return "";
-  const tag = el.tagName.toLowerCase();
-  if (SKIP_TAGS.has(tag)) return "";
-  if (el.getAttribute("aria-hidden") === "true" || (el as HTMLElement).hidden) return "";
-  if (skipChrome && ["nav", "footer", "aside", "header"].includes(tag)) return "";
-  if (skipChrome && ["navigation", "contentinfo", "complementary", "banner"].includes(el.getAttribute("role") ?? "")) return "";
-  if (!isVisible(el) && tag !== "br" && el.getClientRects().length === 0 && getComputedStyle(el).display === "none") return "";
-  const kids = () => Array.from(el.shadowRoot ? el.shadowRoot.childNodes : el.childNodes).map((c) => md(c, ctx, skipChrome)).join("");
-  switch (tag) {
-    case "h1":
-    case "h2":
-    case "h3":
-    case "h4":
-    case "h5":
-    case "h6":
-      return `\n\n${"#".repeat(+tag[1])} ${norm(kids())}\n\n`;
-    case "p":
-    case "div":
-    case "section":
-    case "article":
-    case "main":
-    case "header":
-    case "footer":
-    case "form":
-    case "fieldset":
-    case "figure":
-    case "dl":
-      return `\n\n${kids()}\n\n`;
-    case "br":
-      return "  \n";
-    case "hr":
-      return "\n\n---\n\n";
-    case "strong":
-    case "b": {
-      const t = norm(kids());
-      return t ? `**${t}**` : "";
-    }
-    case "em":
-    case "i": {
-      const t = norm(kids());
-      return t ? `*${t}*` : "";
-    }
-    case "code":
-      return el.closest("pre") ? kids() : `\`${norm(el.textContent)}\``;
-    case "pre":
-      return `\n\n\`\`\`\n${el.textContent ?? ""}\n\`\`\`\n\n`;
-    case "blockquote":
-      return "\n\n" + norm(kids()).split(/\n/).map((l) => "> " + l).join("\n") + "\n\n";
-    case "a": {
-      const t = norm(kids());
-      const href = (el as HTMLAnchorElement).href;
-      return t ? (href && !href.startsWith("javascript:") ? `[${t}](${href})` : t) : "";
-    }
-    case "img": {
-      const alt = (el as HTMLImageElement).alt;
-      return alt ? `![${alt}](${(el as HTMLImageElement).src})` : "";
-    }
-    case "ul":
-    case "ol": {
-      let i = 0;
-      const items = Array.from(el.children)
-        .filter((c) => c.tagName === "LI")
-        .map((li) => {
-          i++;
-          const pre = tag === "ol" ? `${i}. ` : "- ";
-          const body = norm(md(li, { list: tag, depth: ctx.depth + 1 }, skipChrome).replace(/\n+/g, " "));
-          return "  ".repeat(ctx.depth) + pre + body;
-        });
-      return "\n\n" + items.join("\n") + "\n\n";
-    }
-    case "li":
-      return kids();
-    case "dt":
-      return `\n**${norm(kids())}**\n`;
-    case "dd":
-      return `: ${norm(kids())}\n`;
-    case "table": {
-      const t = extractTable(el);
-      if ("error" in t || !t.headers?.length) return "";
-      const head = `| ${t.headers.join(" | ")} |\n| ${t.headers.map(() => "---").join(" | ")} |`;
-      const rows = t.rows.map((r) => `| ${t.headers.map((h) => (r[h] ?? "").replace(/\|/g, "\\|")).join(" | ")} |`).join("\n");
-      return `\n\n${head}\n${rows}\n\n`;
-    }
-  }
-  return kids();
-}
-
-function markdown(_self: unknown, maxChars = MAX_TEXT) {
-  const root = mainRoot();
-  let out = md(root, { depth: 0 }, root === document.body);
-  out = out
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  const title = document.title;
-  const truncated = out.length > maxChars;
-  return { title, url: location.href, markdown: truncated ? out.slice(0, maxChars) + "\n\n… [truncated]" : out, truncated };
-}
-
-function text(el: El | null) {
-  const t = ((el ?? document.body) as HTMLElement).innerText ?? "";
-  return { text: t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) + "\n… [truncated]" : t, truncated: t.length > MAX_TEXT };
 }
 
 // ---------------------------------------------------------------------------
@@ -1555,17 +968,6 @@ function clearOverlay() {
 // ---------------------------------------------------------------------------
 // Misc
 // ---------------------------------------------------------------------------
-function storage(_self: unknown, kind: "local" | "session") {
-  const s = kind === "session" ? sessionStorage : localStorage;
-  const out: Record<string, string> = {};
-  for (let i = 0; i < s.length; i++) {
-    const k = s.key(i)!;
-    const v = s.getItem(k) ?? "";
-    out[k] = v.length > 2000 ? v.slice(0, 2000) + "…" : v;
-  }
-  return { origin: location.origin, entries: out, count: s.length };
-}
-
 function pageState() {
   return { url: location.href, title: document.title, readyState: document.readyState };
 }
@@ -1647,19 +1049,22 @@ const api = {
   selectOptions,
   getChecked,
   labelFor,
-  // forms
-  describeForm,
-  planFill,
-  formFor,
+  // forms (./forms.ts)
+  describeFields,
+  fieldInfo,
+  clickGateInfo,
+  keyGateInfo,
+  submitInfo,
   requestSubmit,
-  formSensitivity: (el: El) => formSensitivity(el),
+  comboOptions,
+  resolveFileInput,
   clickSensitivity,
   keySensitivity,
-  // extraction
+  // extraction (./extract.ts)
   extractTable,
   extractLinks,
-  extractSchema,
-  nextLink,
+  extractSchema: (_s: unknown, o: Parameters<typeof extractSchema>[0]) => extractSchema(o),
+  nextControl,
   markdown,
   text,
   storage,

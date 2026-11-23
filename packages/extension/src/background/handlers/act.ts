@@ -1,26 +1,17 @@
 // act.* (except act.upload) — #7. Every action goes through act(): auto-wait in
 // the driver, then the D14 side-effect report (diff / navigation / dialogs).
 import { taErr, isCode } from "../errors";
-import { act, onTab, sensitiveGate, type Ctx, type TabCtx } from "../tabctx";
+import { act, onTab, type Ctx, type TabCtx } from "../tabctx";
+import { checkClickGate, checkKeyGate } from "./gates";
 import { pollUntil } from "../wait";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 
 const clock = { now: () => Date.now(), sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)) };
 
-// D18(a)(b): a click on a sensitive form's submit control or a purchase/delete/
-// send/transfer control, and Enter inside a sensitive form, go to the gate.
-// (agent C2's handlers/gates.ts exports the same gates; these are the fallback.)
-export async function checkClickSensitive(c: Ctx, t: TabCtx, ref: string) {
-  const cs = (await t.drv.call("clickSensitivity", [], { ref }).catch(() => null)) as { label: string; reasons: string[]; category?: "a" | "b" } | null;
-  if (cs?.reasons?.length) await sensitiveGate(c, t.url, cs.category ?? (cs.reasons.some((r) => /password|card|ssn|sensitive/i.test(r)) ? "a" : "b"), `click "${cs.label.slice(0, 60)}"`, cs.reasons);
-}
-
-export async function checkKeySensitive(c: Ctx, t: TabCtx, key: string) {
-  if (!/enter/i.test(key)) return;
-  const ks = (await t.drv.call("keySensitivity", [key]).catch(() => null)) as { reasons: string[] } | null;
-  if (ks?.reasons?.length) await sensitiveGate(c, t.url, "a", `press ${key}`, ks.reasons);
-}
+// D18(a)(b) gates live in ./gates (agent C2): a click on a sensitive form's
+// submit control or a purchase/delete/send/transfer control, and Enter inside a
+// sensitive form, go to the same gate as form.submit.
 
 // ---------------------------------------------------------------------------
 // select / check (shared with form.fill)
@@ -84,13 +75,13 @@ export async function doCheck(t: TabCtx, ref: string, checked: boolean, timeout?
 export const actHandlers: Record<string, Handler> = {
   async "act.click"(c) {
     return act(c, "act", async (t) => {
-      await checkClickSensitive(c, t, c.p.ref);
+      await checkClickGate(c, t, c.p.ref);
       return t.drv.click(c.p.ref, { button: c.p.button, clickCount: c.p.clickCount, modifiers: c.p.modifiers, timeout: c.p.timeout });
     });
   },
   async "act.dblclick"(c) {
     return act(c, "act", async (t) => {
-      await checkClickSensitive(c, t, c.p.ref);
+      await checkClickGate(c, t, c.p.ref);
       return t.drv.click(c.p.ref, { clickCount: 2, timeout: c.p.timeout });
     });
   },
@@ -109,7 +100,7 @@ export const actHandlers: Record<string, Handler> = {
       const r = await t.drv.typeText(c.p.text);
       if (r.dialog) return r;
       if (c.p.submit) {
-        await checkKeySensitive(c, t, "Enter");
+        await checkKeyGate(c, t, "Enter");
         return t.drv.press("Enter");
       }
       return r;
@@ -128,7 +119,7 @@ export const actHandlers: Record<string, Handler> = {
   async "act.press"(c) {
     return act(c, "act", async (t) => {
       if (c.p.ref) await t.drv.focus(c.p.ref, true);
-      await checkKeySensitive(c, t, c.p.key);
+      await checkKeyGate(c, t, c.p.key);
       return t.drv.press(c.p.key);
     });
   },

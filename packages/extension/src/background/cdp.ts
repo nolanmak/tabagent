@@ -1,8 +1,8 @@
 // chrome.debugger wrapper: one CdpTab per attached tab. Tracks child (OOPIF)
 // sessions, network, console, dialogs, navigation lifecycle and isolated worlds.
 import { TabAgentError } from "@tabagent/protocol";
+import { onCdpEvent, setDialogSender, tabState } from "./capture";
 import { taErr } from "./errors";
-import { getSettings } from "./settings";
 
 declare const PAGELIB_SRC: string;
 
@@ -111,6 +111,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
     t.children.clear();
     t.loaders.clear();
     if (reason === "canceled_by_user") t.userDetached = true;
+    tabState(source.tabId).dialogs.onClosed();
     t.fireDetached(String(reason));
   }
 });
@@ -123,7 +124,10 @@ export class CdpTab {
   contexts = new Map<string, number>(); // frameKey -> isolated contextId
   network = new Map<string, NetEntry>();
   consoleLog: ConsoleEntry[] = [];
-  dialog: DialogInfo | null = null;
+  /** The open JS dialog, owned by the dialog state machine in capture.ts (D28). */
+  get dialog(): DialogInfo | null {
+    return tabState(this.tabId).dialogs.current();
+  }
   inflight = new Map<string, number>(); // key -> start ts
   lastNetActivity = Date.now();
   navEpoch = 0;
@@ -237,6 +241,7 @@ export class CdpTab {
         /* ignore */
       }
     }
+    onCdpEvent(this.tabId, method, p, sessionId);
     switch (method) {
       case "Target.attachedToTarget": {
         const sid = p.sessionId as string;
@@ -351,17 +356,6 @@ export class CdpTab {
         this.lastNetActivity = Date.now();
         break;
       }
-      case "Page.javascriptDialogOpening":
-        this.dialog = { type: p.type, message: p.message, defaultPrompt: p.defaultPrompt, url: p.url, sessionId };
-        if (p.type === "beforeunload") {
-          getSettings().then((s) => {
-            if (s.autoAcceptBeforeUnload) this.handleDialog(true).catch(() => {});
-          });
-        }
-        break;
-      case "Page.javascriptDialogClosed":
-        this.dialog = null;
-        break;
       case "Input.dragIntercepted":
         this.dragData = p.data;
         break;
@@ -384,18 +378,11 @@ export class CdpTab {
   }
 
   async handleDialog(accept: boolean, promptText?: string) {
-    if (!this.dialog) throw new TabAgentError("NOT_FOUND", "No dialog is open");
-    const sid = this.dialog.sessionId;
-    await this.send("Page.handleJavaScriptDialog", { accept, ...(promptText !== undefined ? { promptText } : {}) }, sid);
-    const d = this.dialog;
-    this.dialog = null;
-    return d;
+    return tabState(this.tabId).dialogs.handle(accept ? "accept" : "dismiss", promptText);
   }
 
   assertNoDialog() {
-    if (this.dialog) {
-      throw taErr("DIALOG_OPEN", `A ${this.dialog.type} dialog is open: "${this.dialog.message.slice(0, 200)}"`, "Call dialog.handle with accept=true|false first.", { pageText: true });
-    }
+    tabState(this.tabId).dialogs.assertNone("");
   }
 
   /** Wait until no tracked requests are in flight for `quietMs`. */
@@ -610,6 +597,10 @@ export class CdpTab {
     return r.result.value ?? (r.result.unserializableValue ? r.result.unserializableValue : r.result.type === "undefined" ? undefined : r.result.description);
   }
 }
+
+setDialogSender(async (tabId, accept, promptText, sessionId) => {
+  await getCdpTab(tabId).send("Page.handleJavaScriptDialog", { accept, ...(promptText !== undefined ? { promptText } : {}) }, sessionId);
+});
 
 export function splitKey(key: string): [string | undefined, string] {
   const i = key.indexOf("|");
