@@ -31,7 +31,7 @@ function fixtureServer(host) {
   return new Promise((resolve) => server.listen(0, host, () => resolve({ server, origin: `http://${host}:${server.address().port}` })));
 }
 
-async function loadHarness() {
+export async function loadHarness() {
   // Inside the repo so the bundle resolves @playwright/test and the MCP SDK from node_modules.
   const outfile = join(ROOT, "node_modules/.cache/tabagent-bench", `harness-${process.pid}.mjs`);
   await build({ entryPoints: [join(ROOT, "e2e/harness.ts")], bundle: true, platform: "node", format: "esm", packages: "external", outfile, logLevel: "error",
