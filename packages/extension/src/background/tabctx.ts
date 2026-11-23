@@ -1,11 +1,8 @@
 // Shared plumbing for tab-scoped tool handlers: tab resolution + per-tab lock,
-// DIALOG_OPEN (D28), lite UNSUPPORTED (#21), and the post-action report that
-// becomes the D14 side-effect fields via `__side` (contract §3, D24).
+// and the post-action report that becomes the D14 side-effect fields via
+// `__side` (contract §3, D24).
 import { levelFor, type Level, type SessionMeta, type ToolDef } from "@tabagent/protocol";
-import { peekCdpTab } from "./cdp";
-import { CdpDriver, driverFor, type DialogInfo, type Driver } from "./driver";
-import { downloadsSince, noteAction } from "./downloads";
-import { taErr } from "./errors";
+import { driverFor, type Driver } from "./driver";
 import { requireSensitive, requireSite } from "./permissions";
 import { baselines } from "./refstore";
 import { resolveTab, type Session } from "./sessions";
@@ -26,8 +23,6 @@ export interface TabCtx {
 export interface Side {
   snapshotDiff?: string;
   navigation?: { url: string; title: string; kind: string };
-  dialogs?: DialogInfo[];
-  downloads?: { id: number; filename: string; state: string }[];
 }
 
 export async function tabUrl(tabId: number) {
@@ -65,8 +60,6 @@ export function summaryFor(c: Ctx): string {
       return `click ${p.ref}`;
     case "act.type":
       return `type into ${p.ref ?? "focused element"}`;
-    case "form.fill":
-      return `fill ${Object.keys(p.fields ?? {}).join(", ")}`;
     default:
       return c.tool.name;
   }
@@ -82,35 +75,12 @@ export function levelOf(c: Ctx, fallback: Level): Level {
   }
 }
 
-/** Tools that need the CDP driver (console/network) reject lite tabs. */
-export function cdp(drv: Driver): CdpDriver {
-  if (drv instanceof CdpDriver) return drv;
-  throw taErr("UNSUPPORTED", "This tool needs full (debugger) mode; the site is in lite mode", "Turn lite mode off for this site in the TabAgent side panel.");
-}
-
-/** D28: while a dialog is open, everything on the tab except dialog.handle gets DIALOG_OPEN. */
-export function assertNoDialog(tabId: number, tool: string) {
-  if (tool === "dialog.handle") return;
-  const d = peekCdpTab(tabId)?.dialog;
-  if (d) throw taErr("DIALOG_OPEN", `A ${d.type} dialog is open on this tab: "${String(d.message).slice(0, 200)}"`, "Call dialog.handle with accept=true|false first.", { pageText: true });
-}
-
-/** #21: tools the lite driver can't do return UNSUPPORTED without touching the page. */
-export function assertLiteSupport(drv: Driver, tool: ToolDef) {
-  const lite = (tool as unknown as { lite?: string }).lite;
-  if (drv.kind === "lite" && lite === "unsupported") {
-    throw taErr("UNSUPPORTED", `${tool.name} is not available in lite mode`, "Lite mode avoids chrome.debugger. Turn lite mode off for this site in the TabAgent side panel.");
-  }
-}
-
 export async function onTab<T>(c: Ctx, level: Level | null, fn: (t: TabCtx) => Promise<T>, opts: { create?: boolean; lock?: boolean } = {}): Promise<T> {
   const tabId = await resolveTab(c.s, c.p.tabId, opts.create);
   const run = async () => {
-    assertNoDialog(tabId, c.tool.name);
     const url = await tabUrl(tabId);
     if (level) await requireSite(c.meta, url, level, c.tool.name, summaryFor(c));
     const drv = await driverFor(tabId, url);
-    assertLiteSupport(drv, c.tool);
     return fn({ tabId, url, drv });
   };
   // Waiting tools must not hold the tab lock, or the action they wait on could never run.
@@ -135,22 +105,11 @@ export async function diffSince(c: Ctx, t: TabCtx): Promise<string | undefined> 
   return d && (d.added || d.removed || d.changed) ? d.text : undefined;
 }
 
-/** Shared post-action report (D14/D24/D28): dialogs, navigation, downloads, snapshot diff. */
-export async function afterAction(c: Ctx, t: TabCtx, beforeEpoch: number, started: number, early: { dialog?: DialogInfo } = {}, extra: Record<string, unknown> = {}) {
+/** Shared post-action report (D14/D24): navigation or snapshot diff. */
+export async function afterAction(c: Ctx, t: TabCtx, beforeEpoch: number, extra: Record<string, unknown> = {}) {
   const side: Side = {};
   const out: Record<string, unknown> = { ok: true, ...extra };
-  const dlg = early.dialog ?? t.drv.dialog();
-  if (dlg) {
-    // D28: return at once, no diff.
-    side.dialogs = [dlg];
-    return { ...out, __side: side };
-  }
   await t.drv.settle(beforeEpoch);
-  const d2 = t.drv.dialog();
-  if (d2) {
-    side.dialogs = [d2];
-    return { ...out, __side: side };
-  }
   const url = await t.drv.currentUrl();
   const crossDoc = t.drv.navEpoch() !== beforeEpoch;
   if (crossDoc || stripHash(url) !== stripHash(t.url)) {
@@ -164,17 +123,13 @@ export async function afterAction(c: Ctx, t: TabCtx, beforeEpoch: number, starte
       /* page busy */
     }
   }
-  const dls = downloadsSince(c.meta.id, started);
-  if (dls.length) side.downloads = dls.map((d) => ({ id: d.id, filename: d.filename, state: d.state }));
   return Object.keys(side).length ? { ...out, __side: side } : out;
 }
 
-export async function act<T>(c: Ctx, level: Level, fn: (t: TabCtx) => Promise<{ dialog?: DialogInfo } | void | T>, extra?: (r: any) => Record<string, unknown>) {
-  noteAction(c.meta.id);
+export async function act<T>(c: Ctx, level: Level, fn: (t: TabCtx) => Promise<void | T>, extra?: (r: any) => Record<string, unknown>) {
   return onTab(c, level, async (t) => {
     const before = t.drv.navEpoch();
-    const started = Date.now();
     const r = (await fn(t)) as any;
-    return afterAction(c, t, before, started, r && typeof r === "object" && "dialog" in r ? r : {}, extra ? extra(r) : {});
+    return afterAction(c, t, before, extra ? extra(r) : {});
   });
 }

@@ -1,8 +1,0 @@
-<!doctype html><html><head><title>Unsaved changes</title></head><body><main>
-<p>This page asks before you leave.</p>
-<input aria-label="Draft" id="d" oninput="window.dirty = true">
-<a id="away" href="/p/left">Leave page</a>
-</main>
-<script>
-window.addEventListener('beforeunload', (e) => { e.preventDefault(); e.returnValue = ''; });
-</script></body></html>

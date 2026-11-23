@@ -97,20 +97,9 @@ test("page.find: label ref is clickable, role+name, css, xpath, text, empty, tru
   const many = view(await h.ok(c, "page.find", { by: "role", value: "link" })).json;
   expect(many.matches).toHaveLength(20);
   expect(many.truncated).toBe(true);
-  // a found node keeps its ref in the next snapshot
+  // a found node keeps its ref in the next snapshot (big enough budget to reach it)
   const btn = view(await h.ok(c, "page.find", { by: "role", value: "button", name: "After the list" })).json.matches[0].ref;
-  expect(view(await h.ok(c, "page.snapshot")).snap).toContain(`button "After the list" [ref=${btn}]`);
-});
-
-test("page.text / page.markdown", async ({ h }) => {
-  await h.trustFixtures();
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/article.html` });
-  const md = view(await h.ok(c, "page.markdown")).all;
-  expect(md).toContain("# The Tab Agent Story");
-  expect(md).toContain("**browse**");
-  expect(md).toContain("- Fast");
-  expect(view(await h.ok(c, "page.text")).all).toContain("The Tab Agent Story");
+  expect(view(await h.ok(c, "page.snapshot", { maxTokens: 20000 })).snap).toContain(`button "After the list" [ref=${btn}]`);
 });
 
 test("snapshot goldens, masking, budgets, root, REF_STALE after navigation and across tabs", async ({ h }) => {
@@ -167,33 +156,32 @@ test("snapshot goldens, masking, budgets, root, REF_STALE after navigation and a
   await h.ok(c, "tabs", { action: "close", tabId: other });
 });
 
-test("snapshot diff: diff=true without and with a baseline; action diffs", async ({ h }) => {
+test("action diffs (D24): no baseline, no diff; after a snapshot an action returns snapshotDiff", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
   await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
-  const first = view(await h.ok(c, "page.snapshot", { diff: true }));
-  expect(first.json.full).toBe(true);
-  expect(first.snap).toContain('button "Click me"');
-  const btn = refIn(first.snap, /Click me/);
+  const pre = refIn(view(await h.ok(c, "page.find", { by: "role", value: "button", name: "Click me" })).json.matches.map((m: any) => `- button [ref=${m.ref}]`).join("\n"), /button/);
+  const noBase = view(await h.ok(c, "act.click", { ref: pre }));
+  expect(noBase.json.snapshotDiff).toBeUndefined();
+  const first = view(await h.ok(c, "page.snapshot"));
+  expect(first.snap).toContain('button "Clicked 1 times"');
+  const btn = refIn(first.snap, /Clicked 1 times/);
   const r = view(await h.ok(c, "act.click", { ref: btn }));
-  expect(r.json.snapshotDiff).toMatch(/^~ - button "Clicked 1 times" \[ref=e\d+\]/m);
-  const none = view(await h.ok(c, "page.snapshot", { diff: true }));
-  expect(none.json.diff).toBe(true);
-  expect(none.snap).toContain("(no changes)");
+  expect(r.json.snapshotDiff).toMatch(/^~ - button "Clicked 2 times" \[ref=e\d+\]/m);
 });
 
-test("500-row list collapses under budget; root expands the container", async ({ h }) => {
+test("500-row list: M1 hard stop under budget; root narrows to the list (D23)", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
   await h.ok(c, "nav.goto", { url: `${h.A}/list500.html` });
   const s = view(await h.ok(c, "page.snapshot"));
   expect(tokens(s.snap)).toBeLessThanOrEqual(6000);
-  expect(s.snap).toContain('button "After the list"');
-  const m = s.snap.match(/… (\d+) more listitem items, expand with root=(e\d+)/);
-  expect(m).toBeTruthy();
-  expect(s.snap).not.toContain("Row number 250");
-  const sub = view(await h.ok(c, "page.snapshot", { root: m![2], maxTokens: 20000 })).snap;
-  expect(sub).toContain('link "Row number 250"');
+  expect(s.json.truncated).toBe(true);
+  expect(s.snap).toMatch(/… truncated, \d+ more nodes; narrow with root=<ref>$/);
+  expect(s.snap).not.toContain("Row number 450");
+  const list = view(await h.ok(c, "page.find", { by: "css", value: "#rows" })).json.matches[0].ref;
+  const sub = view(await h.ok(c, "page.snapshot", { root: list, maxTokens: 20000 })).snap;
+  expect(sub).toContain('link "Row number 450"');
 });
 
 test("screenshots: viewport, full, ref, jpeg, 16000px cap, marks", async ({ h }) => {

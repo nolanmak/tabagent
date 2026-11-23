@@ -68,10 +68,10 @@ describe("render: D23 interactive mode", () => {
 
   it("maxTokens: output within budget, ends with the truncation line carrying the right N", () => {
     const fx = loadAx("form");
-    const all = render(fx.nodes, { refs: source(), collapse: false });
+    const all = render(fx.nodes, { refs: source() });
     for (const max of [20, 60, 120]) {
       const src = source();
-      const r = render(fx.nodes, { maxTokens: max, refs: src, collapse: false });
+      const r = render(fx.nodes, { maxTokens: max, refs: src });
       expect(r.tokens).toBeLessThanOrEqual(max);
       expect(r.truncated).toBe(true);
       const last = r.lines[r.lines.length - 1];
@@ -113,19 +113,17 @@ describe("render: D23 interactive mode", () => {
   });
 });
 
-describe("render: frames (#19)", () => {
+describe("render: same-process frames", () => {
   const frames = (): FrameTree[] => {
-    const main = ax(["RootWebArea", "Top", [["main", undefined, [["button", "Top button"], ["Iframe", "Child", []], ["Iframe", "Blocked", []]]]]]);
+    const main = ax(["RootWebArea", "Top", [["main", undefined, [["button", "Top button"], ["Iframe", "Child", []]]]]]);
     const iframes = main.filter((n) => n.role?.value === "Iframe");
     const child = ax(["RootWebArea", "c", [["button", "Inner button"]]]);
     // same backendNodeId in both frames, different frames
     const innerBtn = child.find((n) => n.role?.value === "button")!;
     innerBtn.backendDOMNodeId = main.find((n) => n.role?.value === "button")!.backendDOMNodeId;
-    const blocked = ax(["RootWebArea", "b", [["button", "Secret button"]]]);
     return [
       { key: "|main", nodes: main },
-      { key: "S1|child", nodes: child, ownerBackendNodeId: iframes[0].backendDOMNodeId, ownerFrameKey: "|main" },
-      { key: "S2|blocked", nodes: blocked, ownerBackendNodeId: iframes[1].backendDOMNodeId, ownerFrameKey: "|main", denied: "http://evil.test" },
+      { key: "|child", nodes: child, ownerBackendNodeId: iframes[0].backendDOMNodeId, ownerFrameKey: "|main" },
     ];
   };
 
@@ -134,72 +132,36 @@ describe("render: frames (#19)", () => {
     const r = render(frames(), { refs: src });
     expect(r.text).toMatch(/- iframe "Child"\n\s+- button "Inner button" \[ref=e\d+\]/);
     const top = r.shown.find((s) => s.frameKey === "|main")!;
-    const inner = r.shown.find((s) => s.frameKey === "S1|child")!;
+    const inner = r.shown.find((s) => s.frameKey === "|child")!;
     expect(top.backendNodeId).toBe(inner.backendNodeId);
     expect(top.ref).not.toBe(inner.ref);
   });
-
-  it("denied-origin frame renders as a one-line placeholder and none of its nodes get refs", () => {
-    const r = render(frames(), { refs: source() });
-    expect(r.text).toContain('- iframe "Blocked" (content hidden: http://evil.test is denied by site policy)');
-    expect(r.text).not.toContain("Secret button");
-    expect(r.shown.some((s) => s.frameKey === "S2|blocked")).toBe(false);
-  });
-
-  it("a denied main frame renders a placeholder", () => {
-    const r = render([{ key: "|main", nodes: [], denied: "http://x.test" }], { refs: source() });
-    expect(r.text).toContain("denied by site policy");
-    expect(r.refs).toEqual([]);
-  });
 });
 
-describe("render: smart collapse (#20)", () => {
+describe("render: M1 hard stop (D23)", () => {
   const page = (n: number) =>
     ax(["RootWebArea", "p", [["main", undefined, [["heading", "Rows", [], { properties: [{ name: "level", value: { value: 1 } }] }], list(n, (i) => ["listitem", undefined, [["link", `Row number ${i}`], ["button", `Open ${i}`]]]), ["button", "After"]]]]]);
 
-  it("collapses the longest same-role run: first 3 + last 1, container gets a ref, output <= budget", () => {
-    const nodes = page(500);
+  it("pathological page: one 5,000-item list stays within budget; later nodes get no refs", () => {
     const src = source();
-    const r = render(nodes, { maxTokens: 600, refs: src });
-    expect(r.tokens).toBeLessThanOrEqual(600);
-    expect(r.collapsed).toBe(1);
-    const m = r.text.match(/… (\d+) more listitem items, expand with root=(e\d+)/)!;
-    expect(Number(m[1])).toBe(496);
-    for (const i of [1, 2, 3, 500]) expect(r.text).toContain(`link "Row number ${i}"`);
-    expect(r.text).not.toContain('link "Row number 4"');
-    expect(r.text).toContain('button "After"');
-    // the container ref expands to the full list via root
-    const t = src.table.get(m[2])!;
-    const sub = render(nodes, { root: { frameKey: t.frameKey, backendNodeId: t.backendNodeId }, maxTokens: 100_000, refs: src });
-    expect(sub.text).toContain('link "Row number 250"');
-    // collapsed items had no refs until shown
-    const minted = src.table.size();
-    expect(minted).toBeGreaterThan(r.refs.length);
-  });
-
-  it("picks the longest run first", () => {
-    const nodes = ax(["RootWebArea", "p", [list(8, (i) => ["listitem", undefined, [["link", `Short ${i}`]]]), list(400, (i) => ["listitem", undefined, [["link", `Long ${i}`]]])]]);
-    const r = render(nodes, { maxTokens: 300, refs: source() });
-    expect(r.text).toContain("… 396 more listitem items");
-    expect(r.text).toContain('link "Short 5"');
-  });
-
-  it("pathological page: one 5,000-item list stays within budget", () => {
-    const r = render(page(5000), { refs: source() });
+    const r = render(page(5000), { refs: src });
     expect(r.tokens).toBeLessThanOrEqual(6000);
-    expect(r.text).toContain("… 4996 more listitem items");
+    expect(r.truncated).toBe(true);
+    expect(r.text).toMatch(/… truncated, (\d+) more nodes; narrow with root=<ref>$/);
+    expect(r.text).not.toContain('"After"');
+    expect(r.refs.length).toBe(r.shown.length);
   });
 
-  it("falls back to the hard stop when collapsing is not enough", () => {
+  it("tiny budget still ends with the truncation note", () => {
     const r = render(page(500), { maxTokens: 30, refs: source() });
     expect(r.tokens).toBeLessThanOrEqual(30);
     expect(r.text).toMatch(/… truncated, \d+ more nodes; narrow with root=<ref>$/);
   });
 
-  it("no collapse when the page fits", () => {
+  it("no truncation when the page fits", () => {
     const r = render(page(10), { refs: source() });
-    expect(r.collapsed).toBe(0);
     expect(r.truncated).toBe(false);
+    expect(r.omitted).toBe(0);
     expect(tokensOf(r.text)).toBe(r.tokens);
   });
 });

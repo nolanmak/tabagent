@@ -76,7 +76,8 @@ describe("SKILL.md lint (#29)", () => {
     expect(kv.description.length).toBeLessThanOrEqual(1024);
   });
   it("covers the troubleshooting codes and D19 guidance", () => {
-    for (const c of ["NO_EXTENSION", "TAB_BUSY", "PERMISSION_DENIED", "PROMPT_TIMEOUT", "KILLED", "DIALOG_OPEN", "REF_STALE"]) expect(text).toContain("`" + c + "`");
+    // M1: the codes an M1 build can return (prompts, the kill switch and dialogs arrive later).
+    for (const c of ["NO_EXTENSION", "TAB_BUSY", "PERMISSION_DENIED", "REF_STALE", "NOT_ACTIONABLE", "TIMEOUT"]) expect(text).toContain("`" + c + "`");
     expect(text).toMatch(/side panel/);
     expect(text).toMatch(/--json/);
   });

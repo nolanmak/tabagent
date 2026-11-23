@@ -1,11 +1,10 @@
 // nav.goto / back / forward / reload / wait (#26, D15, D24, D35).
 import { driverFor } from "../driver";
-import { noteAction } from "../downloads";
 import { taErr } from "../errors";
 import { requireSite } from "../permissions";
 import { baselines } from "../refstore";
 import { resolveTab } from "../sessions";
-import { assertLiteSupport, assertNoDialog, levelOf, onTab, titleOf, withTabLock, type Ctx } from "../tabctx";
+import { levelOf, onTab, titleOf, withTabLock, type Ctx } from "../tabctx";
 import { describeWait, normalizeWait, pollUntil, urlMatcher } from "../wait";
 
 type Handler = (c: Ctx) => Promise<unknown>;
@@ -22,14 +21,11 @@ export const navHandlers: Record<string, Handler> = {
     const { url, waitUntil = "load", timeout = 30000 } = c.p;
     let target = String(url);
     if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = "https://" + target;
-    noteAction(c.meta.id);
     // D16: the target origin is checked before navigating.
     await requireSite(c.meta, target, levelOf(c, "act"), c.tool.name, `open ${target}`);
     const tabId = await resolveTab(c.s, c.p.tabId, true);
     return withTabLock(tabId, async () => {
-      assertNoDialog(tabId, c.tool.name);
       const drv = await driverFor(tabId, target);
-      assertLiteSupport(drv, c.tool);
       baselines.clearTab(tabId);
       const r = await drv.navigate(target, waitUntil, timeout);
       return navResult(tabId, r, "navigate");
@@ -83,7 +79,6 @@ export const navHandlers: Record<string, Handler> = {
           }
           case "fn":
             // D18(c): the router's sensitive gate ran before we got here (registry sensitiveWhen for=fn).
-            if (t.drv.kind !== "cdp") throw taErr("UNSUPPORTED", "nav.wait for=fn needs full (debugger) mode");
             ok = await pollUntil(async () => !!(await t.drv.evaluate(`!!(${w.value})`, "isolated")), w.timeout, clock, 100);
             break;
         }

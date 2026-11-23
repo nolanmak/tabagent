@@ -1,18 +1,13 @@
 // CDP driver over a fake CDP tab: input sequences, staleness, DEBUGGER_DETACHED,
-// dialogs, screenshot planning, denied frames, find.
+// screenshot planning, same-process frames, find.
 import { describe, expect, it, vi } from "vitest";
 import { TabAgentError } from "@tabagent/protocol";
 import type { Observation } from "../src/background/autowait";
 import { memoryStore, RefTable } from "../src/background/refs";
 import { loadAx } from "./helpers";
 
-const denied = new Set<string>();
-vi.mock("../src/background/permissions", () => ({
-  effectivePolicy: async (url: string) => ({ origin: new URL(url).origin, policy: denied.has(new URL(url).origin) ? "deny" : "full" }),
-  requireSite: async () => {},
-  requireSensitive: async () => {},
-}));
-vi.mock("../src/background/settings", () => ({ getSettings: async () => ({ showOverlay: false }), liteForUrl: async () => false }));
+vi.mock("../src/background/permissions", () => ({ requireSite: async () => {}, requireSensitive: async () => {} }));
+vi.mock("../src/background/settings", () => ({ getSettings: async () => ({ showOverlay: false }) }));
 vi.mock("../src/background/refstore", async () => {
   const { Baselines } = await import("../src/background/diff");
   const { RefTable, memoryStore } = await import("../src/background/refs");
@@ -20,7 +15,7 @@ vi.mock("../src/background/refstore", async () => {
 });
 vi.mock("../src/background/cdp", () => ({ getCdpTab: () => null, peekCdpTab: () => null, sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)) }));
 
-const { CdpDriver, addMaskHook, mapEls, refSource } = await import("../src/background/driver");
+const { CdpDriver, mapEls, refSource } = await import("../src/background/driver");
 
 const OK: Observation = { attached: true, visible: true, enabled: true, editable: true, box: { x: 10, y: 10, w: 100, h: 20 }, box2: { x: 10, y: 10, w: 100, h: 20 }, inView: true, point: { x: 60, y: 20 }, hit: { ok: true } };
 
@@ -28,14 +23,11 @@ function fake(page = "index", extraFrames: any[] = []) {
   const fx = loadAx(page);
   const calls: { m: string; p: any; sid?: string }[] = [];
   const detach = new Set<(r: string) => void>();
-  const st = { obs: { ...OK } as Observation, dialog: null as any, waitDialog: false, onInput: undefined as undefined | ((m: string) => void) };
+  const st = { obs: { ...OK } as Observation, onInput: undefined as undefined | ((m: string) => void) };
   const tab: any = {
     tabId: 1,
     attached: true,
     userDetached: false,
-    get dialog() {
-      return st.dialog;
-    },
     loaders: new Map([["|main", "L1"]]),
     lifecycle: [],
     navEpoch: 0,
@@ -46,9 +38,6 @@ function fake(page = "index", extraFrames: any[] = []) {
     onDetached: (f: (r: string) => void) => (detach.add(f), () => detach.delete(f)),
     ensure: async () => {
       if (tab.userDetached) throw tab.detachedError();
-    },
-    assertNoDialog: () => {
-      if (st.dialog) throw new TabAgentError("DIALOG_OPEN", "dialog", undefined, { pageText: true });
     },
     detachedError: () => new TabAgentError("DEBUGGER_DETACHED", "The user cancelled debugging"),
     guard<T>(p: Promise<T>) {
@@ -67,10 +56,7 @@ function fake(page = "index", extraFrames: any[] = []) {
     },
     mainKey: () => "|main",
     frames: async () => [{ key: "|main", frameId: "main", url: "http://x/", loaderId: "L1" }, ...extraFrames],
-    waitEvent: (pred: (m: string) => boolean) =>
-      new Promise((res) => {
-        if (st.waitDialog && pred("Page.javascriptDialogOpening")) setTimeout(() => res({ method: "Page.javascriptDialogOpening" }), 5);
-      }),
+    waitEvent: () => new Promise(() => {}),
     networkIdle: async () => true,
     evalMain: async () => ({ scrollX: 0, scrollY: 0 }),
     send: async (m: string, p: any = {}, sid?: string) => {
@@ -185,17 +171,6 @@ describe("CdpDriver actions (#7)", () => {
     await expect(f.drv.snapshot({})).rejects.toMatchObject({ code: "DEBUGGER_DETACHED" });
   });
 
-  it("an action that opens a dialog returns at once with the dialog (D28)", async () => {
-    const f = fake();
-    const ref = await refOf(f.drv, /Click me/);
-    f.st.waitDialog = true;
-    f.st.onInput = (m) => {
-      if (m === "Input.dispatchMouseEvent") f.st.dialog = { type: "confirm", message: "Sure?" };
-    };
-    const r = await f.drv.click(ref);
-    expect(r.dialog).toEqual({ type: "confirm", message: "Sure?" });
-    await expect(f.drv.snapshot({})).rejects.toMatchObject({ code: "DIALOG_OPEN" });
-  });
 });
 
 describe("CdpDriver screenshot (#8)", () => {
@@ -233,8 +208,8 @@ describe("CdpDriver screenshot (#8)", () => {
   });
 });
 
-describe("CdpDriver frames (#19) and find (#26)", () => {
-  it("child frame clicks are translated by the owner iframe's offset; denied frames are placeholders", async () => {
+describe("CdpDriver frames and find (#26)", () => {
+  it("child frame clicks are translated by the owner iframe's offset", async () => {
     const child = loadAx("index");
     const ownerId = 777;
     const main = loadAx("index").nodes;
@@ -252,14 +227,8 @@ describe("CdpDriver frames (#19) and find (#26)", () => {
     await f.drv.click(refs[1]);
     const press = f.input().find((c) => c.p.type === "mousePressed")!;
     expect([press.p.x, press.p.y]).toEqual([100 + 2 + 60, 200 + 2 + 20]);
-
-    denied.add("http://child.test");
-    const s2 = await f.drv.snapshot({});
-    expect(s2.text).toContain('- iframe "Child" (content hidden: http://child.test is denied by site policy)');
-    expect(s2.shown.some((x) => x.frameKey === "S1|child")).toBe(false);
     const all = await f.drv.callAllFrames("findNodes", [{}]);
-    expect(all.map((x) => x.frameKey)).toEqual(["|main"]);
-    denied.clear();
+    expect(all.map((x) => x.frameKey)).toEqual(["|main", "S1|child"]);
   });
 
   it("find mints refs from the shared table (same ref as the snapshot)", async () => {
@@ -267,19 +236,6 @@ describe("CdpDriver frames (#19) and find (#26)", () => {
     const ref = await refOf(f.drv, /Click me/);
     const r = await f.drv.find({ by: "role", value: "button", name: "Click me" });
     expect(r).toEqual({ matches: [{ ref, role: "button", name: "Click me" }], truncated: false });
-  });
-
-  it("mask hooks mask extra nodes", async () => {
-    const f = fake("index");
-    const search = loadAx("index").nodes.find((n) => n.name?.value === "Search")!;
-    search.value = { value: "secret" };
-    const origSend = f.tab.send;
-    f.tab.send = async (m: string, p: any, sid?: string) => (m === "Accessibility.getFullAXTree" ? { nodes: loadAx("index").nodes.map((n) => (n.nodeId === search.nodeId ? search : n)) } : origSend(m, p, sid));
-    const off = addMaskHook((_t, id) => id === search.backendDOMNodeId);
-    const s = await f.drv.snapshot({});
-    expect(s.text).toMatch(/searchbox "Search" \[ref=e\d+\] value="••••"/);
-    off();
-    expect((await f.drv.snapshot({})).text).toContain('value="secret"');
   });
 
   it("mapEls and refSource helpers", () => {

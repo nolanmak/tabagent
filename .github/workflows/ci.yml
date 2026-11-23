@@ -26,7 +26,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
-      # eslint + generated docs (docs/tools.md, docs/lite-mode.md) are current
       - run: npm run lint
 
   typecheck:
@@ -62,10 +61,6 @@ jobs:
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
       - run: npm run build
-      - run: npm run check-versions
-      # Built-artifact checks: --version, MV3 manifest, permission justifications,
-      # example MCP configs, npm pack install.
-      - run: npm run test:release
       - uses: actions/upload-artifact@v4
         with:
           name: dist

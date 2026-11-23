@@ -2,79 +2,44 @@
 
 **Let any AI agent drive your real Chrome.** TabAgent is an open-source Chrome extension plus a
 small local bridge that exposes your browser to Claude Code, Codex, Cursor, and any MCP or HTTP
-client. Agents can navigate, read pages, pull structured data, fill forms, upload and download
-files, and inspect network and console activity. They do it with your existing sign-ins, under
-permissions you control.
+client. Agents can open tabs, navigate, read pages as accessibility snapshots, click, type, wait for
+content and take screenshots, using your existing sign-ins.
 
-> Status: **pre-alpha**, not yet published. See [docs/DESIGN.md](docs/DESIGN.md) and the
-> [roadmap](https://github.com/nolanmak/tabagent/issues).
+> Status: **pre-alpha**, not published. This snapshot ends milestone M1 (core agent loop). Until the
+> permission engine and prompts land (M3), the extension uses the interim policy from
+> [docs/DESIGN.md](docs/DESIGN.md) (D17): agents act only on their own tabs, browser pages and the
+> Web Store are off-limits, and sensitive actions (password or card submits, risky clicks, page
+> scripts, taking over a tab) are refused unless the developer setting
+> `devAllowSensitive` is on. See [docs/SECURITY.md](docs/SECURITY.md).
 
-## Why
+## Try it from a checkout
 
-- **Agent-agnostic**: one install, every agent. MCP (stdio + Streamable HTTP), REST, and a CLI.
-- **Your real browser**: works in your everyday profile, where you are already logged in.
-- **Token-efficient**: compact accessibility snapshots with stable element refs instead of HTML.
-- **Reliable**: trusted CDP input, auto-waiting, and actionable errors.
-- **Safe by default**: per-site permissions, prompts for sensitive actions, a tab group per agent,
-  an audit log and a kill switch (`Alt+Shift+K`). Read [docs/SECURITY.md](docs/SECURITY.md) for what
-  that does and does not protect against.
+```bash
+npm install
+npm run build
+node packages/bridge/dist/cli.js serve      # prints a pairing code
+```
 
-## Quick start
+Load `packages/extension/dist` unpacked (`chrome://extensions` → Developer mode → Load unpacked),
+open the TabAgent side panel and enter the pairing code (`tabagent status` shows it again). Then
+connect an agent:
 
-1. **Install the bridge** (Node 20+):
+```bash
+claude mcp add tabagent -- node /path/to/tabagent/packages/bridge/dist/cli.js mcp
+node packages/bridge/dist/cli.js skill install --claude --codex     # optional usage skill
+```
 
-   ```bash
-   npm i -g tabagent
-   tabagent serve            # prints a pairing code
-   ```
-
-2. **Install the extension** from the Chrome Web Store, or load it unpacked: run
-   `chrome://extensions` → Developer mode → Load unpacked → the copy shipped in the npm package,
-   `$(npm root -g)/tabagent/dist/extension`.
-
-3. **Pair**: open the TabAgent side panel (toolbar icon) and enter the code. `tabagent status`
-   shows it again.
-
-4. **Connect your agent** (more in [examples/](examples)):
-
-   ```bash
-   claude mcp add tabagent -- npx -y tabagent mcp
-   codex  mcp add tabagent -- npx -y tabagent mcp
-   tabagent skill install --claude --codex     # optional usage skill
-   ```
-
-   Cursor: copy [examples/cursor/mcp.json](examples/cursor/mcp.json) to `.cursor/mcp.json`.
-
-5. Ask your agent to do something in the browser. It works in its own tab group; the first time it
-   touches a site, TabAgent asks you in the side panel.
-
-The default `core` profile keeps the tool list small (13 tools). Add more with
-`npx tabagent mcp --profile forms,data` (`forms`, `data`, `dev`, `full`). Shell-only agents can
-use `tabagent <tool> --json '{…}'`.
-
-## Docs
-
-- [Tool reference](docs/tools.md) (generated from the registry)
-- [Security model](docs/SECURITY.md)
-- [Lite mode (no debugger) support matrix](docs/lite-mode.md)
-- [Design](docs/DESIGN.md)
-- [Benchmark](bench/README.md)
-- [Release checklist](docs/release.md)
-
-## Benchmark
-
-20 scripted tasks on the repo's fixture site, checked by end-state assertions
-([bench/](bench/README.md)). No published run yet.
+The default `core` profile keeps the tool list small (9 tools). Add more with
+`tabagent mcp --profile forms,data` (`forms`, `data`, `dev`, `full`). Shell-only agents can use
+`tabagent <tool> --json '{…}'`.
 
 ## Layout
 
 ```
 packages/protocol   tool registry, envelopes, error codes (zod)
-packages/extension  MV3 extension: service worker, content scripts, side panel
-packages/bridge     Node daemon: MCP server, REST API, CLI (npm: tabagent)
+packages/extension  MV3 extension: service worker, page library, pairing screen
+packages/bridge     Node daemon: MCP server, REST API, CLI
 e2e/                Playwright tests with the real extension and bridge
-bench/              benchmark tasks and runner
-examples/           Claude Code, Codex, Cursor configs
 ```
 
 ## Contributing

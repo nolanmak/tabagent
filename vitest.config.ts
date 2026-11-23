@@ -1,10 +1,7 @@
 // Root Vitest config (#25).
 //
-// Two projects:
+// One project:
 //   unit  - pure modules, no build needed. `npm test` / `npm run test:coverage`.
-//   release - checks against built artifacts (packages/*/dist): bridge --version,
-//           extension manifest, permission justifications, example MCP configs,
-//           npm packaging. `npm run test:release`, run after `npm run build`.
 //
 // Coverage floors are the TDD rules in roadmap #28: protocol 90% lines,
 // bridge 80%, extension *pure modules* 80%. Adapters (chrome.*, CDP, sockets)
@@ -16,15 +13,14 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 const alias = { "@tabagent/protocol": `${root}packages/protocol/src/index.ts` };
 
 /**
- * Extension modules that take plain data in and return plain data. Files that
- * do not exist yet are simply absent from the report. Anything placed under a
- * `pure/` directory is counted automatically.
+ * Extension modules that take plain data in and return plain data. Anything
+ * placed under a `pure/` directory is counted automatically.
  */
 export const EXTENSION_PURE = [
   "packages/extension/src/**/pure/**/*.ts",
-  // DOM extractors unit-tested under happy-dom
-  "packages/extension/src/pagelib/{forms,extract}.ts",
-  "packages/extension/src/background/{snapshot,keys,refs,autowait,router,diff,collapse,frames,screenshot-plan,dialogs,policy,sensitive,redact,wait,find,form,lite}.ts",
+  // DOM gate inputs unit-tested under happy-dom
+  "packages/extension/src/pagelib/forms.ts",
+  "packages/extension/src/background/{snapshot,keys,refs,autowait,router,diff,frames,screenshot-plan,policy,wait}.ts",
 ];
 
 export default defineConfig({
@@ -36,19 +32,7 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["packages/*/test/**/*.test.ts", "bench/test/**/*.test.ts", "scripts/test/**/*.test.ts", "test/unit/**/*.test.ts"],
-        },
-      },
-      {
-        resolve: { alias },
-        test: {
-          name: "release",
-          environment: "node",
-          include: ["test/release/**/*.test.ts"],
-          testTimeout: 120_000,
-          hookTimeout: 120_000,
-          // Spawns bridges on temp ports; keep it serial to make failures readable.
-          fileParallelism: false,
+          include: ["packages/*/test/**/*.test.ts"],
         },
       },
     ],
@@ -57,7 +41,7 @@ export default defineConfig({
       reporter: ["text-summary", "text", "json-summary"],
       include: ["packages/protocol/src/**/*.ts", "packages/bridge/src/**/*.ts", ...EXTENSION_PURE],
       // cli.ts is the process entry point; it is exercised by spawning the built
-      // binary (test/release, e2e), which v8 coverage in this process cannot see.
+      // binary (cli.test, e2e), which v8 coverage in this process cannot see.
       exclude: ["packages/bridge/src/cli.ts", "**/*.d.ts", "**/test/**"],
       thresholds: {
         "packages/protocol/src/**/*.ts": { lines: 90 },

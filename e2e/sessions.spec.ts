@@ -31,8 +31,8 @@ test("two agents at once: separate tab groups, TAB_BUSY on each other's tabs", a
   await expect.poll(async () => h.sw.evaluate(() => (globalThis as any).__tabagent.listSessions().map((s: any) => s.label)), { timeout: 5000 }).not.toContain("alpha");
 });
 
-test("tabs attach adopts a user tab only after the user agrees; session end ungroups it and leaves it open", async ({ h }) => {
-  await h.trustFixtures();
+test("tabs attach is a gated effect (D18f): refused in M1 unless devAllowSensitive; session end ungroups it and leaves it open", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
   const userTab = await h.ctx.newPage();
   // unique URL: earlier specs leave agent-owned tabs on article.html in the shared browser
   const userUrl = `${h.A}/article.html?user=${Date.now()}`;
@@ -41,12 +41,15 @@ test("tabs attach adopts a user tab only after the user agrees; session end ungr
   const c = await h.mcp({ label: "adopter" });
   const notMine = await h.call(c, "page.snapshot", { tabId });
   expect(notMine.text).toContain("not in this session");
-  const d = await h.answerPrompt("deny", () => h.call(c, "tabs", { action: "attach", tabId }));
-  expect(d.title).toContain("take over your tab");
-  expect(d.prompt.sensitive.category).toBe("f");
-  expect((d.result as any).text).toContain("PERMISSION_DENIED");
-  // f is never pre-approvable: devAllowSensitive (on via trustFixtures) does not skip it
-  await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "attach", tabId }));
+  // M1 has no approval prompts (#12): attach is refused with PERMISSION_DENIED
+  const d = await h.call(c, "tabs", { action: "attach", tabId });
+  expect(d.isError).toBe(true);
+  expect(d.text).toContain("PERMISSION_DENIED");
+  expect(d.text).toContain("taking over one of your tabs");
+  expect(await h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).groupId, tabId)).toBe(-1);
+  // the developer setting (D17) lets it through
+  await h.trustFixtures({ devAllowSensitive: true });
+  await h.ok(c, "tabs", { action: "attach", tabId });
   const s = await h.ok(c, "page.snapshot", { tabId });
   expect(s.json.title).toBe("Article");
   await expect.poll(() => h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).groupId, tabId)).toBeGreaterThan(-1);
@@ -63,13 +66,13 @@ test("tabs attach adopts a user tab only after the user agrees; session end ungr
 });
 
 test("tabs attach with no tabId adopts the active tab of the last-focused window", async ({ h }) => {
-  await h.trustFixtures();
+  await h.trustFixtures({ devAllowSensitive: true });
   const userTab = await h.ctx.newPage();
   await userTab.goto(`${h.A}/table.html`);
   await userTab.bringToFront();
   const c = await h.mcp({ label: "adopt-active" });
-  const r = await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "attach" }));
-  expect((r.result as any).text).toContain("table.html");
+  const r = await h.ok(c, "tabs", { action: "attach" });
+  expect(r.text).toContain("table.html");
   await h.ok(c, "session.end");
   await userTab.close();
 });
@@ -138,7 +141,7 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
   expect(tools).not.toContain("js_eval");
   expect(tools.length).toBeLessThanOrEqual(15);
   const full = await mk("full");
-  expect((await full.listTools()).tools.length).toBeGreaterThan(40);
+  expect((await full.listTools()).tools.length).toBeGreaterThan(tools.length);
   const r: any = await core.callTool({ name: "nav_goto", arguments: { url: `${h.A}/index.html` } });
   expect(r.content[0].text).toContain("Fixtures home");
   const groups = await h.sw.evaluate(async () => (await chrome.tabGroups.query({})).map((g) => g.title));
@@ -147,34 +150,4 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
   await full.close();
   const unauth = await fetch(`http://127.0.0.1:${h.port}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   expect(unauth.status).toBe(401);
-});
-
-test("lite mode (no debugger): snapshot, click, fill, form.fill", async ({ h }) => {
-  await h.trustFixtures({ sites: { [h.B]: { lite: true } } });
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.B}/form.html` });
-  const info = await h.ok(c, "session.info");
-  expect(info.json.tabs.find((t: any) => t.active).mode).toBe("lite");
-  const s = await h.ok(c, "page.snapshot");
-  // D22: lite refs come from the same table as CDP refs
-  expect(s.text).toMatch(/\[ref=e\d+\]/);
-  const email = Harness.ref(s.text, /textbox "Email address"/);
-  await h.ok(c, "act.fill", { ref: email, value: "lite@example.com" });
-  await h.ok(c, "form.fill", { fields: { Country: "Mexico", "Subscribe to newsletter": true, Plan: "Free" } });
-  await h.ok(c, "act.click", { ref: Harness.ref(s.text, /button "Create account"/) });
-  const txt = (await h.ok(c, "page.text", {})).text;
-  expect(txt).toContain('"email":"lite@example.com"');
-  expect(txt).toContain('"country":"mx"');
-  expect(txt).toContain('"subscribe":true');
-  // #21: registry lite=unsupported tools return UNSUPPORTED without touching the page
-  const net = await h.call(c, "network.list");
-  expect(net.text).toContain("UNSUPPORTED");
-  // viewport capture needs the tab to be the visible one; TabAgent never focuses it (D10)
-  const shot = await h.call(c, "page.screenshot");
-  expect(!!shot.image || shot.text.includes("UNSUPPORTED")).toBe(true);
-  // no debugger attached to the lite tab
-  const liteTab = info.json.tabs.find((t: any) => t.active).tabId;
-  const attached: number[] = await h.sw.evaluate(() => (globalThis as any).__tabagent.attachedTabs());
-  expect(attached).not.toContain(liteTab);
-  await h.trustFixtures();
 });

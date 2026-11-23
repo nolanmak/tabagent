@@ -229,17 +229,3 @@ describe("heartbeat (D11)", () => {
     e.close();
   });
 });
-
-describe("events (D20)", () => {
-  it("kill/resume/prompt/decision events are logged", async () => {
-    const { d, home } = await boot();
-    const e = await pairedExt(d);
-    for (const ev of ["prompt", "decision", "killed", "resumed"]) e.send({ type: "event", event: ev, data: { origin: "http://a.test" } });
-    e.send({ type: "ping" });
-    await e.next("pong");
-    const log = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(log.map((l) => l.event)).toEqual(["prompt", "decision", "killed", "resumed"]);
-    expect(log[0].data).toEqual({ origin: "http://a.test" });
-    e.close();
-  });
-});

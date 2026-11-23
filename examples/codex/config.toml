@@ -1,4 +1,0 @@
-# Add this table to ~/.codex/config.toml (or run: codex mcp add tabagent -- npx -y tabagent mcp)
-[mcp_servers.tabagent]
-command = "npx"
-args = ["-y", "tabagent", "mcp"]

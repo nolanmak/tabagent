@@ -7,6 +7,14 @@ roadmap #28 and [DESIGN.md](DESIGN.md).
 To report a vulnerability, open a private security advisory on the GitHub repository rather than
 a public issue.
 
+> **Status at this milestone (M1).** The permission engine, prompts, per-client tokens, the audit
+> log, the full side panel and the kill switch (#12–#15, M3) are not built yet. Until then the
+> extension's `authorize()` chokepoint applies the interim policy (D17): commands act only on the
+> session's own tabs; `chrome://`, extension pages and the Web Store are refused; and every D18
+> gated effect (sensitive submits, risky clicks, `nav.wait` with `fn`, `tabs attach`) returns `PERMISSION_DENIED` unless the extension setting
+> `devAllowSensitive` is on (off by default). The bridge secret is the only credential. The
+> sections below describe the full model this milestone builds toward.
+
 ## Trust boundary (D1)
 
 ```

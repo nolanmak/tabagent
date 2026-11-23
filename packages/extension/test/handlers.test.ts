@@ -1,9 +1,9 @@
 // Handler plumbing with a fake Driver: D14 side effects via __side, D24 diffs,
-// D28 DIALOG_OPEN, D18(a)(b) gates, #21 lite UNSUPPORTED sweep.
+// D18(a)(b) gates.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { TOOLS, TabAgentError } from "@tabagent/protocol";
+import { TOOLS } from "@tabagent/protocol";
 
-const state = vi.hoisted(() => ({ dialog: null as any, drv: null as any, sensitive: [] as any[], url: "http://x.test/a" }));
+const state = vi.hoisted(() => ({ drv: null as any, sensitive: [] as any[], url: "http://x.test/a" }));
 
 vi.mock("../src/background/sessions", () => ({ resolveTab: async (_s: unknown, id?: number) => id ?? 1 }));
 vi.mock("../src/background/permissions", () => ({
@@ -13,9 +13,7 @@ vi.mock("../src/background/permissions", () => ({
   },
   effectivePolicy: async () => ({ policy: "full" }),
 }));
-vi.mock("../src/background/bridgeFiles", () => ({ resolveFiles: async (_id: string, p: string[]) => p }));
-vi.mock("../src/background/downloads", () => ({ noteAction: () => {}, downloadsSince: () => [] }));
-vi.mock("../src/background/cdp", () => ({ peekCdpTab: () => (state.dialog ? { dialog: state.dialog } : undefined), getCdpTab: () => null, sleep: async () => {} }));
+vi.mock("../src/background/cdp", () => ({ peekCdpTab: () => undefined, getCdpTab: () => null, sleep: async () => {} }));
 vi.mock("../src/background/driver", () => ({ driverFor: async () => state.drv }));
 vi.mock("../src/background/refstore", async () => {
   const { Baselines } = await import("../src/background/diff");
@@ -26,10 +24,10 @@ vi.mock("../src/background/refstore", async () => {
 const { actHandlers } = await import("../src/background/handlers/act");
 const { pageHandlers } = await import("../src/background/handlers/page");
 const { navHandlers } = await import("../src/background/handlers/nav");
-const { assertLiteSupport, assertNoDialog, levelOf } = await import("../src/background/tabctx");
+const { levelOf } = await import("../src/background/tabctx");
 const { baselines } = await import("../src/background/refstore");
 
-function fakeDriver(kind: "cdp" | "lite" = "cdp") {
+function fakeDriver(kind: "cdp" = "cdp") {
   const log: string[] = [];
   let snap = ["- main", '  - button "Go" [ref=e1]'];
   const d: any = {
@@ -38,9 +36,8 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     log,
     epoch: 0,
     url: "http://x.test/a",
-    dlg: null,
     setSnap: (l: string[]) => (snap = l),
-    snapshot: async () => ({ text: snap.join("\n"), lines: snap, refs: ["e1"], shown: [], truncated: false, collapsed: 0, omitted: 0, tokens: 1 }),
+    snapshot: async () => ({ text: snap.join("\n"), lines: snap, refs: ["e1"], shown: [], truncated: false, omitted: 0, tokens: 1 }),
     find: async () => ({ matches: [], truncated: false }),
     call: async (fn: string) => {
       log.push(`call:${fn}`);
@@ -52,7 +49,6 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     click: async (ref: string) => {
       log.push(`click:${ref}`);
       d.onClick?.();
-      return d.dlg ? { dialog: d.dlg } : {};
     },
     press: async (k: string) => (log.push(`press:${k}`), {}),
     typeText: async (t: string) => (log.push(`type:${t}`), {}),
@@ -71,7 +67,6 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     settle: async () => {},
     navEpoch: () => d.epoch,
     currentUrl: async () => d.url,
-    dialog: () => d.dlg,
     evaluate: async () => true,
   };
   return d;
@@ -80,7 +75,6 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
 const ctx = (tool: string, p: Record<string, unknown> = {}) => ({ s: {} as any, meta: { id: "S", label: "t", cap: "full", sites: [] } as any, p, tool: TOOLS.find((t) => t.name === tool) as any });
 
 beforeEach(() => {
-  state.dialog = null;
   state.sensitive = [];
   state.drv = fakeDriver();
   baselines.clearTab(1);
@@ -115,21 +109,6 @@ describe("act.* through afterAction (D14/D24)", () => {
     expect(baselines.get("S", 1)).toBeUndefined();
   });
 
-  it("an action that opens a dialog -> dialogs set, no diff (D28)", async () => {
-    await pageHandlers["page.snapshot"](ctx("page.snapshot"));
-    state.drv.dlg = { type: "alert", message: "hi" };
-    const r: any = await actHandlers["act.click"](ctx("act.click", { ref: "e1" }));
-    expect(r.__side).toEqual({ dialogs: [{ type: "alert", message: "hi" }] });
-  });
-
-  it("while a dialog is open every command except dialog.handle gets DIALOG_OPEN", async () => {
-    state.dialog = { type: "confirm", message: "Sure?" };
-    await expect(actHandlers["act.click"](ctx("act.click", { ref: "e1" }))).rejects.toMatchObject({ code: "DIALOG_OPEN" });
-    await expect(pageHandlers["page.snapshot"](ctx("page.snapshot"))).rejects.toMatchObject({ code: "DIALOG_OPEN", pageText: true });
-    await expect(navHandlers["nav.goto"](ctx("nav.goto", { url: "http://x.test/c" }))).rejects.toMatchObject({ code: "DIALOG_OPEN" });
-    expect(() => assertNoDialog(1, "dialog.handle")).not.toThrow();
-  });
-
   it("act.type with ref: prepare, focus, insert; submit presses Enter", async () => {
     await actHandlers["act.type"](ctx("act.type", { ref: "e1", text: "hey", submit: true }));
     expect(state.drv.log.filter((l: string) => !l.startsWith("call:"))).toEqual(["prepare", "focus", "type:hey", "press:Enter"]);
@@ -162,34 +141,12 @@ describe("D18(a)(b) gates", () => {
   });
 });
 
-describe("#21 lite support matrix", () => {
-  it("every tool has a lite value; unsupported tools return UNSUPPORTED in lite mode without touching the page", () => {
-    const lite = fakeDriver("lite");
-    for (const t of TOOLS as unknown as any[]) {
-      expect(["supported", "degraded", "unsupported"], t.name).toContain(t.lite);
-      if (t.lite === "unsupported") {
-        let err: unknown;
-        try {
-          assertLiteSupport(lite, t);
-        } catch (e) {
-          err = e;
-        }
-        expect((err as TabAgentError)?.code, t.name).toBe("UNSUPPORTED");
-      } else expect(() => assertLiteSupport(lite, t)).not.toThrow();
-      expect(() => assertLiteSupport(fakeDriver("cdp"), t)).not.toThrow();
-    }
-    expect(lite.log).toEqual([]);
-  });
-});
-
 describe("page / nav handlers", () => {
-  it("page.snapshot diff:true without a baseline returns the full snapshot and says so", async () => {
-    const r: any = await pageHandlers["page.snapshot"](ctx("page.snapshot", { diff: true }));
-    expect(r.full).toBe(true);
+  it("an interactive page.snapshot sets the baseline; root and full-mode snapshots don't move it", async () => {
+    const r: any = await pageHandlers["page.snapshot"](ctx("page.snapshot"));
     expect(r.snapshot).toContain('button "Go"');
-    const r2: any = await pageHandlers["page.snapshot"](ctx("page.snapshot", { diff: true }));
-    expect(r2).toMatchObject({ diff: true, snapshot: "(no changes)" });
-    // root and full-mode snapshots don't move the baseline
+    expect(r.refs).toBe(1);
+    expect(baselines.get("S", 1)).toEqual(["- main", '  - button "Go" [ref=e1]']);
     state.drv.setSnap(["- x"]);
     await pageHandlers["page.snapshot"](ctx("page.snapshot", { mode: "full" }));
     expect(baselines.get("S", 1)).toEqual(["- main", '  - button "Go" [ref=e1]']);
@@ -214,8 +171,7 @@ describe("page / nav handlers", () => {
     await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "url", value: "/(/" }))).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(await navHandlers["nav.wait"](ctx("nav.wait", { for: "url", value: "/zz+$/", timeout: 500 }))).toMatchObject({ ok: true });
     expect(await navHandlers["nav.wait"](ctx("nav.wait", { for: "load" }))).toMatchObject({ ok: true });
-    state.drv.kind = "lite";
-    await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "true" }))).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(await navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "true" }))).toMatchObject({ ok: true });
   });
 
   it("levelOf follows the registry (nav tools are act, D16)", () => {

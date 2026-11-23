@@ -3,9 +3,8 @@
 // the attach (f) gate, so these handlers only do the work.
 import { TabAgentError, type SessionMeta, type ToolDef } from "@tabagent/protocol";
 import { driverFor } from "./driver";
-import { effectivePolicy, preapprovalsFor } from "./permissions";
-import { addTab, endSession, inHandoff, isPrivateTab, newTab, ownerOf, resolveTab, selectTab, userActiveTab, type Session } from "./sessions";
-import { getSettings } from "./settings";
+import { effectivePolicy } from "./permissions";
+import { addTab, endSession, newTab, ownerOf, resolveTab, selectTab, userActiveTab, type Session } from "./sessions";
 
 interface Ctx {
   s: Session;
@@ -29,8 +28,6 @@ export async function attachTarget(meta: SessionMeta, tabId: number | undefined)
     if (!t?.id) throw new TabAgentError("NOT_FOUND", "No active tab in the last-focused window", "Ask the user to focus the tab to share, or pass tabId.");
     id = t.id;
   }
-  if (isPrivateTab(id)) throw new TabAgentError("PERMISSION_DENIED", `Tab ${id} is a private sign-in tab`);
-  if (inHandoff(id)) throw new TabAgentError("TAB_BUSY", `Tab ${id} is handed to the user`);
   const o = ownerOf(id);
   if (o && o !== meta.id) throw new TabAgentError("TAB_BUSY", `Tab ${id} belongs to another agent session`);
   let info: { url: string; title: string };
@@ -49,7 +46,6 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
       case "list": {
         const tabs = [];
         for (const id of c.s.tabIds) {
-          if (isPrivateTab(id)) continue;
           try {
             const t = await tabInfo(id);
             tabs.push({ tabId: id, ...t, active: id === c.s.active, attached: c.s.attached.includes(id) });
@@ -93,8 +89,8 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
       const id = await resolveTab(c.s, undefined).catch(() => null);
       url = id != null ? (await tabInfo(id)).url : "about:blank";
     }
-    const e = await effectivePolicy(url, c.meta);
-    return { url, origin: e.origin, level: e.policy, policy: e.policy, source: e.source, preapproved: await preapprovalsFor(url), tokenCap: c.meta.cap, tokenSites: c.meta.sites };
+    const e = await effectivePolicy(url);
+    return { url, origin: e.origin, level: e.policy, policy: e.policy, source: e.source, sensitiveAllowed: e.sensitiveAllowed };
   },
 
   async "session.info"(c) {
@@ -108,8 +104,7 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
         /* gone */
       }
     }
-    const s = await getSettings();
-    return { id: c.meta.id, label: c.meta.label, cap: c.meta.cap, sites: c.meta.sites, tabs, paused: s.paused, groupId: c.s.groupId };
+    return { id: c.meta.id, label: c.meta.label, tabs, groupId: c.s.groupId };
   },
 
   async "session.end"(c) {

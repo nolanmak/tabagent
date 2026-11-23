@@ -1,5 +1,5 @@
 // act.* (except act.upload) — #7. Every action goes through act(): auto-wait in
-// the driver, then the D14 side-effect report (diff / navigation / dialogs).
+// the driver, then the D14 side-effect report (diff / navigation).
 import { taErr, isCode } from "../errors";
 import { act, onTab, type Ctx, type TabCtx } from "../tabctx";
 import { checkClickGate, checkKeyGate } from "./gates";
@@ -14,7 +14,7 @@ const clock = { now: () => Date.now(), sleep: (ms: number) => new Promise<void>(
 // sensitive form, go to the same gate as form.submit.
 
 // ---------------------------------------------------------------------------
-// select / check (shared with form.fill)
+// select / check
 // ---------------------------------------------------------------------------
 export async function doSelect(t: TabCtx, ref: string, values: string[], timeout?: number) {
   const inf = (await t.drv.call("info", [], { ref })) as { isSelect: boolean; role: string };
@@ -97,13 +97,11 @@ export const actHandlers: Record<string, Handler> = {
         if (c.p.clear) await t.drv.fill(c.p.ref, "", c.p.timeout);
         await t.drv.focus(c.p.ref, true);
       }
-      const r = await t.drv.typeText(c.p.text);
-      if (r.dialog) return r;
+      await t.drv.typeText(c.p.text);
       if (c.p.submit) {
         await checkKeyGate(c, t, "Enter");
-        return t.drv.press("Enter");
+        await t.drv.press("Enter");
       }
-      return r;
     });
   },
   async "act.fill"(c) {

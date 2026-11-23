@@ -3,7 +3,8 @@ import { refIn, view } from "./view";
 
 test.describe.configure({ mode: "serial" });
 
-const text = async (h: any, c: any) => view(await h.ok(c, "page.text", {})).all;
+/** M1 has no page.text (#10): page text is checked with nav.wait for=text. */
+const hasText = async (h: any, c: any, t: string, timeout = 3000) => !(await h.call(c, "nav.wait", { for: "text", value: t, timeout })).isError;
 
 test("modal overlay: NOT_ACTIONABLE reason covered naming the modal, then success after closing it", async ({ h }) => {
   await h.trustFixtures();
@@ -21,7 +22,7 @@ test("modal overlay: NOT_ACTIONABLE reason covered naming the modal, then succes
   expect(r.json.snapshotDiff).toMatch(/^- - dialog "Cookies"/m);
   expect(r.json.snapshotDiff).toMatch(/^- - button "Accept cookies"/m);
   await h.ok(c, "act.click", { ref: target });
-  expect(await text(h, c)).toContain("target clicked");
+  expect(await hasText(h, c, "target clicked")).toBe(true);
 });
 
 test("type (insertText), press, fill on a controlled input; stale and malformed refs", async ({ h }) => {
@@ -32,16 +33,16 @@ test("type (insertText), press, fill on a controlled input; stale and malformed 
   const nick = refIn(s, /textbox "Controlled"/);
   const typed = view(await h.ok(c, "act.type", { ref: nick, text: "Neo" }));
   expect(typed.json.snapshotDiff).toMatch(/^~ - textbox "Controlled" \[ref=e\d+\] value="Neo"/m);
-  expect(await text(h, c)).toContain("Nickname preview: Neo");
+  expect(await hasText(h, c, "Nickname preview: Neo")).toBe(true);
   await h.ok(c, "act.fill", { ref: nick, value: "Trinity" });
-  expect(await text(h, c)).toContain("Nickname preview: Trinity");
+  expect(await hasText(h, c, "Nickname preview: Trinity")).toBe(true);
   await h.ok(c, "act.press", { ref: nick, key: "Meta+a" });
   await h.ok(c, "act.press", { key: "Backspace" });
-  expect(await text(h, c)).not.toContain("Nickname preview: Trinity");
+  expect(await hasText(h, c, "Nickname preview: Trinity", 300)).toBe(false);
   const bad = await h.call(c, "act.press", { key: "Hyper+q" });
   expect(bad.text).toContain("BAD_REQUEST");
   await h.ok(c, "act.type", { ref: nick, text: "Morpheus", clear: true });
-  expect(await text(h, c)).toContain("Nickname preview: Morpheus");
+  expect(await hasText(h, c, "Nickname preview: Morpheus")).toBe(true);
   expect((await h.call(c, "act.click", { ref: "e99999999" })).text).toContain("REF_STALE");
   expect((await h.call(c, "act.click", { ref: "l3" })).text).toContain("REF_STALE");
   // not a text field
@@ -60,7 +61,7 @@ test("React-style controlled form: act.fill value survives a re-render and submi
   expect(after).toContain('textbox "Name"');
   expect(after).toMatch(/textbox "Name" \[ref=e\d+\] value="Ada"/);
   await h.ok(c, "act.click", { ref: refIn(after, /button "Save"/) });
-  expect(await text(h, c)).toContain('submitted {"name":"Ada","city":"London"}');
+  expect(await hasText(h, c, 'submitted {"name":"Ada","city":"London"}')).toBe(true);
 });
 
 test("select: native select and custom ARIA combobox", async ({ h }) => {
@@ -77,7 +78,7 @@ test("select: native select and custom ARIA combobox", async ({ h }) => {
   await h.ok(c, "nav.goto", { url: `${h.A}/custom-select.html` });
   const s2 = view(await h.ok(c, "page.snapshot")).snap;
   await h.ok(c, "act.select", { ref: refIn(s2, /combobox "Fruit"/), values: ["Papaya"] });
-  expect(await text(h, c)).toContain("chose Papaya");
+  expect(await hasText(h, c, "chose Papaya")).toBe(true);
 });
 
 test("check: visually hidden custom checkbox and radio", async ({ h }) => {
@@ -112,19 +113,19 @@ test("hover menu, drag and drop, double-click", async ({ h }) => {
   const hv = view(await h.ok(c, "act.hover", { ref: refIn(s0, /button "Products"/) }));
   expect(hv.json.snapshotDiff).toMatch(/^\+ - link "Laptops" \[ref=e\d+\]/m);
   await h.ok(c, "act.click", { ref: refIn(hv.json.snapshotDiff, /link "Laptops"/) });
-  expect(await text(h, c)).toContain("laptops chosen");
+  expect(await hasText(h, c, "laptops chosen")).toBe(true);
 
   await h.ok(c, "nav.goto", { url: `${h.A}/drag.html` });
   const s = view(await h.ok(c, "page.snapshot")).snap;
   // the drop zone is a landmark (no ref in interactive mode, D23): page.find mints one
   const zone = view(await h.ok(c, "page.find", { by: "role", value: "region", name: "Drop zone" })).json.matches[0].ref;
   await h.ok(c, "act.drag", { from: refIn(s, /Drag source/), to: zone });
-  expect(await text(h, c)).toContain("dropped payload-1");
+  expect(await hasText(h, c, "dropped payload-1")).toBe(true);
 
   await h.ok(c, "nav.goto", { url: `${h.A}/dblclick.html` });
   const s2 = view(await h.ok(c, "page.snapshot")).snap;
   await h.ok(c, "act.dblclick", { ref: refIn(s2, /Double-click target/) });
-  expect(await text(h, c)).toContain("double clicked");
+  expect(await hasText(h, c, "double clicked")).toBe(true);
 });
 
 test("an action that navigates reports navigation and no snapshotDiff", async ({ h }) => {
@@ -136,26 +137,6 @@ test("an action that navigates reports navigation and no snapshotDiff", async ({
   expect(r.json.navigation.url).toContain("/form.html");
   expect(r.json.navigation.title).toBe("Sign up");
   expect(r.json.snapshotDiff).toBeUndefined();
-  // the baseline was cleared: the next diff=true snapshot is a full one
-  expect(view(await h.ok(c, "page.snapshot", { diff: true })).json.full).toBe(true);
-});
-
-test("D28: an action that opens a dialog returns dialogs; other commands get DIALOG_OPEN", async ({ h }) => {
-  await h.trustFixtures();
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/dialog.html` });
-  const s = view(await h.ok(c, "page.snapshot")).snap;
-  const r = view(await h.ok(c, "act.click", { ref: refIn(s, /Ask confirm/) }));
-  expect(r.json.dialogs?.[0]?.type).toBe("confirm");
-  expect(r.json.dialogs?.[0]?.message).toBe("Really do it?");
-  expect(r.json.snapshotDiff).toBeUndefined();
-  for (const [tool, args] of [["page.snapshot", {}], ["act.click", { ref: refIn(s, /Ask prompt/) }], ["page.find", { by: "text", value: "x" }]] as const) {
-    const blocked = await h.call(c, tool, args);
-    expect(blocked.text, tool).toContain("DIALOG_OPEN");
-  }
-  await h.ok(c, "dialog.handle", { action: "accept" });
-  // the dialog is gone: commands work again (accept vs dismiss is dialog.handle's own test)
-  expect(await text(h, c)).toMatch(/confirmed|cancelled/);
 });
 
 test("background tab: type/press/click work without focusing the tab (headless too)", async ({ h }) => {
@@ -172,7 +153,7 @@ test("background tab: type/press/click work without focusing the tab (headless t
   await h.ok(c, "act.press", { tabId: bg, key: "End" });
   await h.ok(c, "act.click", { tabId: bg, ref: refIn(s, /radio "Pro"/) });
   expect(Date.now() - t0).toBeLessThan(15000);
-  expect(view(await h.ok(c, "page.text", { tabId: bg })).all).toContain("Nickname preview: bg typing");
+  expect((await h.call(c, "nav.wait", { tabId: bg, for: "text", value: "Nickname preview: bg typing", timeout: 3000 })).isError).toBe(false);
   const active = await h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).active, bg);
   expect(active).toBe(false);
 });
