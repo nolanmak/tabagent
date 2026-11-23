@@ -1,0 +1,6 @@
+<!doctype html><html><head><title>child</title></head><body style="margin:20px">
+<script>const which = new URLSearchParams(location.search).get('which');</script>
+<label>Frame input <input id="fi"></label>
+<button id="fb" onclick="this.textContent='pressed in '+which">Frame button</button>
+<script>document.getElementById('fb').textContent = 'Frame button ' + which;</script>
+</body></html>

@@ -12,7 +12,7 @@ mkdirSync(out, { recursive: true });
 
 const common = { bundle: true, target: "chrome125", logLevel: "warning", sourcemap: false, legalComments: "none" };
 
-// pagelib first: it is inlined as a string into CDP isolated worlds
+// pagelib first: it is both a file (lite mode) and an inlined string (CDP isolated worlds)
 await build({ ...common, entryPoints: [join(here, "src/pagelib/index.ts")], outfile: join(out, "pagelib.js"), format: "iife" });
 const pagelibSrc = readFileSync(join(out, "pagelib.js"), "utf8");
 

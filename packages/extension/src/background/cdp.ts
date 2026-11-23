@@ -1,5 +1,5 @@
-// chrome.debugger wrapper: one CdpTab per attached tab. Tracks in-flight
-// requests (networkidle), dialogs, navigation lifecycle and isolated worlds.
+// chrome.debugger wrapper: one CdpTab per attached tab. Tracks child (OOPIF)
+// sessions, network, console, dialogs, navigation lifecycle and isolated worlds.
 import { TabAgentError } from "@tabagent/protocol";
 import { onCdpEvent, setDialogSender, tabState } from "./capture";
 import { taErr } from "./errors";
@@ -23,6 +23,13 @@ export interface NetEntry {
   finished?: boolean;
   ts: number;
   encodedDataLength?: number;
+}
+
+export interface ConsoleEntry {
+  level: string;
+  text: string;
+  url?: string;
+  ts: number;
 }
 
 export interface DialogInfo {
@@ -101,6 +108,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   if (t) {
     t.attached = false;
     t.contexts.clear();
+    t.children.clear();
     t.loaders.clear();
     if (reason === "canceled_by_user") t.userDetached = true;
     tabState(source.tabId).dialogs.onClosed();
@@ -112,8 +120,10 @@ export class CdpTab {
   attached = false;
   userDetached = false;
   attaching: Promise<void> | null = null;
+  children = new Map<string, { targetId: string; url: string }>(); // sessionId -> target
   contexts = new Map<string, number>(); // frameKey -> isolated contextId
   network = new Map<string, NetEntry>();
+  consoleLog: ConsoleEntry[] = [];
   /** The open JS dialog, owned by the dialog state machine in capture.ts (D28). */
   get dialog(): DialogInfo | null {
     return tabState(this.tabId).dialogs.current();
@@ -187,6 +197,7 @@ export class CdpTab {
     }
     this.attached = true;
     this.contexts.clear();
+    this.children.clear();
     await this.enableDomains(undefined);
     const tree = await this.send<any>("Page.getFrameTree", {});
     this.mainFrameId = tree.frameTree.frame.id;
@@ -201,7 +212,9 @@ export class CdpTab {
       this.send("Runtime.enable", {}, sessionId),
       this.send("Network.enable", {}, sessionId),
       this.send("DOM.enable", {}, sessionId),
+      this.send("Log.enable", {}, sessionId).catch(() => {}),
     ]);
+    await this.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, sessionId).catch(() => {});
     await this.send("DOM.getDocument", { depth: 0 }, sessionId).catch(() => {});
   }
 
@@ -230,6 +243,20 @@ export class CdpTab {
     }
     onCdpEvent(this.tabId, method, p, sessionId);
     switch (method) {
+      case "Target.attachedToTarget": {
+        const sid = p.sessionId as string;
+        this.children.set(sid, { targetId: p.targetInfo.targetId, url: p.targetInfo.url });
+        // The frame's document request was handed to the new process; stop waiting on it here.
+        for (const [k] of this.inflight) if (this.network.get(k)?.frameId === p.targetInfo.targetId) this.inflight.delete(k);
+        if (p.targetInfo.type === "iframe" || p.targetInfo.type === "page") this.enableDomains(sid).catch(() => {});
+        else this.send("Runtime.runIfWaitingForDebugger", {}, sid).catch(() => {});
+        break;
+      }
+      case "Target.detachedFromTarget":
+        this.children.delete(p.sessionId);
+        for (const k of [...this.loaders.keys()]) if (k.startsWith(p.sessionId + "|")) this.loaders.delete(k);
+        for (const k of [...this.contexts.keys()]) if (k.startsWith(p.sessionId + "|")) this.contexts.delete(k);
+        break;
       case "Page.frameNavigated":
         this.loaders.set(`${sessionId ?? ""}|${p.frame.id}`, p.frame.loaderId);
         if (!p.frame.parentId && !sessionId) {
@@ -258,6 +285,20 @@ export class CdpTab {
       case "Runtime.executionContextDestroyed":
         for (const [k, v] of this.contexts) if (v === p.executionContextId && k.startsWith(`${sessionId ?? ""}|`)) this.contexts.delete(k);
         break;
+      case "Runtime.consoleAPICalled":
+        this.pushConsole({
+          level: p.type,
+          text: (p.args ?? []).map((a: any) => (a.value !== undefined ? (typeof a.value === "string" ? a.value : JSON.stringify(a.value)) : (a.description ?? a.unserializableValue ?? a.type))).join(" "),
+          url: p.stackTrace?.callFrames?.[0]?.url,
+          ts: Date.now(),
+        });
+        break;
+      case "Runtime.exceptionThrown":
+        this.pushConsole({ level: "error", text: p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text ?? "exception", url: p.exceptionDetails?.url, ts: Date.now() });
+        break;
+      case "Log.entryAdded":
+        this.pushConsole({ level: p.entry.level, text: p.entry.text, url: p.entry.url, ts: Date.now() });
+        break;
       case "Network.requestWillBeSent": {
         const key = `${sessionId ?? ""}:${p.requestId}`;
         const prev = this.network.get(key);
@@ -282,6 +323,13 @@ export class CdpTab {
         break;
       }
       case "Network.responseReceived": {
+        if (p.type === "Document") {
+          // An OOPIF's document request is announced in the parent session but answered in the child.
+          for (const [k] of this.inflight) {
+            const ne = this.network.get(k);
+            if (ne && ne.resourceType === "Document" && ne.url === p.response.url && k !== `${sessionId ?? ""}:${p.requestId}`) this.inflight.delete(k);
+          }
+        }
         const e = this.network.get(`${sessionId ?? ""}:${p.requestId}`);
         if (e) {
           e.status = p.response.status;
@@ -303,6 +351,8 @@ export class CdpTab {
           e.encodedDataLength = p.encodedDataLength;
         }
         this.inflight.delete(key);
+        // OOPIF document requests start in the parent session and finish in the child.
+        for (const k of [...this.inflight.keys()]) if (k.endsWith(`:${p.requestId}`)) this.inflight.delete(k);
         this.lastNetActivity = Date.now();
         break;
       }
@@ -310,6 +360,11 @@ export class CdpTab {
         this.dragData = p.data;
         break;
     }
+  }
+
+  private pushConsole(e: ConsoleEntry) {
+    this.consoleLog.push(e);
+    if (this.consoleLog.length > 300) this.consoleLog.splice(0, 100);
   }
 
   waitEvent(pred: Waiter["pred"], timeoutMs: number): Promise<{ method: string; params: any; sessionId?: string } | null> {
@@ -349,23 +404,93 @@ export class CdpTab {
   async frames(): Promise<FrameInfo[]> {
     await this.ensure();
     const out: FrameInfo[] = [];
-    const visit = async (node: any, parentKey?: string) => {
+    const childByTarget = new Map<string, string>();
+    for (const [sid, c] of this.children) childByTarget.set(c.targetId, sid);
+    const visit = async (sessionId: string | undefined, node: any, parentKey?: string, isRootOfSession = false) => {
       const fid = node.frame.id as string;
-      const key = `|${fid}`;
+      let sid = sessionId;
+      let key: string;
+      if (!isRootOfSession && childByTarget.has(fid)) {
+        // Out-of-process iframe: owned by a child session.
+        const childSid = childByTarget.get(fid)!;
+        let owner: number | undefined;
+        try {
+          owner = (await this.send<any>("DOM.getFrameOwner", { frameId: fid }, sessionId)).backendNodeId;
+        } catch {
+          /* ignore */
+        }
+        let childTree: any;
+        try {
+          childTree = (await this.send<any>("Page.getFrameTree", {}, childSid)).frameTree;
+        } catch {
+          return;
+        }
+        key = `${childSid}|${fid}`;
+        out.push({ key, sessionId: childSid, frameId: fid, parentKey, url: childTree.frame.url, ownerBackendNodeId: owner, loaderId: childTree.frame.loaderId });
+        for (const ch of childTree.childFrames ?? []) await visit(childSid, ch, key);
+        return;
+      }
+      key = `${sid ?? ""}|${fid}`;
       let owner: number | undefined;
       if (parentKey) {
         try {
-          owner = (await this.send<any>("DOM.getFrameOwner", { frameId: fid })).backendNodeId;
+          owner = (await this.send<any>("DOM.getFrameOwner", { frameId: fid }, sid)).backendNodeId;
         } catch {
           /* ignore */
         }
       }
-      out.push({ key, frameId: fid, parentKey, url: node.frame.url, ownerBackendNodeId: owner, loaderId: node.frame.loaderId });
-      for (const ch of node.childFrames ?? []) await visit(ch, key);
+      out.push({ key, sessionId: sid, frameId: fid, parentKey, url: node.frame.url, ownerBackendNodeId: owner, loaderId: node.frame.loaderId });
+      for (const ch of node.childFrames ?? []) await visit(sid, ch, key);
     };
     const tree = (await this.send<any>("Page.getFrameTree", {})).frameTree;
     this.mainFrameId = tree.frame.id;
-    await visit(tree);
+    await visit(undefined, tree, undefined, true);
+    // Out-of-process iframes are not listed in the parent's frame tree: add each
+    // child session, locating its owner <iframe> and the frame that contains it.
+    const seen = new Set(out.map((f) => f.frameId));
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const [childSid, c] of this.children) {
+        if (seen.has(c.targetId)) continue;
+        let childTree: any;
+        try {
+          childTree = (await this.send<any>("Page.getFrameTree", {}, childSid)).frameTree;
+        } catch {
+          continue;
+        }
+        // owner lives in some already-known session
+        const sessions = [undefined, ...new Set(out.map((f) => f.sessionId).filter(Boolean))] as (string | undefined)[];
+        let owner: number | undefined;
+        let ownerSid: string | undefined;
+        for (const sid of sessions) {
+          try {
+            owner = (await this.send<any>("DOM.getFrameOwner", { frameId: c.targetId }, sid)).backendNodeId;
+            ownerSid = sid;
+            break;
+          } catch {
+            /* not in this session */
+          }
+        }
+        if (owner == null) continue;
+        let parentKey: string | undefined;
+        for (const f of out.filter((x) => x.sessionId === ownerSid)) {
+          try {
+            const ctx = await this.isolatedContext(f.key);
+            await this.send("DOM.resolveNode", { backendNodeId: owner, executionContextId: ctx }, ownerSid);
+            parentKey = f.key;
+            break;
+          } catch {
+            /* owner not in this frame */
+          }
+        }
+        const key = `${childSid}|${c.targetId}`;
+        out.push({ key, sessionId: childSid, frameId: c.targetId, parentKey: parentKey ?? out[0].key, url: childTree.frame.url, ownerBackendNodeId: owner, loaderId: childTree.frame.loaderId });
+        seen.add(c.targetId);
+        for (const ch of childTree.childFrames ?? []) await visit(childSid, ch, key);
+        progress = true;
+      }
+    }
     for (const f of out) if (f.loaderId) this.loaders.set(f.key, f.loaderId);
     return out;
   }

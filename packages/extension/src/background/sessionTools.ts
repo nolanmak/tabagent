@@ -99,7 +99,8 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
     for (const id of c.s.tabIds) {
       try {
         const t = await tabInfo(id);
-        tabs.push({ tabId: id, ...t, active: id === c.s.active, attached: c.s.attached.includes(id) });
+        const drv = await driverFor(id, t.url);
+        tabs.push({ tabId: id, ...t, mode: drv.kind, active: id === c.s.active, attached: c.s.attached.includes(id) });
       } catch {
         /* gone */
       }

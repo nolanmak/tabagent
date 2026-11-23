@@ -15,7 +15,11 @@ export interface ToolLike {
  * this map is the fallback while the registry still carries booleans.
  */
 export const STATIC_SENSITIVE: Record<string, SensitiveCategory> = {
+  "js.eval": "c",
   "nav.wait": "c", // only when for=fn
+  "cookies.get": "d",
+  "storage.get": "d",
+  "network.get": "d",
   "act.upload": "e",
   "downloads.read": "e",
   "tabs.attach": "f",
@@ -32,7 +36,7 @@ const TABS_ACTIONS: Record<string, { level: Level | "none"; sensitive?: Sensitiv
 const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f"]);
 
 /** Where the URL being authorized comes from. */
-export type UrlSource = "tab" | "param" | "download" | "attach-target" | "none";
+export type UrlSource = "tab" | "param" | "tab-or-param" | "download" | "attach-target" | "none";
 
 export interface Requirements {
   action?: string;
@@ -65,6 +69,7 @@ export function requirementsFor(tool: ToolLike, params: Record<string, unknown>)
   if (tool.name === "nav.goto") return { level: level ?? "act", sensitive, urlSource: "param", needsTab: false, tabOptional: true };
   if (tool.name === "downloads.read") return { level: null, sensitive: sensitive ?? "e", urlSource: "download", needsTab: false };
   if (NO_TAB.has(tool.name)) return { level: null, sensitive, urlSource: "none", needsTab: false };
+  if (tool.name === "cookies.get") return { level, sensitive, urlSource: "tab-or-param", needsTab: true };
   return { level, sensitive, urlSource: level || sensitive ? "tab" : "none", needsTab: true };
 }
 

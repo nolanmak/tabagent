@@ -230,7 +230,7 @@ chrome.commands.onCommand.addListener((c) => {
 // ---------------------------------------------------------------------------
 // UI API (side panel + prompt window). Only our own extension pages may call it.
 // ---------------------------------------------------------------------------
-const UI_KEYS = ["sites", "denylist", "devAllowSensitive", "onSessionEnd", "beforeUnload", "showOverlay"] as const;
+const UI_KEYS = ["sites", "denylist", "devAllowSensitive", "onSessionEnd", "beforeUnload", "showOverlay", "forceLite", "liteSites"] as const;
 
 function publicSettings(s: Settings) {
   const { secret: _s, autoAcceptBeforeUnload: _a, sensitiveAllowed: _x, ...rest } = s;
@@ -331,7 +331,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   inflight: () => router.inflightCount(),
   badge: async () => ({ text: await chrome.action.getBadgeText({}), state: lastBadge }),
   stoppedTabs,
-  debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
+  debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
   attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
 };
 export type { Status };

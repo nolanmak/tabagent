@@ -112,12 +112,22 @@ describe("gate: requireSensitive", () => {
 });
 
 describe("settings module", () => {
-  it("paused lives in storage.session", async () => {
-    await Set_.updateSettings({ paused: true });
+  it("paused lives in storage.session; liteForUrl honours per-origin lite", async () => {
+    await Set_.updateSettings({ paused: true, sites: { [A]: { lite: true } } });
     expect((await fake.chrome.storage.session.get("paused")).paused).toBe(true);
     expect((await fake.chrome.storage.local.get("settings")).settings.paused).toBeUndefined();
     expect(await Set_.isPaused()).toBe(true);
+    expect(await Set_.liteForUrl(`${A}/x`)).toBe(true);
+    expect(await Set_.liteForUrl("https://b.example/")).toBe(false);
+    expect(await Set_.liteForUrl("about:blank")).toBe(false);
+    const s = await Set_.getSettings();
+    expect(s.liteSites).toContain("a.example");
     await Set_.updateSettings({ paused: false, autoAcceptBeforeUnload: false });
     expect((await Set_.getSettings()).beforeUnload).toBe("dismiss");
+    await Set_.updateSettings({ forceLite: true });
+    expect(await Set_.liteForUrl("https://b.example/")).toBe(true);
+    await Set_.updateSettings({ forceLite: false, liteSites: ["*.c.example"] });
+    expect(await Set_.liteForUrl("https://x.c.example/")).toBe(true);
+    await Set_.updateSettings({ liteSites: [] });
   });
 });

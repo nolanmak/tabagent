@@ -89,6 +89,7 @@ function renderSettings() {
   ($("onSessionEnd") as HTMLSelectElement).value = s.onSessionEnd;
   ($("beforeUnload") as HTMLSelectElement).value = s.beforeUnload;
   ($("showOverlay") as HTMLInputElement).checked = s.showOverlay;
+  ($("forceLite") as HTMLInputElement).checked = s.forceLite;
   ($("devAllowSensitive") as HTMLInputElement).checked = s.devAllowSensitive;
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
   const rows = Object.entries(s.sites as Record<string, any>);
@@ -97,9 +98,9 @@ function renderSettings() {
       .map(([o, e]) => {
         const pol = e.policy ?? "ask";
         const pre = CATS.map((c) => `<label class="chip"><input type="checkbox" data-pre="${c}" data-origin="${esc(o)}" ${e.preapproved?.[c] ? "checked" : ""}/>${CAT_LABEL[c]}</label>`).join("");
-        return `<tr><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td class="pre">${pre}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
+        return `<tr><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
       })
-      .join("") || `<tr><td colspan="4" class="muted">No site settings yet.</td></tr>`;
+      .join("") || `<tr><td colspan="5" class="muted">No site settings yet.</td></tr>`;
   $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
 }
 
@@ -172,7 +173,7 @@ $("sessions").addEventListener("click", (e) => {
 const patch = (p: unknown) => send({ type: "ui.settings", patch: p }).then(refresh);
 const sites = () => structuredClone(state.settings.sites ?? {}) as Record<string, any>;
 for (const id of ["onSessionEnd", "beforeUnload"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLSelectElement).value }));
-for (const id of ["showOverlay", "devAllowSensitive"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
+for (const id of ["showOverlay", "forceLite", "devAllowSensitive"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
 
 $("sites").addEventListener("change", (e) => {
   const el = e.target as HTMLInputElement | HTMLSelectElement;
@@ -183,6 +184,9 @@ $("sites").addEventListener("change", (e) => {
   if ("policy" in el.dataset) {
     if (el.value === "ask") delete entry.policy;
     else entry.policy = el.value;
+  } else if ("lite" in el.dataset) {
+    if ((el as HTMLInputElement).checked) entry.lite = true;
+    else delete entry.lite;
   } else if (el.dataset.pre) {
     entry.preapproved = { ...(entry.preapproved ?? {}) };
     if ((el as HTMLInputElement).checked) entry.preapproved[el.dataset.pre] = true;

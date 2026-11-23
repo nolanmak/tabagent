@@ -1,10 +1,11 @@
-// pagelib: DOM-side helpers. Runs in a CDP isolated world and is installed as
+// pagelib: DOM-side helpers. Runs in an *isolated world* (CDP isolated world in
+// debugger mode, the content-script world in lite mode) and is installed as
 // globalThis.__ta. Functions that return elements return { value, elements } and
 // reference elements inside `value` as { el: <index> }; the background maps those
 // indexes to refs.
 
 import { clickGateInfo, clickSensitivity, comboOptions, describeFields, fieldInfo, isFormControl, keyGateInfo, keySensitivity, requestSubmit, resolveFileInput, submitInfo } from "./forms";
-import { extractLinks, extractSchema, extractTable, markdown, nextControl, text } from "./extract";
+import { extractLinks, extractSchema, extractTable, markdown, nextControl, storage, text } from "./extract";
 
 export type El = Element;
 export interface Ret<T = unknown> {
@@ -12,6 +13,29 @@ export interface Ret<T = unknown> {
   elements: El[];
 }
 
+
+// ---------------------------------------------------------------------------
+// Element registry (lite mode): numeric ids that stand in for backendNodeIds.
+// DOC_ID identifies this document instance; a new document gets a new pagelib
+// instance and a new DOC_ID, which makes refs from the old document stale.
+// ---------------------------------------------------------------------------
+const reg = new Map<number, WeakRef<El>>();
+const rev = new WeakMap<El, number>();
+let regN = 0;
+const DOC_ID = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+function liteId(el: El): number {
+  let r = rev.get(el);
+  if (!r) {
+    r = ++regN;
+    rev.set(el, r);
+    reg.set(r, new WeakRef(el));
+  }
+  return r;
+}
+function byLiteId(id: number): El | null {
+  const el = reg.get(id)?.deref();
+  return el && el.isConnected ? el : null;
+}
 
 // ---------------------------------------------------------------------------
 // Tree walking (pierces open shadow roots)
@@ -276,6 +300,26 @@ export function describeEl(el: El): string {
   const name = nameOf(el);
   return `<${tag}${id}${cls}>${name ? ` "${name.slice(0, 40)}"` : ""}`;
 }
+
+const INTERACTIVE = new Set([
+  "button",
+  "link",
+  "textbox",
+  "searchbox",
+  "combobox",
+  "listbox",
+  "option",
+  "checkbox",
+  "radio",
+  "switch",
+  "slider",
+  "spinbutton",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "tab",
+  "treeitem",
+]);
 
 // ---------------------------------------------------------------------------
 // Find
@@ -571,8 +615,22 @@ export function deepActive(): El | null {
 }
 
 // ---------------------------------------------------------------------------
-// Driver support: auto-wait observations, find, DOM quiet.
+// Driver support: lite-mode DOM walker (AX-shaped output, rendered by the same
+// pure renderer as CDP trees), auto-wait observations, find, DOM quiet.
 // ---------------------------------------------------------------------------
+interface LiteAXNode {
+  nodeId: string;
+  ignored?: boolean;
+  role?: { value: string };
+  name?: { value: string };
+  value?: { value: string };
+  properties?: { name: string; value: { value: unknown } }[];
+  childIds?: string[];
+  parentId?: string;
+  backendDOMNodeId?: number;
+}
+
+const LITE_ROLE: Record<string, string> = { iframe: "Iframe", presentation: "none", img: "image" };
 const SKIP_WALK = new Set(["script", "style", "noscript", "template", "head", "link", "meta"]);
 
 function isOverlay(el: El): boolean {
@@ -592,6 +650,73 @@ function isSensitiveInput(el: El): boolean {
 function sensitiveInputs(self: El | null): Ret {
   const els = Array.from(walk((self ?? document) as Node)).filter(isSensitiveInput);
   return { value: els.map((_e, i) => ({ el: i })), elements: els };
+}
+
+function domAxTree(self: El | null) {
+  const nodes: LiteAXNode[] = [];
+  const sensitive: number[] = [];
+  let n = 0;
+  const add = (node: Omit<LiteAXNode, "nodeId">, parent?: LiteAXNode): LiteAXNode => {
+    const x: LiteAXNode = { nodeId: String(++n), ...node, ...(parent ? { parentId: parent.nodeId } : {}) };
+    nodes.push(x);
+    if (parent) (parent.childIds ??= []).push(x.nodeId);
+    return x;
+  };
+  const visitChildren = (container: Node, parent: LiteAXNode) => {
+    const kids: Node[] = [];
+    if (container instanceof Element && container.shadowRoot) kids.push(...Array.from(container.shadowRoot.childNodes));
+    kids.push(...Array.from(container.childNodes));
+    for (const k of kids) visit(k, parent);
+  };
+  const visit = (node: Node, parent: LiteAXNode) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = norm(node.textContent);
+      if (t) add({ role: { value: "StaticText" }, name: { value: t } }, parent);
+      return;
+    }
+    if (!(node instanceof Element)) return;
+    const el = node;
+    const tag = el.tagName.toLowerCase();
+    if (SKIP_WALK.has(tag) || isOverlay(el) || el.getAttribute("aria-hidden") === "true") return;
+    if (el instanceof HTMLElement && el.hidden && tag !== "option") return;
+    const st = getComputedStyle(el);
+    if (st.display === "none" && tag !== "option") return;
+    const hiddenVis = st.visibility === "hidden";
+    let role = roleOf(el);
+    if (tag === "select") role = (el as HTMLSelectElement).multiple || (el as HTMLSelectElement).size > 1 ? "listbox" : "combobox";
+    const name = ["generic", "none", "presentation", "paragraph", "listitem", "row"].includes(role) ? "" : nameOf(el);
+    const props: { name: string; value: { value: unknown } }[] = [];
+    const ch = getChecked(el);
+    if (ch !== null && ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)) props.push({ name: "checked", value: { value: String(ch) } });
+    if (el.getAttribute("aria-expanded")) props.push({ name: "expanded", value: { value: el.getAttribute("aria-expanded") === "true" } });
+    if (el.getAttribute("aria-selected") === "true" || (el instanceof HTMLOptionElement && el.selected && role === "option")) props.push({ name: "selected", value: { value: true } });
+    if (isDisabled(el)) props.push({ name: "disabled", value: { value: true } });
+    if ((el as HTMLInputElement).required) props.push({ name: "required", value: { value: true } });
+    if ((el as HTMLInputElement).readOnly && (tag === "input" || tag === "textarea")) props.push({ name: "readonly", value: { value: true } });
+    if (role === "heading") props.push({ name: "level", value: { value: Number(el.tagName.match(/^H(\d)$/)?.[1] ?? el.getAttribute("aria-level") ?? 2) } });
+    if (el.hasAttribute("tabindex") && (el as HTMLElement).tabIndex >= 0) props.push({ name: "focusable", value: { value: true } });
+    let value: string | undefined;
+    if (tag === "select") value = (el as HTMLSelectElement).selectedOptions[0]?.text.trim() ?? "";
+    else if (isEditable(el) || ["textbox", "searchbox", "combobox", "spinbutton", "slider"].includes(role)) value = valueOf(el);
+    const ax = add(
+      {
+        ...(hiddenVis ? { ignored: true } : {}),
+        role: { value: LITE_ROLE[role] ?? role },
+        ...(name ? { name: { value: name } } : {}),
+        ...(value !== undefined ? { value: { value } } : {}),
+        ...(props.length ? { properties: props } : {}),
+        backendDOMNodeId: liteId(el),
+      },
+      parent,
+    );
+    if (isSensitiveInput(el)) sensitive.push(ax.backendDOMNodeId!);
+    if (tag === "iframe") return;
+    visitChildren(el, ax);
+  };
+  const root = add({ role: { value: self ? "generic" : "RootWebArea" }, name: { value: document.title }, ...(self ? { backendDOMNodeId: liteId(self) } : {}) });
+  if (self) visitChildren(self, root);
+  else if (document.body) visitChildren(document.body, root);
+  return { nodes, sensitive, docId: DOC_ID, url: location.href, title: document.title };
 }
 
 /** One auto-wait observation (frame-local CSS px). */
@@ -690,6 +815,80 @@ function rectsOf(_self: unknown, ...els: El[]) {
     const r = e.getBoundingClientRect();
     return { x: r.left, y: r.top, w: r.width, h: r.height };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic input (lite mode only)
+// ---------------------------------------------------------------------------
+function syntheticClick(el: El, opts: { button?: number; clickCount?: number } = {}) {
+  const r = el.getBoundingClientRect();
+  const init: MouseEventInit = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: opts.button ?? 0, view: window };
+  el.dispatchEvent(new PointerEvent("pointerdown", init));
+  el.dispatchEvent(new MouseEvent("mousedown", init));
+  (el as HTMLElement).focus?.();
+  el.dispatchEvent(new PointerEvent("pointerup", init));
+  el.dispatchEvent(new MouseEvent("mouseup", init));
+  el.dispatchEvent(new MouseEvent("click", { ...init, detail: 1 }));
+  if ((opts.clickCount ?? 1) >= 2) el.dispatchEvent(new MouseEvent("dblclick", { ...init, detail: 2 }));
+  return true;
+}
+
+/** Lite mode drag: synthetic HTML5 drag events from `el` to the element with lite id `toId`. */
+function syntheticDragTo(el: El, toId: number) {
+  const to = byLiteId(toId);
+  if (!to) throw new Error("drop target is no longer in the page");
+  const dt = new DataTransfer();
+  const at = (e: El) => {
+    const r = e.getBoundingClientRect();
+    return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+  };
+  el.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(el) }));
+  to.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(to) }));
+  to.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(to) }));
+  to.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(to) }));
+  el.dispatchEvent(new DragEvent("dragend", { bubbles: true, composed: true, dataTransfer: dt, ...at(el) }));
+  return true;
+}
+
+function syntheticHover(el: El) {
+  const r = el.getBoundingClientRect();
+  const init: MouseEventInit = { bubbles: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+  el.dispatchEvent(new PointerEvent("pointerover", init));
+  el.dispatchEvent(new MouseEvent("mouseover", init));
+  el.dispatchEvent(new MouseEvent("mouseenter", init));
+  el.dispatchEvent(new MouseEvent("mousemove", init));
+  return true;
+}
+
+function syntheticKey(el: El | null, key: string) {
+  const target = el ?? deepActive() ?? document.body;
+  const init: KeyboardEventInit = { key, bubbles: true, cancelable: true, composed: true };
+  const down = target.dispatchEvent(new KeyboardEvent("keydown", init));
+  if (down && key === "Enter") {
+    const f = (target as HTMLInputElement).form;
+    if (f && target instanceof HTMLInputElement) f.requestSubmit();
+    else if (target instanceof HTMLElement && (target.tagName === "BUTTON" || target.tagName === "A")) target.click();
+  }
+  target.dispatchEvent(new KeyboardEvent("keyup", init));
+  return true;
+}
+
+function syntheticType(el: El | null, s: string) {
+  const target = (el ?? deepActive()) as HTMLInputElement | null;
+  if (!target) throw new Error("No focused element to type into");
+  target.focus();
+  for (const ch of s) {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: ch, bubbles: true, composed: true }));
+    if ("value" in target) {
+      nativeSetter(target).call(target, target.value + ch);
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: ch }));
+    } else if ((target as HTMLElement).isContentEditable) {
+      document.execCommand("insertText", false, ch);
+    }
+    target.dispatchEvent(new KeyboardEvent("keyup", { key: ch, bubbles: true, composed: true }));
+  }
+  fire(target, "change");
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -810,8 +1009,27 @@ export function mapEls(v: unknown, refs: (string | null)[]): unknown {
   return v;
 }
 
+/**
+ * Lite mode entry: resolve an element id from this document, run `name`, and
+ * return element ids for returned elements. A docId from another document, or
+ * an element that's gone, reports `stale`.
+ */
+async function callLite(_self: unknown, name: string, id: number | null, docId: string | null, args: unknown[]) {
+  if (docId && docId !== DOC_ID) return { stale: "navigated", docId: DOC_ID };
+  let self: El | null = null;
+  if (id != null) {
+    self = byLiteId(id);
+    if (!self) return { stale: "gone", docId: DOC_ID };
+  }
+  const r = await invoke(self, name, args);
+  return { value: r.value, ids: r.elements.map((e) => (e ? liteId(e) : -1)), docId: DOC_ID };
+}
+
 const api = {
   invoke: (self: El | null, name: string, args: unknown[]) => invoke(self, name, args),
+  callLite,
+  // lite registry
+  docId: () => DOC_ID,
   // queries
   find,
   info,
@@ -849,10 +1067,12 @@ const api = {
   nextControl,
   markdown,
   text,
+  storage,
   pageState,
   waitSelector,
   waitText,
   // driver (snapshot, auto-wait, find, frames)
+  domAxTree,
   sensitiveInputs,
   observe,
   findNodes,
@@ -860,6 +1080,12 @@ const api = {
   ownerMetrics,
   rectsOf,
   hideOverlay,
+  // lite mode
+  syntheticDragTo,
+  syntheticClick,
+  syntheticHover,
+  syntheticKey,
+  syntheticType,
   // overlay
   showActivity,
   drawMarks,

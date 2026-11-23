@@ -18,6 +18,7 @@ export const fileHandlers: Record<string, Handler> = {
       c,
       "act",
       async (t) => {
+        if (t.drv.kind !== "cdp") throw new TabAgentError("UNSUPPORTED", "act.upload is not available in lite mode");
         const tab = cdp(t.drv).tab;
         const ref = c.p.ref as string;
         const timeout = c.p.timeout ?? TIMEOUTS.action;

@@ -1,17 +1,18 @@
 // CDP driver over a fake CDP tab: input sequences, staleness, DEBUGGER_DETACHED,
-// dialogs, screenshot planning, frames, find.
+// dialogs, screenshot planning, denied frames, find.
 import { describe, expect, it, vi } from "vitest";
 import { TabAgentError } from "@tabagent/protocol";
 import type { Observation } from "../src/background/autowait";
 import { memoryStore, RefTable } from "../src/background/refs";
 import { loadAx } from "./helpers";
 
+const denied = new Set<string>();
 vi.mock("../src/background/permissions", () => ({
-  effectivePolicy: async (url: string) => ({ origin: new URL(url).origin, policy: "full" }),
+  effectivePolicy: async (url: string) => ({ origin: new URL(url).origin, policy: denied.has(new URL(url).origin) ? "deny" : "full" }),
   requireSite: async () => {},
   requireSensitive: async () => {},
 }));
-vi.mock("../src/background/settings", () => ({ getSettings: async () => ({ showOverlay: false }) }));
+vi.mock("../src/background/settings", () => ({ getSettings: async () => ({ showOverlay: false }), liteForUrl: async () => false }));
 vi.mock("../src/background/refstore", async () => {
   const { Baselines } = await import("../src/background/diff");
   const { RefTable, memoryStore } = await import("../src/background/refs");
@@ -232,8 +233,8 @@ describe("CdpDriver screenshot (#8)", () => {
   });
 });
 
-describe("CdpDriver frames and find (#26)", () => {
-  it("child frame clicks are translated by the owner iframe's offset", async () => {
+describe("CdpDriver frames (#19) and find (#26)", () => {
+  it("child frame clicks are translated by the owner iframe's offset; denied frames are placeholders", async () => {
     const child = loadAx("index");
     const ownerId = 777;
     const main = loadAx("index").nodes;
@@ -251,6 +252,14 @@ describe("CdpDriver frames and find (#26)", () => {
     await f.drv.click(refs[1]);
     const press = f.input().find((c) => c.p.type === "mousePressed")!;
     expect([press.p.x, press.p.y]).toEqual([100 + 2 + 60, 200 + 2 + 20]);
+
+    denied.add("http://child.test");
+    const s2 = await f.drv.snapshot({});
+    expect(s2.text).toContain('- iframe "Child" (content hidden: http://child.test is denied by site policy)');
+    expect(s2.shown.some((x) => x.frameKey === "S1|child")).toBe(false);
+    const all = await f.drv.callAllFrames("findNodes", [{}]);
+    expect(all.map((x) => x.frameKey)).toEqual(["|main"]);
+    denied.clear();
   });
 
   it("find mints refs from the shared table (same ref as the snapshot)", async () => {

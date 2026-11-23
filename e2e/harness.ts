@@ -135,13 +135,17 @@ export class Harness {
   /**
    * Set site policies. `policies` maps origin -> "read"|"act"|"full"|"deny" (written to the
    * `sites` settings shape, contract §7); `extra` is any other settings patch.
+   * Legacy `extra.liteSites` (host globs) marks matching fixture origins lite.
    */
   async setPolicies(policies: Record<string, string>, extra: Record<string, unknown> = {}) {
-    const { sensitiveAllowed: _legacy, sites: extraSites, ...rest } = extra as { sensitiveAllowed?: unknown; sites?: Record<string, unknown> };
+    const { liteSites, sensitiveAllowed: _legacy, sites: extraSites, ...rest } = extra as { liteSites?: string[]; sensitiveAllowed?: unknown; sites?: Record<string, unknown> };
     const sites: Record<string, Record<string, unknown>> = {};
     for (const [o, p] of Object.entries(policies)) if (p !== "ask") sites[o] = { policy: p };
+    for (const g of liteSites ?? []) {
+      for (const o of [this.A, this.B]) if (new URL(o).hostname === g) sites[o] = { ...sites[o], lite: true };
+    }
     for (const [o, e] of Object.entries(extraSites ?? {})) sites[o] = { ...sites[o], ...(e as object) };
-    await this.sw.evaluate(async ([s, e]) => (globalThis as any).__tabagent.updateSettings({ sites: s, ...e }), [sites, rest] as const);
+    await this.sw.evaluate(async ([s, e]) => (globalThis as any).__tabagent.updateSettings({ sites: s, liteSites: [], ...e }), [sites, rest] as const);
   }
 
   /**

@@ -1,10 +1,12 @@
-// Per-tab capture state fed by CDP events: the dialog state machine (D28) and
-// download notes (D31). Thin adapter over ../pure.
+// Per-tab capture state fed by CDP events: network/console ring buffers (D35),
+// the dialog state machine (D28) and download notes (D31). Thin adapter over ../pure.
+import { Capture } from "../pure/capture";
 import { DialogState, type BeforeUnloadPolicy } from "../pure/dialogs";
 import { tracker } from "./downloads";
 import { getSettings } from "./settings";
 
 interface TabState {
+  capture: Capture;
   dialogs: DialogState;
 }
 
@@ -34,6 +36,7 @@ export function tabState(tabId: number): TabState {
   let t = tabs.get(tabId);
   if (!t) {
     t = {
+      capture: new Capture(),
       dialogs: new DialogState({ beforeUnload: () => beforeUnload, send: (accept, text, sid) => sendDialog(tabId, accept, text, sid) }),
     };
     tabs.set(tabId, t);
@@ -60,8 +63,12 @@ export function onCdpEvent(tabId: number, method: string, p: any, sessionId?: st
       if (p?.url) tracker.noteTabDownload(tabId, p.url);
       return;
   }
+  // #17: only the top-level target is captured until cross-origin frames land (#19).
+  if (sessionId && method.startsWith("Network.")) return;
+  t.capture.onEvent(method, p, sessionId);
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabs.get(tabId)?.capture.clear();
   tabs.delete(tabId);
 });

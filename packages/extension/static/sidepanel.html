@@ -54,7 +54,7 @@
   <summary><h2>Settings</h2></summary>
   <h3>Sites</h3>
   <p class="muted small">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site.</p>
-  <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
+  <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th>Lite</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
   <form id="addSite" class="row">
     <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
     <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option></select>
@@ -72,6 +72,7 @@
     <select id="beforeUnload"><option value="accept">Leave the page</option><option value="dismiss">Stay on the page</option><option value="ask-agent">Let the agent decide</option></select>
   </label>
   <label class="row"><input type="checkbox" id="showOverlay" /> Show the on-page activity border</label>
+  <label class="row"><input type="checkbox" id="forceLite" /> Lite mode everywhere (no debugger)</label>
   <label class="row"><input type="checkbox" id="devAllowSensitive" /> Developer: skip sensitive-action confirmations</label>
   <div class="row"><button id="unpair" class="link">Unpair bridge</button></div>
   <p class="muted small" id="about"></p>
