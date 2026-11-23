@@ -1,16 +1,27 @@
-// Drivers: CdpDriver (chrome.debugger, trusted input, AX snapshot) and
-// LiteDriver (content scripts only). Tool handlers talk to the Driver API.
-import { hostMatches, TabAgentError } from "@tabagent/protocol";
-import { CdpTab, getCdpTab, sleep, splitKey, type FrameInfo } from "./cdp";
+// D26 Driver interface + the CDP driver. Tool handlers talk only to a Driver;
+// nothing outside cdp.ts / driver.ts calls chrome.debugger. Decisions live in
+// the pure modules (snapshot, refs, autowait, frames, screenshot-plan, wait);
+// this file wires them to CDP.
+import { TabAgentError } from "@tabagent/protocol";
+import { autoWait, type Observation } from "./autowait";
+import { CdpTab, getCdpTab, sleep, type FrameInfo } from "./cdp";
+import { staleRef, taErr } from "./errors";
+import { ancestry, contentOffset, translate, translateBox, splitKey, type Offset, type OwnerMetrics } from "./frames";
 import { editCommand, keyDef, MOD_BITS, parseChord } from "./keys";
-import { diffLines, renderFrames, renderWithBudget, serialize, type AXNode, type FrameTree } from "./snapshot";
-import { getSettings } from "./settings";
+import { LiteDriver } from "./lite-driver";
+import { effectivePolicy } from "./permissions";
+import { baselines, refTable } from "./refstore";
+import type { RefTable, RefTarget } from "./refs";
+import { marksInView, planCapture, type Metrics, type Target } from "./screenshot-plan";
+import * as settingsMod from "./settings";
+import { render, type FrameTree, type RefSource, type RenderResult, type AXNode } from "./snapshot";
+import { capMatches, type FindMatch, type FindSpec } from "./wait";
 
 export interface SnapshotOpts {
   mode?: "interactive" | "full";
   root?: string;
   maxTokens?: number;
-  diff?: boolean;
+  collapse?: boolean;
 }
 
 export interface ClickOpts {
@@ -20,58 +31,107 @@ export interface ClickOpts {
   timeout?: number;
 }
 
+export interface ScreenshotOpts {
+  target?: Target;
+  ref?: string;
+  format?: "png" | "jpeg";
+  quality?: number;
+  marks?: boolean;
+}
+
+export interface Screenshot {
+  mime: string;
+  dataBase64: string;
+  width: number;
+  height: number;
+  note?: string;
+}
+
+export interface DialogInfo {
+  type: string;
+  message: string;
+  defaultPrompt?: string;
+}
+
+export interface FrameCall {
+  frameKey: string;
+  url: string;
+  isMain: boolean;
+  value: any;
+}
+
+/** D26: what tool handlers may ask of a tab. CDP is one implementation, lite (#21) the other. */
 export interface Driver {
   kind: "cdp" | "lite";
   tabId: number;
-  hasSnapshot(): boolean;
-  snapshot(o: SnapshotOpts): Promise<{ snapshot: string; refs: number; truncated: boolean; diff?: { text: string; added: number; removed: number } }>;
-  diffSinceLast(): Promise<{ text: string; added: number; removed: number } | null>;
+  snapshot(o: SnapshotOpts): Promise<RenderResult>;
+  find(spec: FindSpec): Promise<{ matches: FindMatch[]; truncated: boolean }>;
+  resolveRef(ref: string): Promise<RefTarget>;
   call(fn: string, args: unknown[], o?: { ref?: string; frameKey?: string }): Promise<any>;
-  callAllFrames(fn: string, args: unknown[]): Promise<any[]>;
-  click(ref: string, o?: ClickOpts): Promise<{ dialog?: unknown }>;
+  callAllFrames(fn: string, args: unknown[]): Promise<FrameCall[]>;
+  click(ref: string, o?: ClickOpts): Promise<{ dialog?: DialogInfo }>;
   hover(ref: string, timeout?: number): Promise<void>;
   focus(ref: string, end?: boolean): Promise<void>;
-  typeText(text: string): Promise<{ dialog?: unknown }>;
-  press(chord: string): Promise<{ dialog?: unknown }>;
+  /** Wait until `ref` can take text input (attached, visible, enabled, editable). */
+  prepareInput(ref: string, timeout?: number): Promise<void>;
+  typeText(text: string): Promise<{ dialog?: DialogInfo }>;
+  press(chord: string): Promise<{ dialog?: DialogInfo }>;
   fill(ref: string, value: string, timeout?: number): Promise<void>;
   scroll(ref: string | undefined, dx: number, dy: number): Promise<unknown>;
   drag(from: string, to: string, timeout?: number): Promise<void>;
   upload(ref: string, paths: string[]): Promise<void>;
-  screenshot(o: { fullPage?: boolean; ref?: string; marks?: boolean; format?: "png" | "jpeg" }): Promise<{ data: string; mimeType: string; width?: number; height?: number }>;
+  screenshot(o: ScreenshotOpts): Promise<Screenshot>;
   evaluate(expression: string, world: "main" | "isolated"): Promise<unknown>;
   navigate(url: string, waitUntil: string, timeout: number): Promise<{ url: string; warning?: string }>;
   history(action: "back" | "forward" | "reload", timeout: number): Promise<void>;
   waitLoad(timeout: number): Promise<boolean>;
   networkIdle(quiet: number, timeout: number): Promise<boolean>;
+  /** D24: wait for the DOM to be quiet (100ms, max 1s). */
+  quiet(): Promise<void>;
   settle(beforeEpoch: number, timeout?: number): Promise<void>;
   navEpoch(): number;
   currentUrl(): Promise<string>;
-  dialog(): unknown;
+  dialog(): DialogInfo | null;
   handleDialog(accept: boolean, promptText?: string): Promise<unknown>;
-  resolveRef(ref: string): RefInfo;
   dispose(): void;
 }
 
-export interface RefInfo {
-  frameKey: string;
-  backendNodeId: number;
-}
-
+// ---------------------------------------------------------------------------
+// driverFor: per-origin mode (D26/D32), never switches automatically
+// ---------------------------------------------------------------------------
 const drivers = new Map<number, { cdp?: CdpDriver; lite?: LiteDriver }>();
 
-export async function driverFor(tabId: number, url: string): Promise<Driver> {
-  const s = await getSettings();
+async function liteForUrl(url: string): Promise<boolean> {
+  const fn = (settingsMod as unknown as { liteForUrl?: (u: string) => Promise<boolean> }).liteForUrl;
+  if (fn) return fn(url);
+  // compat shim until settings.ts exports liteForUrl
+  const s = (await settingsMod.getSettings()) as unknown as { forceLite?: boolean; liteSites?: string[]; sites?: Record<string, { lite?: boolean }> };
   let host = "";
+  let origin = "";
   try {
-    host = new URL(url).hostname;
+    const u = new URL(url);
+    host = u.hostname;
+    origin = u.origin;
   } catch {
     /* about:blank etc */
   }
-  const lite = s.forceLite || (!!host && s.liteSites.some((g) => hostMatches(g, host)));
+  if (s.forceLite) return true;
+  if (origin && s.sites?.[origin]?.lite) return true;
+  const { hostMatches } = await import("@tabagent/protocol");
+  return !!host && (s.liteSites ?? []).some((g) => hostMatches(g, host));
+}
+
+export async function driverFor(tabId: number, url: string): Promise<Driver> {
+  const lite = await liteForUrl(url);
   let d = drivers.get(tabId);
   if (!d) drivers.set(tabId, (d = {}));
-  if (lite) return (d.lite ??= new LiteDriver(tabId));
-  return (d.cdp ??= new CdpDriver(getCdpTab(tabId)));
+  if (lite) return (d.lite ??= new LiteDriver(tabId, refTable));
+  return (d.cdp ??= new CdpDriver(getCdpTab(tabId), refTable));
+}
+
+export function peekDriver(tabId: number): Driver | undefined {
+  const d = drivers.get(tabId);
+  return d?.cdp ?? d?.lite;
 }
 
 export function disposeDrivers(tabId: number) {
@@ -79,8 +139,11 @@ export function disposeDrivers(tabId: number) {
   d?.cdp?.dispose();
   d?.lite?.dispose();
   drivers.delete(tabId);
+  refTable.dropTab(tabId);
+  baselines.clearTab(tabId);
 }
 
+/** Replace `{el: i}` (and `submit: i`) in pagelib results with refs. */
 export function mapEls(v: unknown, refs: (string | null)[]): unknown {
   if (Array.isArray(v)) return v.map((x) => mapEls(x, refs));
   if (v && typeof v === "object") {
@@ -95,14 +158,25 @@ export function mapEls(v: unknown, refs: (string | null)[]): unknown {
   return v;
 }
 
-function notActionable(ref: string, reason: string): TabAgentError {
-  let hint = "Take a fresh page.snapshot.";
-  if (reason.startsWith("covered")) hint = "Another element is on top (modal, cookie banner, sticky header?). Close it first, or scroll.";
-  else if (reason === "not visible") hint = "The element is hidden. Open its parent menu/section first; for custom checkboxes use act.check.";
-  else if (reason === "disabled") hint = "The element is disabled. Required fields may need filling first.";
-  else if (reason === "not editable") hint = "Not a text field. Use act.select for selects, act.check for checkboxes.";
-  else if (reason.startsWith("not stable")) hint = "The element is animating; try again.";
-  return new TabAgentError("NOT_ACTIONABLE", `${ref} is ${reason}`, hint);
+/** Frames whose origin is denied by site policy (D16): placeholder only, never touched. */
+export async function deniedOrigin(url: string): Promise<string | null> {
+  if (!url || /^(about|data|blob|javascript):/i.test(url)) return null;
+  try {
+    const e = (await effectivePolicy(url)) as unknown as { origin?: string | null; policy?: string; level?: string } | string;
+    const pol = typeof e === "string" ? e : (e?.policy ?? e?.level);
+    if (pol === "deny") return (typeof e === "object" && e?.origin) || new URL(url).origin;
+  } catch {
+    /* policy engine unavailable: treat as allowed (router already checked the tab) */
+  }
+  return null;
+}
+
+export function refSource(table: RefTable, tabId: number, loaderOf: (frameKey: string) => string): RefSource {
+  return {
+    peek: (frameKey, backendNodeId) => table.peek({ tabId, frameKey, backendNodeId, loaderId: loaderOf(frameKey) }),
+    mint: (frameKey, backendNodeId) => table.mint({ tabId, frameKey, backendNodeId, loaderId: loaderOf(frameKey) }),
+    nextNumber: () => table.peekNext(),
+  };
 }
 
 // ===========================================================================
@@ -111,90 +185,126 @@ function notActionable(ref: string, reason: string): TabAgentError {
 export class CdpDriver implements Driver {
   kind = "cdp" as const;
   tabId: number;
-  private refs = new Map<string, RefInfo>();
-  private byNode = new Map<string, string>();
-  private n = 0;
-  private last: string[] | null = null;
-  private frameCache: { at: number; frames: FrameInfo[] } | null = null;
+  private frameCache: { at: number; frames: FrameInfo[]; allowed: FrameInfo[] } | null = null;
+  private offs: (() => void)[] = [];
 
-  constructor(public tab: CdpTab) {
+  constructor(
+    public tab: CdpTab,
+    private refs: RefTable,
+    private clock: { now(): number; sleep(ms: number): Promise<void> } = { now: () => Date.now(), sleep: (ms) => sleep(ms) as Promise<void> },
+  ) {
     this.tabId = tab.tabId;
+    // D24: a navigation clears every session's baseline for this tab.
+    this.offs.push(tab.onNavigated?.(() => baselines.clearTab(this.tabId)) ?? (() => {}));
   }
 
   dispose() {
-    this.refs.clear();
-    this.byNode.clear();
+    this.offs.forEach((f) => f());
+    this.offs = [];
   }
 
-  hasSnapshot() {
-    return !!this.last;
-  }
+  private loaderOf = (frameKey: string) => this.tab.loaders.get(frameKey) ?? "";
 
-  refFor = (frameKey: string, backendNodeId: number): string => {
-    const [sid] = splitKey(frameKey);
-    const k = `${sid ?? ""}:${backendNodeId}`;
-    let r = this.byNode.get(k);
-    if (!r) {
-      r = "e" + ++this.n;
-      this.byNode.set(k, r);
-    }
-    this.refs.set(r, { frameKey, backendNodeId });
-    return r;
-  };
-
-  resolveRef(ref: string): RefInfo {
-    const r = this.refs.get(ref);
-    if (!r) throw new TabAgentError("REF_STALE", `Unknown ref "${ref}"`, "Refs come from page.snapshot/page.find/form.describe on this tab. Take a new snapshot.");
-    return r;
-  }
-
-  private async frames(): Promise<FrameInfo[]> {
-    if (this.frameCache && Date.now() - this.frameCache.at < 300) return this.frameCache.frames;
+  private async frames(fresh = false): Promise<{ frames: FrameInfo[]; allowed: FrameInfo[] }> {
+    if (!fresh && this.frameCache && this.clock.now() - this.frameCache.at < 300) return this.frameCache;
     const frames = await this.tab.frames();
-    this.frameCache = { at: Date.now(), frames };
-    return frames;
+    // main frame first
+    const mk = this.tab.mainKey();
+    frames.sort((a, b) => (a.key === mk ? -1 : b.key === mk ? 1 : 0));
+    const denied = new Map<string, string>();
+    for (const f of frames) {
+      if (!f.parentKey) continue;
+      const d = await deniedOrigin(f.url);
+      if (d) denied.set(f.key, d);
+    }
+    const blocked = (f: FrameInfo): boolean => denied.has(f.key) || (!!f.parentKey && frames.some((p) => p.key === f.parentKey && blocked(p)));
+    const allowed = frames.filter((f) => !blocked(f));
+    this.frameCache = { at: this.clock.now(), frames, allowed };
+    (this.frameCache as unknown as { denied: Map<string, string> }).denied = denied;
+    return this.frameCache;
   }
 
-  async snapshot(o: SnapshotOpts) {
+  async resolveRef(ref: string): Promise<RefTarget> {
+    await this.tab.ensure();
+    try {
+      return this.refs.resolve(ref, this.tabId, (fk) => this.tab.loaders.get(fk));
+    } catch (e) {
+      // The frame may simply not be in our loader map yet (late OOPIF): refresh once.
+      const t = this.refs.get(ref);
+      if (t && t.tabId === this.tabId && !this.tab.loaders.has(t.frameKey)) {
+        await this.frames(true);
+        return this.refs.resolve(ref, this.tabId, (fk) => this.tab.loaders.get(fk));
+      }
+      throw e;
+    }
+  }
+
+  async snapshot(o: SnapshotOpts): Promise<RenderResult> {
     await this.tab.ensure();
     this.tab.assertNoDialog();
-    const frames = await this.frames();
+    const { frames } = await this.frames(true);
+    const denied = (this.frameCache as unknown as { denied: Map<string, string> }).denied;
     const trees: FrameTree[] = [];
+    let total = 0;
     for (const f of frames) {
+      if (denied.has(f.key)) {
+        trees.push({ key: f.key, nodes: [], ownerBackendNodeId: f.ownerBackendNodeId, ownerFrameKey: f.parentKey, denied: denied.get(f.key) });
+        continue;
+      }
+      if (f.parentKey && !this.frameCache!.allowed.includes(f)) continue;
       try {
         const r = await this.tab.send<{ nodes: AXNode[] }>("Accessibility.getFullAXTree", { frameId: f.frameId }, f.sessionId);
-        trees.push({ key: f.key, nodes: r.nodes, ownerBackendNodeId: f.ownerBackendNodeId });
-      } catch {
-        if (!f.parentKey) throw new TabAgentError("INTERNAL", "Could not read the accessibility tree");
+        let sensitive: number[] = [];
+        try {
+          sensitive = (await this.tab.pagelib(f.key, "sensitiveInputs", [])).nodes.filter((n) => n > 0);
+        } catch {
+          /* frame busy: values still masked by the bullet heuristic */
+        }
+        total += r.nodes.length;
+        trees.push({ key: f.key, nodes: r.nodes, ownerBackendNodeId: f.ownerBackendNodeId, ownerFrameKey: f.parentKey, sensitive });
+      } catch (e) {
+        if (!f.parentKey) throw taErr("INTERNAL", `Could not read the accessibility tree: ${(e as Error).message}`);
       }
     }
-    // main frame first
-    trees.sort((a, b) => (a.key === this.tab.mainKey() ? -1 : b.key === this.tab.mainKey() ? 1 : 0));
-    const mode = o.mode ?? "interactive";
     let root: { frameKey: string; backendNodeId: number } | undefined;
     if (o.root) {
-      const ri = this.resolveRef(o.root);
-      root = { frameKey: ri.frameKey, backendNodeId: ri.backendNodeId };
+      const t = await this.resolveRef(o.root);
+      root = { frameKey: t.frameKey, backendNodeId: t.backendNodeId };
     }
-    const nodes = renderFrames(trees, { mode, refFor: this.refFor, root });
-    const { text, truncated } = renderWithBudget(nodes, o.maxTokens ?? 8000);
-    const full = serialize(nodes);
-    let diff: { text: string; added: number; removed: number } | undefined;
-    if (o.diff && this.last && !root) diff = diffLines(this.last, full, 200);
-    if (!root) this.last = full;
-    return { snapshot: text, refs: this.refs.size, truncated, ...(diff ? { diff } : {}) };
+    await this.refs.reserve(total + 1);
+    return render(trees, { mode: o.mode, maxTokens: o.maxTokens, root, collapse: o.collapse, refs: refSource(this.refs, this.tabId, this.loaderOf) });
   }
 
-  async diffSinceLast() {
-    if (!this.last) return null;
-    const prev = this.last;
-    await this.snapshot({});
-    return diffLines(prev, this.last!, 60);
-  }
-
-  private async toRefs(frameKey: string, value: unknown, nodes: number[]) {
-    const refs = nodes.map((n) => (n > 0 ? this.refFor(frameKey, n) : null));
+  private toRefs(frameKey: string, value: unknown, nodes: number[]) {
+    const loaderId = this.loaderOf(frameKey);
+    const refs = nodes.map((n) => (n > 0 ? this.refs.mint({ tabId: this.tabId, frameKey, backendNodeId: n, loaderId }) : null));
     return mapEls(value, refs);
+  }
+
+  async find(spec: FindSpec) {
+    await this.tab.ensure();
+    this.tab.assertNoDialog();
+    const per: FindMatch[][] = [];
+    const run = async (frameKey: string, self?: number) => {
+      const r = await this.tab.pagelib(frameKey, "findNodes", [{ by: spec.by, value: spec.value, name: spec.name, limit: 20 }], self);
+      const v = this.toRefs(frameKey, r.value, r.nodes) as { matches: { ref: string | null; role: string; name: string }[] };
+      per.push(v.matches.filter((m) => m.ref).map((m) => ({ ref: m.ref!, role: m.role, name: m.name })));
+    };
+    if (spec.root) {
+      const t = await this.resolveRef(spec.root);
+      await run(t.frameKey, t.backendNodeId);
+    } else {
+      const { allowed } = await this.frames(true);
+      for (const f of allowed) {
+        if (per.flat().length > 20) break;
+        try {
+          await run(f.key);
+        } catch (e) {
+          if (!f.parentKey) throw e instanceof TabAgentError ? e : taErr("BAD_REQUEST", `page.find failed: ${(e as Error).message}`);
+        }
+      }
+    }
+    return capMatches(per);
   }
 
   async call(fn: string, args: unknown[], o: { ref?: string; frameKey?: string } = {}) {
@@ -202,22 +312,22 @@ export class CdpDriver implements Driver {
     let frameKey = o.frameKey ?? this.tab.mainKey();
     let self: number | undefined;
     if (o.ref) {
-      const ri = this.resolveRef(o.ref);
-      frameKey = ri.frameKey;
-      self = ri.backendNodeId;
+      const t = await this.resolveRef(o.ref);
+      frameKey = t.frameKey;
+      self = t.backendNodeId;
     }
     const r = await this.tab.pagelib(frameKey, fn, args, self);
     return this.toRefs(frameKey, r.value, r.nodes);
   }
 
-  async callAllFrames(fn: string, args: unknown[]) {
+  async callAllFrames(fn: string, args: unknown[]): Promise<FrameCall[]> {
     await this.tab.ensure();
-    const frames = await this.frames();
-    const out: any[] = [];
-    for (const f of frames) {
+    const { allowed } = await this.frames();
+    const out: FrameCall[] = [];
+    for (const f of allowed) {
       try {
         const r = await this.tab.pagelib(f.key, fn, args);
-        out.push({ frameKey: f.key, url: f.url, isMain: !f.parentKey, value: await this.toRefs(f.key, r.value, r.nodes) });
+        out.push({ frameKey: f.key, url: f.url, isMain: !f.parentKey, value: this.toRefs(f.key, r.value, r.nodes) });
       } catch (e) {
         if (!f.parentKey) throw e;
       }
@@ -225,40 +335,59 @@ export class CdpDriver implements Driver {
     return out;
   }
 
-  private async frameOffset(frameKey: string): Promise<{ x: number; y: number }> {
-    const frames = await this.frames();
-    const f = frames.find((x) => x.key === frameKey);
-    if (!f || !f.parentKey || f.ownerBackendNodeId == null) return { x: 0, y: 0 };
-    const parent = await this.frameOffset(f.parentKey);
-    const own = (await this.tab.pagelib(f.parentKey, "frameOffset", [], f.ownerBackendNodeId)).value as { x: number; y: number };
-    return { x: parent.x + own.x, y: parent.y + own.y };
-  }
-
-  async actionPoint(ref: string, opts: { timeout?: number; needEditable?: boolean } = {}) {
-    const ri = this.resolveRef(ref);
-    const deadline = Date.now() + (opts.timeout ?? 5000);
-    let st: any;
-    for (;;) {
-      st = (await this.tab.pagelib(ri.frameKey, "prepareAction", [{ needEditable: opts.needEditable }], ri.backendNodeId)).value;
-      if (st.ok) break;
-      if (st.reason === "detached") throw new TabAgentError("REF_STALE", `${ref} was removed from the page`, "Take a new page.snapshot.");
-      if (Date.now() > deadline) throw notActionable(ref, st.reason);
-      await sleep(100);
+  /** Offsets from a frame's viewport to the top-level viewport, innermost first (#19). */
+  async offsetChain(frameKey: string): Promise<Offset[]> {
+    const { frames } = await this.frames();
+    const chain: Offset[] = [];
+    for (const k of ancestry(frames, frameKey)) {
+      const f = frames.find((x) => x.key === k)!;
+      if (f.ownerBackendNodeId == null || !f.parentKey) continue;
+      const m = (await this.tab.pagelib(f.parentKey, "ownerMetrics", [], f.ownerBackendNodeId)).value as OwnerMetrics;
+      chain.push(contentOffset(m));
     }
-    const off = await this.frameOffset(ri.frameKey);
-    return { x: st.x + off.x, y: st.y + off.y, ri };
+    return chain;
   }
 
-  /** Run an input promise, but return early if it opens a JS dialog (which blocks the renderer). */
-  private async raceDialog<T>(p: Promise<T>): Promise<{ dialog?: unknown }> {
+  /** Auto-wait (#7) then return the top-level viewport point to act on. */
+  async actionPoint(ref: string, opts: { timeout?: number; needEditable?: boolean } = {}) {
+    const t = await this.resolveRef(ref);
+    const local = await this.tab.guard(
+      autoWait(
+        ref,
+        {
+          now: () => this.clock.now(),
+          sleep: (ms) => this.clock.sleep(ms),
+          check: () => {
+            this.tab.assertNoDialog();
+            if (this.tab.userDetached) throw this.tab.detachedError();
+          },
+          observe: async (scroll) => {
+            try {
+              return (await this.tab.pagelib(t.frameKey, "observe", [{ scroll }], t.backendNodeId)).value as Observation;
+            } catch (e) {
+              if (e instanceof TabAgentError && (e.code as string) === "REF_STALE") throw staleRef(ref, "the element is no longer in the page");
+              throw e;
+            }
+          },
+        },
+        { timeout: opts.timeout, needEditable: opts.needEditable },
+      ),
+    );
+    const chain = await this.offsetChain(t.frameKey);
+    return { ...translate(local, chain), target: t };
+  }
+
+  /** Run input, but return early if it opens a JS dialog (which blocks the renderer, D28). */
+  private async raceDialog(p: Promise<unknown>): Promise<{ dialog?: DialogInfo }> {
     const dlg = this.tab.waitEvent((m) => m === "Page.javascriptDialogOpening", 30000);
-    const r = await Promise.race([p.then(() => "done" as const), dlg.then((d) => (d ? ("dialog" as const) : ("done" as const)))]);
+    const r = await this.tab.guard(Promise.race([p.then(() => "done" as const), dlg.then((d) => (d ? ("dialog" as const) : ("done" as const)))]));
     if (r === "dialog") {
       p.catch(() => {});
-      await sleep(50);
-      return { dialog: this.tab.dialog };
+      await this.clock.sleep(50);
+      return { dialog: this.dialog() ?? undefined };
     }
-    return this.tab.dialog ? { dialog: this.tab.dialog } : {};
+    const d = this.dialog();
+    return d ? { dialog: d } : {};
   }
 
   private modBits(mods: string[] = []) {
@@ -284,11 +413,15 @@ export class CdpDriver implements Driver {
 
   async hover(ref: string, timeout?: number) {
     const { x, y } = await this.actionPoint(ref, { timeout });
-    await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await this.tab.guard(this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }));
   }
 
   async focus(ref: string, end = true) {
     await this.call("focus", [{ end }], { ref });
+  }
+
+  async prepareInput(ref: string, timeout?: number) {
+    await this.actionPoint(ref, { timeout, needEditable: true });
   }
 
   private async keyEvent(def: ReturnType<typeof keyDef>, mods: string[], commands?: string[]) {
@@ -306,9 +439,12 @@ export class CdpDriver implements Driver {
       parsed = parseChord(chord);
       def = keyDef(parsed.key);
     } catch (e) {
-      throw new TabAgentError("BAD_REQUEST", (e as Error).message, "Examples: Enter, Tab, Escape, ArrowDown, Control+a, Meta+Shift+k");
+      throw taErr("BAD_REQUEST", (e as Error).message, "Examples: Enter, Tab, Escape, ArrowDown, Control+a, Meta+Shift+k");
     }
+    await this.tab.ensure();
+    this.tab.assertNoDialog();
     const seq = (async () => {
+      await this.wakeInput();
       const held: string[] = [];
       for (const m of parsed.mods) {
         held.push(m);
@@ -325,61 +461,50 @@ export class CdpDriver implements Driver {
     return this.raceDialog(seq);
   }
 
+  /** #7: act.type inserts text at the focused element with CDP Input.insertText; newlines press Enter. */
   async typeText(text: string) {
+    await this.tab.ensure();
+    this.tab.assertNoDialog();
     const seq = (async () => {
-      for (const ch of text) {
-        if (ch === "\n") {
-          await this.keyEvent(keyDef("Enter"), []);
-          continue;
-        }
-        let def: ReturnType<typeof keyDef>;
-        try {
-          def = keyDef(ch);
-        } catch {
-          def = { key: ch, code: "", keyCode: 0, text: ch };
-        }
-        if (!def.keyCode) {
-          await this.tab.send("Input.insertText", { text: ch });
-          continue;
-        }
-        await this.keyEvent(def, []);
+      await this.wakeInput();
+      const parts = text.split("\n");
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) await this.tab.send("Input.insertText", { text: parts[i] });
+        if (i < parts.length - 1) await this.keyEvent(keyDef("Enter"), []);
       }
     })();
     return this.raceDialog(seq);
   }
 
+  /**
+   * Background tabs in headless Chromium never produce frames, and input that
+   * needs a frame ack (keys, insertText) waits forever. Focus emulation makes
+   * the page behave as focused without bringing the tab to the front (D10).
+   */
+  private woke = false;
+  private async wakeInput() {
+    if (this.woke) return;
+    this.woke = true;
+    await this.tab.send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+  }
+
+  /** #7: act.fill clears, then sets through the native value setter and fires input + change. */
   async fill(ref: string, value: string, timeout?: number) {
     await this.actionPoint(ref, { timeout, needEditable: true });
     await this.overlay(ref);
-    const st = (await this.call("focusSelect", [], { ref })) as { mode: string; empty: boolean };
-    if (st.mode === "insert") {
-      if (value === "") {
-        if (!st.empty) await this.press("Delete");
-      } else await this.tab.send("Input.insertText", { text: value });
-      // verify; fall back to setter (some masked inputs reformat — accept those)
-      const v = (await this.call("valueOf", [], { ref })) as string;
-      if (v === "" && value !== "") await this.call("setValue", [value], { ref });
-    } else {
-      await this.call("setValue", [value], { ref });
-    }
+    await this.call("setValue", [value], { ref });
   }
 
   async scroll(ref: string | undefined, dx: number, dy: number) {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     if (ref && !dx && !dy) return this.call("scrollIntoView", [], { ref });
-    let x = 200;
-    let y = 200;
     if (ref) {
-      const p = await this.actionPoint(ref).catch(() => null);
-      if (p) ({ x, y } = p);
+      await this.call("scrollBy", [dx, dy], { ref });
     } else {
-      const m = await this.tab.send<any>("Page.getLayoutMetrics", {});
-      x = m.cssVisualViewport.clientWidth / 2;
-      y = m.cssVisualViewport.clientHeight / 2;
+      await this.tab.evalMain(`window.scrollBy({left: ${Number(dx) || 0}, top: ${Number(dy) || 0}, behavior: "instant"}); 0`);
     }
-    await this.tab.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy });
-    await sleep(150);
-    return this.call("pageState", []).then(async () => (await this.tab.evalMain("({scrollX, scrollY})")) as unknown);
+    return (await this.tab.evalMain("({scrollX, scrollY})")) as unknown;
   }
 
   async drag(from: string, to: string, timeout?: number) {
@@ -397,7 +522,7 @@ export class CdpDriver implements Driver {
         await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 });
         if (this.tab.dragData) break;
       }
-      await sleep(30);
+      await this.clock.sleep(30);
       if (this.tab.dragData) {
         const data = this.tab.dragData;
         await this.tab.send("Input.dispatchDragEvent", { type: "dragEnter", x: b.x, y: b.y, data });
@@ -412,59 +537,66 @@ export class CdpDriver implements Driver {
   }
 
   async upload(ref: string, paths: string[]) {
-    const ri = this.resolveRef(ref);
+    const t = await this.resolveRef(ref);
     const inf = (await this.call("info", [], { ref })) as { isFile: boolean };
-    if (!inf.isFile) throw new TabAgentError("NOT_ACTIONABLE", `${ref} is not a file input`, "Use page.find css='input[type=file]' to locate the file input (it may be hidden behind a button).");
-    const [sid] = splitKey(ri.frameKey);
-    await this.tab.send("DOM.setFileInputFiles", { files: paths, backendNodeId: ri.backendNodeId }, sid);
+    if (!inf.isFile) throw taErr("NOT_ACTIONABLE", `${ref} is not a file input`, "Use page.find by=css value='input[type=file]' to locate the file input (it may be hidden behind a button).");
+    const [sid] = splitKey(t.frameKey);
+    await this.tab.send("DOM.setFileInputFiles", { files: paths, backendNodeId: t.backendNodeId }, sid);
   }
 
-  async screenshot(o: { fullPage?: boolean; ref?: string; marks?: boolean; format?: "png" | "jpeg" }) {
+  private async metrics(): Promise<Metrics> {
+    const m = await this.tab.send<any>("Page.getLayoutMetrics", {});
+    const vv = m.cssVisualViewport;
+    const cs = m.cssContentSize ?? m.contentSize;
+    return { viewport: { w: vv.clientWidth, h: vv.clientHeight, pageX: vv.pageX, pageY: vv.pageY }, content: { w: cs.width, h: cs.height } };
+  }
+
+  private async boxOf(t: RefTarget, chain?: Offset[]) {
+    const r = (await this.tab.pagelib(t.frameKey, "rectOf", [], t.backendNodeId)).value as { x: number; y: number; w: number; h: number };
+    return translateBox(r, chain ?? (await this.offsetChain(t.frameKey)));
+  }
+
+  /** #8: D30 result; overlay hidden during capture (D40); marks label only refs from the shared table. */
+  async screenshot(o: ScreenshotOpts): Promise<Screenshot> {
     await this.tab.ensure();
     this.tab.assertNoDialog();
+    const target: Target = o.target ?? (o.ref ? "ref" : "viewport");
     const format = o.format ?? "png";
-    const params: Record<string, unknown> = { format, ...(format === "jpeg" ? { quality: 80 } : {}), fromSurface: true };
-    const metrics = await this.tab.send<any>("Page.getLayoutMetrics", {});
-    const vv = metrics.cssVisualViewport;
-    let width = vv.clientWidth;
-    let height = vv.clientHeight;
-    if (o.ref) {
-      const ri = this.resolveRef(o.ref);
+    let box: { x: number; y: number; w: number; h: number } | undefined;
+    if (target === "ref") {
+      if (!o.ref) throw taErr("BAD_REQUEST", "target=ref needs ref");
+      const t = await this.resolveRef(o.ref);
       await this.call("scrollIntoView", [], { ref: o.ref });
-      const r = (await this.tab.pagelib(ri.frameKey, "rectOf", [], ri.backendNodeId)).value as { x: number; y: number; w: number; h: number };
-      const off = await this.frameOffset(ri.frameKey);
-      const m2 = await this.tab.send<any>("Page.getLayoutMetrics", {});
-      params.clip = { x: r.x + off.x + m2.cssVisualViewport.pageX, y: r.y + off.y + m2.cssVisualViewport.pageY, width: Math.max(1, r.w), height: Math.max(1, r.h), scale: 1 };
-      width = r.w;
-      height = r.h;
-    } else if (o.fullPage) {
-      const cs = metrics.cssContentSize;
-      params.captureBeyondViewport = true;
-      params.clip = { x: 0, y: 0, width: cs.width, height: Math.min(cs.height, 16000), scale: 1 };
-      width = cs.width;
-      height = Math.min(cs.height, 16000);
+      box = await this.boxOf(t);
     }
+    const m = await this.metrics();
+    const plan = planCapture(target, m, box);
+    const { allowed } = await this.frames();
     let marked = false;
     if (o.marks) {
-      if (!this.last) await this.snapshot({});
-      const mk = this.tab.mainKey();
-      const entries = [...this.refs.entries()].filter(([, v]) => v.frameKey === mk).slice(-300);
-      const marks: { label: string; x: number; y: number; w: number; h: number }[] = [];
-      for (const [ref, v] of entries) {
+      const snap = await this.snapshot({ mode: "interactive", maxTokens: 1_000_000, collapse: false });
+      const byFrame = new Map<string, { ref: string; backendNodeId: number }[]>();
+      for (const s of snap.shown) if (s.interactive) byFrame.set(s.frameKey, [...(byFrame.get(s.frameKey) ?? []), s]);
+      const entries: { ref: string; box: { x: number; y: number; w: number; h: number } | null }[] = [];
+      for (const [fk, list] of byFrame) {
         try {
-          const r = (await this.tab.pagelib(mk, "rectOf", [], v.backendNodeId)).value as { x: number; y: number; w: number; h: number };
-          if (r.w > 0 && r.h > 0 && r.y < vv.clientHeight && r.y + r.h > 0) marks.push({ label: ref, ...r });
+          const chain = await this.offsetChain(fk);
+          const r = await this.tab.pagelib(fk, "rectsOf", [], undefined, list.map((l) => l.backendNodeId));
+          (r.value as ({ x: number; y: number; w: number; h: number } | null)[]).forEach((b, i) => entries.push({ ref: list[i].ref, box: b ? translateBox(b, chain) : null }));
         } catch {
-          /* stale */
+          /* frame went away */
         }
       }
-      await this.tab.pagelib(mk, "drawMarks", [marks]);
+      await this.tab.pagelib(this.tab.mainKey(), "drawMarks", [marksInView(entries, m.viewport)]);
       marked = true;
     }
+    for (const f of allowed) await this.tab.pagelib(f.key, "hideOverlay", [true]).catch(() => {});
     try {
-      const r = await this.tab.send<{ data: string }>("Page.captureScreenshot", params);
-      return { data: r.data, mimeType: `image/${format}`, width: Math.round(width), height: Math.round(height) };
+      const params: Record<string, unknown> = { format, fromSurface: true, captureBeyondViewport: plan.captureBeyondViewport, ...(format === "jpeg" ? { quality: o.quality ?? 80 } : {}), ...(plan.clip ? { clip: plan.clip } : {}) };
+      const r = await this.tab.guard(this.tab.send<{ data: string }>("Page.captureScreenshot", params));
+      return { mime: `image/${format}`, dataBase64: r.data, width: plan.width, height: plan.height, ...(plan.note ? { note: plan.note } : {}) };
     } finally {
+      for (const f of allowed) await this.tab.pagelib(f.key, "hideOverlay", [false]).catch(() => {});
       if (marked) await this.tab.pagelib(this.tab.mainKey(), "clearOverlay", []).catch(() => {});
     }
   }
@@ -475,7 +607,7 @@ export class CdpDriver implements Driver {
     if (world === "main") return this.tab.evalMain(expression);
     const ctx = await this.tab.isolatedContext(this.tab.mainKey());
     const r = await this.tab.send<any>("Runtime.evaluate", { expression, contextId: ctx, awaitPromise: true, returnByValue: true, replMode: true });
-    if (r.exceptionDetails) throw new TabAgentError("BAD_REQUEST", `Evaluation failed: ${r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text}`);
+    if (r.exceptionDetails) throw taErr("BAD_REQUEST", `Evaluation failed: ${r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text}`, undefined, { pageText: true });
     return r.result.value;
   }
 
@@ -499,47 +631,48 @@ export class CdpDriver implements Driver {
   async navigate(url: string, waitUntil: string, timeout: number) {
     await this.tab.ensure();
     this.tab.assertNoDialog();
-    this.last = null;
-    const r = await this.tab.send<any>("Page.navigate", { url, transitionType: "typed" });
-    if (r.errorText && r.errorText !== "net::ERR_ABORTED") throw new TabAgentError("BAD_REQUEST", `Navigation failed: ${r.errorText}`);
+    baselines.clearTab(this.tabId);
+    const r = await this.tab.guard(this.tab.send<any>("Page.navigate", { url, transitionType: "typed" }));
+    if (r.errorText && r.errorText !== "net::ERR_ABORTED") throw taErr("BAD_REQUEST", `Navigation failed: ${r.errorText}`);
     let warning: string | undefined;
     if (r.loaderId && waitUntil !== "none") {
       const names = waitUntil === "domcontentloaded" ? ["DOMContentLoaded", "load"] : ["load"];
-      const ok = await this.waitLifecycle(r.loaderId, names, timeout);
+      const ok = await this.tab.guard(this.waitLifecycle(r.loaderId, names, timeout));
       if (!ok) warning = `Timed out after ${timeout}ms waiting for ${waitUntil}; the page may still be loading.`;
       else if (waitUntil === "networkidle") {
         if (!(await this.tab.networkIdle(500, timeout))) warning = "Network did not go idle before timeout.";
       }
     }
-    await sleep(50);
+    await this.clock.sleep(50);
     return { url: await this.currentUrl(), ...(warning ? { warning } : {}) };
   }
 
   async history(action: "back" | "forward" | "reload", timeout: number) {
     await this.tab.ensure();
-    this.last = null;
+    this.tab.assertNoDialog();
+    baselines.clearTab(this.tabId);
     const before = this.tab.navEpoch;
     if (action === "reload") await this.tab.send("Page.reload", {});
     else {
       const h = await this.tab.send<any>("Page.getNavigationHistory", {});
       const idx = h.currentIndex + (action === "back" ? -1 : 1);
       const entry = h.entries[idx];
-      if (!entry) throw new TabAgentError("BAD_REQUEST", `No ${action} history entry`);
+      if (!entry) throw taErr("BAD_REQUEST", `No ${action} history entry`);
       await this.tab.send("Page.navigateToHistoryEntry", { entryId: entry.id });
     }
     await this.settle(before, timeout);
   }
 
   async waitLoad(timeout: number) {
-    const end = Date.now() + timeout;
-    while (Date.now() < end) {
+    const end = this.clock.now() + timeout;
+    while (this.clock.now() < end) {
       try {
         const rs = await this.tab.evalMain("document.readyState");
         if (rs === "complete") return true;
-      } catch {
-        /* navigating */
+      } catch (e) {
+        if (e instanceof TabAgentError && ["DIALOG_OPEN", "DEBUGGER_DETACHED"].includes(e.code as string)) throw e;
       }
-      await sleep(100);
+      await this.clock.sleep(100);
     }
     return false;
   }
@@ -548,27 +681,30 @@ export class CdpDriver implements Driver {
     return this.tab.networkIdle(quiet, timeout);
   }
 
+  async quiet() {
+    await this.tab.pagelib(this.tab.mainKey(), "quietDom", [100, 1000]).catch(() => {});
+  }
+
   /** After an action: wait for any navigation it triggered, then a short network quiet period. */
   async settle(beforeEpoch: number, timeout = 5000) {
-    await sleep(120);
+    await this.clock.sleep(120);
     if (this.tab.dialog) return;
     if (this.tab.navEpoch !== beforeEpoch) {
-      this.last = null;
-      const end = Date.now() + timeout;
-      // wait for load of the latest main-frame loader
-      while (Date.now() < end) {
+      const end = this.clock.now() + timeout;
+      while (this.clock.now() < end) {
         const mf = this.tab.mainFrameId;
         const lastStart = [...this.tab.lifecycle].reverse().find((e) => !e.sessionId && e.frameId === mf && e.name === "init");
         if (lastStart && this.tab.lifecycle.some((e) => !e.sessionId && e.loaderId === lastStart.loaderId && e.name === "load")) break;
         if (this.tab.dialog) return;
-        await sleep(50);
+        await this.clock.sleep(50);
       }
     }
     await this.tab.networkIdle(300, 1500);
   }
 
-  dialog() {
-    return this.tab.dialog;
+  dialog(): DialogInfo | null {
+    const d = this.tab.dialog;
+    return d ? { type: d.type, message: d.message, ...(d.defaultPrompt !== undefined ? { defaultPrompt: d.defaultPrompt } : {}) } : null;
   }
 
   handleDialog(accept: boolean, promptText?: string) {
@@ -576,196 +712,8 @@ export class CdpDriver implements Driver {
   }
 
   private async overlay(ref: string) {
-    const s = await getSettings();
+    const s = await settingsMod.getSettings();
     if (!s.showOverlay) return;
     await this.call("showActivity", [""], { ref }).catch(() => {});
-  }
-}
-
-// ===========================================================================
-// Lite driver (content scripts only; synthetic events)
-// ===========================================================================
-function liteUnsupported(what: string): TabAgentError {
-  return new TabAgentError("BAD_REQUEST", `${what} is not available in lite mode`, "Lite mode avoids chrome.debugger. Remove this site from Lite sites in the TabAgent side panel to use full mode.");
-}
-
-export class LiteDriver implements Driver {
-  kind = "lite" as const;
-  private last: string[] | null = null;
-  private epoch = 0;
-  constructor(public tabId: number) {}
-  dispose() {}
-
-  hasSnapshot() {
-    return !!this.last;
-  }
-
-  resolveRef(ref: string): RefInfo {
-    return { frameKey: "lite", backendNodeId: 0, ...{ ref } } as unknown as RefInfo;
-  }
-
-  private async exec<T>(func: (...a: any[]) => T, args: unknown[]): Promise<Awaited<T>> {
-    const [r] = await chrome.scripting.executeScript({ target: { tabId: this.tabId, frameIds: [0] }, func: func as any, args: args as any[] });
-    return r?.result as Awaited<T>;
-  }
-
-  private async ensureLib() {
-    const has = await this.exec(() => !!(globalThis as any).__ta, []);
-    if (!has) await chrome.scripting.executeScript({ target: { tabId: this.tabId, frameIds: [0] }, files: ["pagelib.js"] });
-  }
-
-  async call(fn: string, args: unknown[], o: { ref?: string } = {}) {
-    await this.ensureLib();
-    const r = (await this.exec((n: string, ref: string | null, a: unknown[]) => (globalThis as any).__ta.callLite(null, n, ref, a), [fn, o.ref ?? null, args])) as { value?: unknown; stale?: boolean };
-    if (r?.stale) throw new TabAgentError("REF_STALE", `${o.ref} is no longer in the page`, "Take a new page.snapshot.");
-    return r?.value;
-  }
-
-  async callAllFrames(fn: string, args: unknown[]) {
-    return [{ frameKey: "lite", isMain: true, value: await this.call(fn, args) }];
-  }
-
-  async snapshot(o: SnapshotOpts) {
-    const r = (await this.call("snapshotDom", [o.mode ?? "interactive"], o.root ? { ref: o.root } : {})) as { snapshot: string };
-    const lines = r.snapshot.split("\n");
-    const budget = (o.maxTokens ?? 8000) * 4;
-    let text = r.snapshot;
-    let truncated = false;
-    if (text.length > budget) {
-      text = text.slice(0, budget);
-      text = text.slice(0, text.lastIndexOf("\n")) + "\n- … [truncated]";
-      truncated = true;
-    }
-    let diff;
-    if (o.diff && this.last) diff = diffLines(this.last, lines, 200);
-    if (!o.root) this.last = lines;
-    return { snapshot: text, refs: (text.match(/\[ref=/g) ?? []).length, truncated, ...(diff ? { diff } : {}) };
-  }
-
-  async diffSinceLast() {
-    if (!this.last) return null;
-    const prev = this.last;
-    await this.snapshot({});
-    return diffLines(prev, this.last!, 60);
-  }
-
-  private async prep(ref: string, timeout = 5000, needEditable = false) {
-    const deadline = Date.now() + timeout;
-    for (;;) {
-      const st = (await this.call("prepareAction", [{ needEditable }], { ref })) as { ok: boolean; reason?: string };
-      if (st.ok) return;
-      if (st.reason === "detached") throw new TabAgentError("REF_STALE", `${ref} was removed`, "Take a new page.snapshot.");
-      if (Date.now() > deadline) throw notActionable(ref, st.reason ?? "not actionable");
-      await sleep(100);
-    }
-  }
-
-  async click(ref: string, o: ClickOpts = {}) {
-    await this.prep(ref, o.timeout);
-    this.epoch++;
-    await this.call("syntheticClick", [{ button: o.button === "right" ? 2 : o.button === "middle" ? 1 : 0, clickCount: o.clickCount }], { ref });
-    return {};
-  }
-  async hover(ref: string, timeout?: number) {
-    await this.prep(ref, timeout);
-    await this.call("syntheticHover", [], { ref });
-  }
-  async focus(ref: string, end = true) {
-    await this.call("focus", [{ end }], { ref });
-  }
-  async typeText(text: string) {
-    await this.call("syntheticType", [text]);
-    return {};
-  }
-  async press(chord: string) {
-    this.epoch++;
-    await this.call("syntheticKey", [chord]);
-    return {};
-  }
-  async fill(ref: string, value: string, timeout?: number) {
-    await this.prep(ref, timeout, true);
-    await this.call("setValue", [value], { ref });
-  }
-  async scroll(ref: string | undefined, dx: number, dy: number) {
-    if (ref && !dx && !dy) return this.call("scrollIntoView", [], { ref });
-    return this.call("scrollBy", [dx, dy], ref ? { ref } : {});
-  }
-  async drag(): Promise<void> {
-    throw liteUnsupported("act.drag");
-  }
-  async upload(): Promise<void> {
-    throw liteUnsupported("act.upload");
-  }
-  async screenshot(o: { fullPage?: boolean; ref?: string; format?: "png" | "jpeg" }) {
-    if (o.fullPage || o.ref) throw liteUnsupported("Full-page/element screenshots");
-    const tab = await chrome.tabs.get(this.tabId);
-    if (!tab.active) await chrome.tabs.update(this.tabId, { active: true });
-    const fmt = o.format ?? "png";
-    const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: fmt });
-    return { data: url.split(",")[1], mimeType: `image/${fmt}` };
-  }
-  async evaluate(): Promise<unknown> {
-    throw liteUnsupported("js.eval");
-  }
-  navEpoch() {
-    return this.epoch;
-  }
-  async currentUrl() {
-    return (await chrome.tabs.get(this.tabId)).url ?? "";
-  }
-  private waitComplete(timeout: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const t = setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(l);
-        resolve(false);
-      }, timeout);
-      const l = (id: number, info: chrome.tabs.OnUpdatedInfo) => {
-        if (id === this.tabId && info.status === "complete") {
-          clearTimeout(t);
-          chrome.tabs.onUpdated.removeListener(l);
-          resolve(true);
-        }
-      };
-      chrome.tabs.onUpdated.addListener(l);
-    });
-  }
-  async navigate(url: string, _w: string, timeout: number) {
-    this.last = null;
-    const p = this.waitComplete(timeout);
-    await chrome.tabs.update(this.tabId, { url });
-    const ok = await p;
-    return { url: await this.currentUrl(), ...(ok ? {} : { warning: "Timed out waiting for load" }) };
-  }
-  async history(action: "back" | "forward" | "reload", timeout: number) {
-    this.last = null;
-    const p = this.waitComplete(timeout);
-    if (action === "reload") await chrome.tabs.reload(this.tabId);
-    else if (action === "back") await chrome.tabs.goBack(this.tabId);
-    else await chrome.tabs.goForward(this.tabId);
-    await p;
-  }
-  async waitLoad(timeout: number) {
-    const t = await chrome.tabs.get(this.tabId);
-    if (t.status === "complete") return true;
-    return this.waitComplete(timeout);
-  }
-  async networkIdle(): Promise<boolean> {
-    await sleep(300);
-    return true;
-  }
-  async settle(before: number, timeout = 5000) {
-    await sleep(200);
-    const t = await chrome.tabs.get(this.tabId);
-    if (t.status !== "complete") {
-      this.last = null;
-      await this.waitComplete(timeout);
-    }
-    void before;
-  }
-  dialog() {
-    return null;
-  }
-  async handleDialog(): Promise<unknown> {
-    throw liteUnsupported("dialog.handle");
   }
 }

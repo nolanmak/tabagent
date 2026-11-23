@@ -1,0 +1,10 @@
+- main
+  - heading "Products (page 1)" level=1
+  - heading "Apple" level=3
+  - link "View" [ref=e1]
+  - heading "Banana" level=3
+  - link "View" [ref=e2]
+  - heading "Cherry" level=3
+  - link "View" [ref=e3]
+  - navigation "pagination"
+    - link "Next" [ref=e4]

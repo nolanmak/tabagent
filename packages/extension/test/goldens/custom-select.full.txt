@@ -1,0 +1,4 @@
+- main
+  - text "Fruit"
+  - combobox "Fruit" [ref=e1] value="Pick one"
+  - paragraph

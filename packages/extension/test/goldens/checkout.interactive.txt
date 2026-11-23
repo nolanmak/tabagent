@@ -1,0 +1,7 @@
+- main
+  - heading "Checkout" level=1
+  - form
+    - textbox "Card number" [ref=e1] value=""
+    - textbox "Name on card" [ref=e2] value=""
+    - button "Pay $42.00" [ref=e3]
+  - button "Delete account" [ref=e4]

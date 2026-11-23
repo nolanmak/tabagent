@@ -81,7 +81,7 @@ export const tokensOf = (s: string) => Math.ceil(s.length / 4);
 const INTERACTIVE = new Set([
   "button", "link", "textbox", "searchbox", "combobox", "listbox", "option", "checkbox", "radio", "switch", "slider",
   "spinbutton", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "treeitem", "MenuListOption", "PopUpButton", "textField",
-  "ToggleButton", "DisclosureTriangle", "TextField", "ComboBoxSelect", "ComboBoxMenuButton",
+  "ToggleButton", "DisclosureTriangle", "TextField", "ComboBoxSelect", "ComboBoxMenuButton", "Date", "DateTime", "InputTime", "ColorWell",
 ]);
 /** D23 structure shown (without refs) in interactive mode. */
 const LANDMARKS = new Set(["banner", "navigation", "main", "contentinfo", "complementary", "form", "search", "dialog", "alertdialog"]);
@@ -98,7 +98,7 @@ const FULL_NAMED_ONLY = new Set(["region", "group", "figure", "radiogroup"]);
 const REF_STRUCT = new Set(["form", "table", "grid", "dialog", "alertdialog", "list", "tabpanel", "region", "group", "radiogroup", "menu", "tree", "article"]);
 const TEXTUAL = new Set(["paragraph", "listitem", "cell", "gridcell", "columnheader", "rowheader", "term", "definition", "blockquote", "code", "heading", "status", "alert", "log", "note"]);
 const NAME_COVERS_TEXT = new Set(["link", "button", "heading", "option", "tab", "menuitem", "cell", "columnheader", "rowheader", "listitem", "MenuListOption", "checkbox", "radio", "switch", "gridcell"]);
-const VALUE_ROLES = new Set(["textbox", "searchbox", "combobox", "slider", "spinbutton", "textField", "PopUpButton", "TextField"]);
+const VALUE_ROLES = new Set(["textbox", "searchbox", "combobox", "slider", "spinbutton", "textField", "PopUpButton", "TextField", "Date", "DateTime", "InputTime"]);
 const ROLE_ALIAS: Record<string, string> = {
   MenuListOption: "option",
   PopUpButton: "combobox",
@@ -110,6 +110,10 @@ const ROLE_ALIAS: Record<string, string> = {
   TextField: "textbox",
   DescriptionList: "list",
   ToggleButton: "button",
+  Date: "textbox",
+  DateTime: "textbox",
+  InputTime: "textbox",
+  ColorWell: "button",
 };
 const SKIP = new Set(["InlineTextBox", "LineBreak", "ListMarker"]);
 
@@ -133,6 +137,19 @@ interface TNode {
   /** For collapse: the node that can be passed as root=. */
   key?: [string, number];
   children: TNode[];
+}
+
+/** Remove text lines (also inside transparent wrappers) once a name already covers them. */
+function dropText(ns: TNode[]): TNode[] {
+  const out: TNode[] = [];
+  for (const c of ns) {
+    if (c.role === "text") continue;
+    if (!c.line) {
+      const kids = dropText(c.children);
+      if (kids.length) out.push({ ...c, children: kids });
+    } else out.push(c);
+  }
+  return out;
 }
 
 function isInteractiveNode(n: AXNode, rawRole: string, name: string): boolean {
@@ -251,8 +268,12 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
       if (inv && inv !== "false") tail += " invalid";
 
       let children: TNode[] = heading && !full ? [] : kids();
-      if (consumedText || interactive) children = children.filter((c) => c.role !== "text");
+      if (consumedText || interactive) children = dropText(children);
       if (!full && (rawRole === "combobox" || rawRole === "PopUpButton" || rawRole === "ComboBoxSelect") && prop(n, "expanded") !== true) children = [];
+      // date/time fields: their spin-button parts are noise; the field takes the value
+      if (["Date", "DateTime", "InputTime"].includes(rawRole)) children = [];
+      // empty landmarks carry no information in interactive mode
+      if (!full && landmark && !interactive && !children.some(hasOutput)) return [];
       return [{ role, key, line: { head, tail, refKey, interactive }, children }];
     };
 
