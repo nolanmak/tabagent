@@ -216,7 +216,7 @@ describe("MCP Streamable HTTP", () => {
     expect(cmd.session.id).toMatch(/^mcp-/);
     const restBody = (await rest(base, "/v1/page.snapshot", cfg.secret, {})).body;
     const norm = (s: string) => s.replace(/[0-9a-f]{16}/g, "N");
-    expect(norm(r.content[0].text)).toBe(norm(renderMcp(restBody).content[0].text as string));
+    expect(norm(r.content[0].text)).toBe(norm((renderMcp(restBody).content[0] as { text: string }).text));
     expect(norm(renderCli(restBody))).toBe(norm(r.content[0].text));
     expect(r.content[0].text).toContain("snapshot:\n<<<PAGE_DATA");
     await c.close();

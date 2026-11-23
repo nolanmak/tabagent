@@ -9,5 +9,5 @@
     "baseUrl": ".",
     "paths": { "@tabagent/protocol": ["packages/protocol/src/index.ts"] }
   },
-  "include": ["packages/*/src/**/*.ts", "e2e/**/*.ts", "test/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "e2e/**/*.ts", "test/**/*.ts"]
 }
