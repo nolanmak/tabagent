@@ -1,0 +1,112 @@
+# CI gates (#25, roadmap #28 TDD rule 7): lint → typecheck → unit (coverage
+# floors) → build → e2e and tool-budget. Branch protection on main requires
+# every job below.
+name: CI
+
+on:
+  push:
+    branches: [main, "build/**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      # eslint + generated docs (docs/tools.md, docs/lite-mode.md) are current
+      - run: npm run lint
+
+  typecheck:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+
+  unit:
+    needs: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      # Fails when protocol < 90%, bridge < 80% or extension pure modules < 80% lines.
+      - run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: coverage, path: coverage/, if-no-files-found: ignore }
+
+  build:
+    needs: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm run check-versions
+      # Built-artifact checks: --version, MV3 manifest, permission justifications,
+      # example MCP configs, npm pack install.
+      - run: npm run test:release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            packages/bridge/dist/
+            packages/extension/dist/
+          if-no-files-found: error
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: packages/ }
+      - run: chmod +x packages/bridge/dist/cli.js
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --trace retain-on-failure
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+
+  tool-budget:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: packages/ }
+      - run: chmod +x packages/bridge/dist/cli.js
+      # core ≤ 2000 and full ≤ 8000 tokens of tools/list JSON (#30).
+      - run: npm run tool-budget
