@@ -47,14 +47,16 @@ test("tabs attach adopts a user tab only after the user agrees; session end ungr
   await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "attach", tabId }));
   const s = await h.ok(c, "page.snapshot", { tabId });
   expect(s.json.title).toBe("Article");
-  const grouped = await h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).groupId, tabId);
-  expect(grouped).toBeGreaterThan(-1);
+  await expect.poll(() => h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).groupId, tabId)).toBeGreaterThan(-1);
   await h.ok(c, "session.end");
-  const after = await h.sw.evaluate(async (id) => {
-    const t = await chrome.tabs.get(id).catch(() => null);
-    return t ? { open: true, groupId: t.groupId } : { open: false, groupId: -2 };
-  }, tabId);
-  expect(after).toEqual({ open: true, groupId: -1 });
+  await expect
+    .poll(() =>
+      h.sw.evaluate(async (id) => {
+        const t = await chrome.tabs.get(id).catch(() => null);
+        return t ? { open: true, groupId: t.groupId } : { open: false, groupId: -2 };
+      }, tabId),
+    )
+    .toEqual({ open: true, groupId: -1 });
   await userTab.close();
 });
 
