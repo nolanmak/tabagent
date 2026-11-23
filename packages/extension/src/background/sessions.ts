@@ -232,6 +232,10 @@ export function endHandoff(tabId: number, result: "done" | "cancel"): boolean {
   broadcast({ type: "handoffs", handoffs: listHandoffs() });
   return true;
 }
+/** Kill switch: every open handoff ends as "cancel". */
+export function endAllHandoffs() {
+  for (const tabId of [...handoffs.keys()]) endHandoff(tabId, "cancel");
+}
 export function listHandoffs(): HandoffInfo[] {
   return [...handoffs.values()].map((h) => h.info);
 }

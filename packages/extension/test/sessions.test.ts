@@ -194,4 +194,11 @@ describe("M6 hooks: private auth tabs and handoff", () => {
     expect(S.endHandoff(t.id!, "done")).toBe(false);
     expect(await S.resolveTab(s, t.id)).toBe(t.id);
   });
+  it("kill ends every open handoff", async () => {
+    const p1 = S.startHandoff({ tabId: 1, sessionId: "a", sessionLabel: "a", origin: "https://x", reason: "r" });
+    const p2 = S.startHandoff({ tabId: 2, sessionId: "a", sessionLabel: "a", origin: "https://x", reason: "r" });
+    S.endAllHandoffs();
+    expect(await Promise.all([p1, p2])).toEqual(["cancel", "cancel"]);
+    expect(S.listHandoffs()).toEqual([]);
+  });
 });
