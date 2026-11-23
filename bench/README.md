@@ -16,8 +16,16 @@ records `{url, title, text, bench, answer}` from the last session tab on the fix
 ```bash
 npm run bench -- --dry-run                     # scripted fake agent + recorded states, no browser/model
 npm run bench -- --dry-run --fail dialog-prompt  # see a failing row
-npm run build && npm run bench -- --agent claude-code --model <model> --out results.md
+npm run build && npm run bench -- --agent claude-code --model <model> --max-steps 25 --out results.md
+npm run build && npm run bench -- --agent codex --model <model> --max-steps 25 --out results.md
 ```
+
+Both real adapters are isolated the same way as `scripts/live-agent-check.mjs`: the agent's
+default config dir is used for auth only, the only MCP server is TabAgent (task profile, temp
+`TABAGENT_HOME`), built-in tools, user settings, hooks, plugins and installed skills are off, and
+the TabAgent `SKILL.md` is passed as system/developer instructions. Claude Code enforces
+`--max-steps` as `--max-turns`; Codex has no turn limit, so the limit is stated in the prompt and
+the wall-clock timeout (420 s per task) is the hard stop.
 
 Real runs use the e2e harness (#22): Chromium with the unpacked extension, a bridge on a temp port
 and home, real pairing, fixture origins pre-granted and `devAllowSensitive` on. Tasks use the
@@ -44,4 +52,4 @@ transcript.
 
 ## Published runs
 
-None yet. The first full run goes in the top-level README with model, date and task-set version.
+Published in the top-level [README](../README.md#benchmark).
