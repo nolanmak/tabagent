@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Tabwright",
+  "version": "0.0.0",
+  "description": "Let AI agents drive your browser, with permissions you control.",
+  "minimum_chrome_version": "116",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "action": { "default_title": "Tabwright" },
+  "permissions": ["tabs", "tabGroups", "scripting", "storage", "sidePanel", "downloads", "debugger", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "commands": {
+    "kill-switch": { "suggested_key": { "default": "Alt+Shift+K" }, "description": "Stop all agent sessions" }
+  }
+}
