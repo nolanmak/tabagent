@@ -32,7 +32,7 @@ const TABS_ACTIONS: Record<string, { level: Level | "none"; sensitive?: Sensitiv
 const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f"]);
 
 /** Where the URL being authorized comes from. */
-export type UrlSource = "tab" | "param" | "tab-or-param" | "download" | "attach-target" | "none";
+export type UrlSource = "tab" | "param" | "download" | "attach-target" | "none";
 
 export interface Requirements {
   action?: string;

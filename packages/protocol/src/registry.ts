@@ -20,7 +20,7 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   f: "Taking over one of your tabs",
 };
 
-export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "files" | "session";
+export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session";
 export type Profile = "core" | "forms" | "data" | "dev" | "full";
 export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full"];
 
@@ -81,7 +81,7 @@ export const TOOLS = [
   def({
     name: "tabs",
     group: "tabs",
-    description: "Manage this session's tabs. action=list|new|select|close|attach. attach adopts the user's active tab (gated).",
+    description: "Manage this session's tabs. action=list|new|select|close|attach. attach adopts the user's active tab (always asks).",
     params: z.object({
       action: z.enum(["list", "new", "select", "close", "attach"]),
       tabId,
@@ -157,7 +157,7 @@ export const TOOLS = [
   def({
     name: "nav.wait",
     group: "nav",
-    description: "Wait for: load | networkidle | selector (CSS) | text | url (substring or /regex/) | fn (JS predicate; gated).",
+    description: "Wait for: load | networkidle | selector (CSS) | text | url (substring or /regex/) | fn (JS predicate; asks the user).",
     params: z.object({
       for: z.enum(["load", "networkidle", "selector", "text", "url", "fn"]),
       value: z.string().optional(),
@@ -381,7 +381,7 @@ export const TOOLS = [
   def({
     name: "act.upload",
     group: "act",
-    description: "Set files on a file input. Paths must be inside the bridge's upload dirs (default ~/.tabagent/uploads). Gated.",
+    description: "Set files on a file input. Paths must be inside the bridge's upload dirs (default ~/.tabagent/uploads). Asks the user.",
     params: z.object({ ref, paths: z.array(z.string()).min(1), tabId, timeout: actTimeout }),
     result: loose({ files: z.array(loose({ name: z.string(), size: z.number().optional() })).optional() }),
     level: "act",
@@ -421,7 +421,7 @@ export const TOOLS = [
   def({
     name: "form.submit",
     group: "form",
-    description: "Submit a form (by form ref, or the form containing ref). Password/card forms are gated.",
+    description: "Submit a form (by form ref, or the form containing ref). Password/card forms ask the user.",
     params: z.object({ ref: ref.optional(), tabId, timeout: actTimeout }),
     result: empty,
     level: "act",
@@ -538,7 +538,7 @@ export const TOOLS = [
   def({
     name: "downloads.read",
     group: "files",
-    description: "Read a completed download of this session (UTF-8 text or base64; max 5 MB). Gated.",
+    description: "Read a completed download of this session (UTF-8 text or base64; max 5 MB). Asks the user.",
     params: z.object({ id: zint() }),
     result: loose({
       id: z.number(),
@@ -558,7 +558,7 @@ export const TOOLS = [
   def({
     name: "session.info",
     group: "session",
-    description: "This session's id, label, tabs, mode and connection state.",
+    description: "This session's id, label, tabs and connection state.",
     params: z.object({}),
     result: loose({ tabs: z.array(loose({ url: page(z.string()).optional(), title: page(z.string()).optional() })).optional() }),
     level: "none",
@@ -614,8 +614,8 @@ export function getTool(name: string): ToolDef | undefined {
 export function toolsForProfiles(profiles: string | string[] | undefined, tools: readonly ToolDef[] = TOOLS as unknown as ToolDef[]): ToolDef[] {
   const list = (Array.isArray(profiles) ? profiles : (profiles ?? "core").split(",")).map((p) => p.trim()).filter(Boolean);
   for (const p of list) if (!PROFILES.includes(p as Profile)) throw new Error(`Unknown profile "${p}". Valid profiles: ${PROFILES.join(", ")}`);
-  if (list.includes("full")) return tools.slice();
   const want = new Set<string>(["core", ...list]);
+  if (list.includes("full")) return [...tools];
   return tools.filter((t) => t.profiles.some((p) => want.has(p)));
 }
 

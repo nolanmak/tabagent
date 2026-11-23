@@ -14,10 +14,10 @@ import { staleRef } from "./errors";
 
 export interface RefTarget {
   tabId: number;
-  /** `${cdpSessionId ?? ""}|${frameId}` for CDP; `lite|<frameId>` in lite mode. */
+  /** `${cdpSessionId ?? ""}|${frameId}`. */
   frameKey: string;
   backendNodeId: number;
-  /** Document identity: CDP loaderId, or the lite content script's document id. */
+  /** Document identity: the CDP loaderId. */
   loaderId: string;
 }
 

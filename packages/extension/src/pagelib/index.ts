@@ -1,4 +1,4 @@
-// pagelib: DOM-side helpers. Runs in a CDP *isolated world* and is installed as
+// pagelib: DOM-side helpers. Runs in a CDP isolated world and is installed as
 // globalThis.__ta. Functions that return elements return { value, elements } and
 // reference elements inside `value` as { el: <index> }; the background maps those
 // indexes to refs.
@@ -276,26 +276,6 @@ export function describeEl(el: El): string {
   const name = nameOf(el);
   return `<${tag}${id}${cls}>${name ? ` "${name.slice(0, 40)}"` : ""}`;
 }
-
-const INTERACTIVE = new Set([
-  "button",
-  "link",
-  "textbox",
-  "searchbox",
-  "combobox",
-  "listbox",
-  "option",
-  "checkbox",
-  "radio",
-  "switch",
-  "slider",
-  "spinbutton",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "tab",
-  "treeitem",
-]);
 
 // ---------------------------------------------------------------------------
 // Find

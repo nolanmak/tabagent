@@ -23,10 +23,59 @@
   <p id="pairErr" class="err" hidden></p>
 </section>
 
+<section class="card kill">
+  <button id="killBtn" class="danger" title="Alt+Shift+K">■ Stop all agents</button>
+  <button id="resumeBtn" class="primary" hidden>▶ Resume</button>
+  <span class="muted small" id="killNote">Shortcut: Alt+Shift+K</span>
+</section>
+
+<section id="promptsBox" class="card attention" hidden>
+  <h2>Waiting for you</h2>
+  <ul id="prompts" class="prompts"></ul>
+</section>
+
+<section id="stoppedBox" class="card" hidden>
+  <h2>Stopped tabs</h2>
+  <p class="muted small">Debugging was cancelled on these tabs. Resume lets agents drive them again.</p>
+  <ul id="stopped" class="list"></ul>
+</section>
+
 <section class="card">
+  <h2>Sessions</h2>
+  <ul id="sessions" class="list"><li class="muted">No agents connected.</li></ul>
+</section>
+
+<section class="card">
+  <h2>Activity</h2>
+  <ul id="feed" class="feed"></ul>
+</section>
+
+<details class="card" id="settingsBox">
+  <summary><h2>Settings</h2></summary>
+  <h3>Sites</h3>
+  <p class="muted small">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site.</p>
+  <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
+  <form id="addSite" class="row">
+    <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
+    <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option></select>
+    <button type="submit">Add</button>
+  </form>
+  <h3>Denylist</h3>
+  <p class="muted small">Host globs, one per line. Browser pages and the Web Store are always blocked.</p>
+  <textarea id="denylist" rows="5"></textarea>
+  <div class="row"><button id="saveDenylist">Save denylist</button></div>
+  <h3>Behaviour</h3>
+  <label class="row">When a session ends
+    <select id="onSessionEnd"><option value="collapse">Collapse its tab group</option><option value="keep">Keep tabs</option><option value="close">Close its tabs</option></select>
+  </label>
+  <label class="row">Leave-page dialogs
+    <select id="beforeUnload"><option value="accept">Leave the page</option><option value="dismiss">Stay on the page</option><option value="ask-agent">Let the agent decide</option></select>
+  </label>
+  <label class="row"><input type="checkbox" id="showOverlay" /> Show the on-page activity border</label>
+  <label class="row"><input type="checkbox" id="devAllowSensitive" /> Developer: skip sensitive-action confirmations</label>
   <div class="row"><button id="unpair" class="link">Unpair bridge</button></div>
   <p class="muted small" id="about"></p>
-</section>
+</details>
 <script src="sidepanel.js"></script>
 </body>
 </html>

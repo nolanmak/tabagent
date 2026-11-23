@@ -5,6 +5,7 @@ import { TabAgentError, type SessionMeta } from "@tabagent/protocol";
 import { detachTab } from "./cdp";
 import { disposeDrivers } from "./driver";
 import { broadcast } from "./feed";
+import { clearGrants, prompts } from "./permissions";
 import { getSettings } from "./settings";
 
 type GroupColor = "grey" | "blue" | "red" | "yellow" | "green" | "pink" | "purple" | "cyan" | "orange";
@@ -226,6 +227,8 @@ export async function endSession(id: string, how?: "collapse" | "close" | "keep"
   if (!s) return false;
   const mode = how ?? (await getSettings()).onSessionEnd;
   sessions.delete(id);
+  await clearGrants(id);
+  prompts.dropSession(id);
   for (const t of s.tabIds) {
     owner.delete(t);
     disposeDrivers(t);

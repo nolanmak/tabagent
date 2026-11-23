@@ -1,25 +1,33 @@
 // Extension settings (D32, contract §7). Persistent settings live in
 // chrome.storage.local (access level TRUSTED_CONTEXTS so content scripts can't
-// read the secret, D7).
-import { migrateSettings, type BeforeUnload, type OnSessionEnd } from "./settingsModel";
+// read the secret, D7). The paused flag is session state (chrome.storage.session, D11).
+import type { SiteEntry } from "./policy";
+import { migrateSettings, SEEDED_DENYLIST, type BeforeUnload, type OnSessionEnd } from "./settingsModel";
 
-export { migrateSettings };
+export { SEEDED_DENYLIST, migrateSettings };
 export type { BeforeUnload, OnSessionEnd };
 
 export interface Settings {
   port: number;
   secret: string | null;
+  sites: Record<string, SiteEntry>;
+  denylist: string[];
   devAllowSensitive: boolean;
   onSessionEnd: OnSessionEnd;
   beforeUnload: BeforeUnload;
   showOverlay: boolean;
+  /** Kill switch engaged (session state, not persisted across browser restarts). */
+  paused: boolean;
   /** @deprecated derived from beforeUnload === "accept"; read by older cdp.ts. */
   autoAcceptBeforeUnload: boolean;
+  /** @deprecated derived: origins with any pre-approval. */
+  sensitiveAllowed: Record<string, boolean>;
 }
 
-export type StoredSettings = Omit<Settings, "autoAcceptBeforeUnload">;
+export type StoredSettings = Omit<Settings, "paused" | "autoAcceptBeforeUnload" | "sensitiveAllowed">;
 
 let cache: StoredSettings | null = null;
+let paused: boolean | null = null;
 let accessSet = false;
 
 async function ensureAccessLevel() {
@@ -33,7 +41,9 @@ async function ensureAccessLevel() {
 }
 
 function view(s: StoredSettings): Settings {
-  return { ...s, autoAcceptBeforeUnload: s.beforeUnload === "accept" };
+  const sensitiveAllowed: Record<string, boolean> = {};
+  for (const [o, e] of Object.entries(s.sites)) if (e.preapproved && Object.keys(e.preapproved).length) sensitiveAllowed[o] = true;
+  return { ...s, paused: !!paused, autoAcceptBeforeUnload: s.beforeUnload === "accept", sensitiveAllowed };
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -42,12 +52,23 @@ export async function getSettings(): Promise<Settings> {
     const raw = (await chrome.storage.local.get("settings")).settings as Record<string, unknown> | undefined;
     cache = migrateSettings(raw);
   }
+  if (paused == null) {
+    try {
+      paused = !!(await chrome.storage.session.get("paused")).paused;
+    } catch {
+      paused = false;
+    }
+  }
   return view(cache);
 }
 
 export async function updateSettings(patch: Partial<Settings> & Record<string, unknown>): Promise<Settings> {
   await getSettings();
-  const { autoAcceptBeforeUnload: aa, ...rest } = patch;
+  const { paused: p, autoAcceptBeforeUnload: aa, sensitiveAllowed: _sa, ...rest } = patch;
+  if (p !== undefined) {
+    paused = !!p;
+    await chrome.storage.session.set({ paused });
+  }
   // legacy patch keys (old harness / UI) are folded into the new shape
   const merged = migrateSettings({ ...cache!, ...rest, ...(aa !== undefined && !("beforeUnload" in rest) ? { beforeUnload: aa ? "accept" : "dismiss" } : {}) });
   cache = merged;
@@ -55,6 +76,11 @@ export async function updateSettings(patch: Partial<Settings> & Record<string, u
   return view(cache);
 }
 
+export async function isPaused(): Promise<boolean> {
+  return (await getSettings()).paused;
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.settings) cache = migrateSettings(changes.settings.newValue as Record<string, unknown> | undefined);
+  if (area === "session" && changes.paused) paused = !!changes.paused.newValue;
 });

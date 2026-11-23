@@ -57,9 +57,9 @@ export interface FrameCall {
   value: any;
 }
 
-/** D26: what tool handlers may ask of a tab. CDP is one implementation, lite (#21) the other. */
+/** D26: what tool handlers may ask of a tab. CDP is the only implementation in v1 M1-M3. */
 export interface Driver {
-  kind: "cdp" | "lite";
+  kind: "cdp";
   tabId: number;
   snapshot(o: SnapshotOpts): Promise<RenderResult>;
   find(spec: FindSpec): Promise<{ matches: FindMatch[]; truncated: boolean }>;
@@ -94,7 +94,7 @@ export interface Driver {
 }
 
 // ---------------------------------------------------------------------------
-// driverFor: the CDP driver is the only implementation until lite mode (#21)
+// driverFor: one CDP driver per tab
 // ---------------------------------------------------------------------------
 const drivers = new Map<number, { cdp?: CdpDriver }>();
 
@@ -109,8 +109,7 @@ export function peekDriver(tabId: number): Driver | undefined {
 }
 
 export function disposeDrivers(tabId: number) {
-  const d = drivers.get(tabId);
-  d?.cdp?.dispose();
+  drivers.get(tabId)?.cdp?.dispose();
   drivers.delete(tabId);
   refTable.dropTab(tabId);
   baselines.clearTab(tabId);
@@ -180,7 +179,7 @@ export class CdpDriver implements Driver {
     try {
       return this.refs.resolve(ref, this.tabId, (fk) => this.tab.loaders.get(fk));
     } catch (e) {
-      // The frame may simply not be in our loader map yet (late OOPIF): refresh once.
+      // The frame may simply not be in our loader map yet (late iframe): refresh once.
       const t = this.refs.get(ref);
       if (t && t.tabId === this.tabId && !this.tab.loaders.has(t.frameKey)) {
         await this.frames(true);
