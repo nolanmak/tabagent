@@ -1,1 +1,187 @@
-// CLI entry: `tabagent serve | mcp | token | <tool>`. See docs/DESIGN.md.
+// tabagent CLI: serve | mcp | pair | status | tools | <tool>
+import { randomBytes } from "node:crypto";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { getTool, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
+import { parseFlags, toolParamsFromArgs, type Flags } from "./args";
+import { api, ensureDaemon, health, restCall } from "./client";
+import { configPath, loadConfig } from "./config";
+import { Daemon } from "./daemon";
+import { buildMcpServer } from "./mcp";
+import { helpText, toolOutput, toolsCommand, type Out } from "./commands";
+import { BRIDGE_VERSION } from "./version";
+
+const CLI_PATH = fileURLToPath(import.meta.url);
+
+function die(msg: string, code = 1): never {
+  process.stderr.write(msg + "\n");
+  process.exit(code);
+}
+
+function portOf(f: Flags) {
+  const cfg = loadConfig();
+  if (typeof f.port === "string") cfg.port = Number(f.port);
+  return cfg;
+}
+
+// ---------------------------------------------------------------------------
+async function cmdServe(f: Flags) {
+  const cfg = portOf(f);
+  const existing = await health(cfg.port);
+  if (existing) die(`A TabAgent bridge (v${existing.bridgeVersion}) is already running on port ${cfg.port}.`);
+  const d = new Daemon(cfg, { profile: typeof f.profile === "string" ? f.profile : undefined, log: (m) => console.log(`[tabagent] ${m}`) });
+  try {
+    await d.start();
+  } catch (e) {
+    die(`Could not listen on 127.0.0.1:${cfg.port}: ${(e as Error).message}`);
+  }
+  console.log(`TabAgent bridge v${BRIDGE_VERSION} on http://127.0.0.1:${d.port}  (MCP: /mcp, REST: /v1, config: ${configPath()})`);
+  console.log(`\n  TabAgent pairing code: ${d.pairCode}   (valid 10 min; \`tabagent pair\` mints a new one)\n  Open the TabAgent side panel in Chrome and enter it. Port ${d.port}.\n`);
+  const stop = async () => {
+    await d.stop();
+    process.exit(0);
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+}
+
+async function cmdMcp(f: Flags) {
+  // D6: stdout carries MCP frames only. Anything else goes to stderr.
+  console.log = (...a: unknown[]) => process.stderr.write(a.map(String).join(" ") + "\n");
+  const log = (m: string) => process.stderr.write(`[tabagent] ${m}\n`);
+  const cfg = portOf(f);
+  const profile = typeof f.profile === "string" ? f.profile : (process.env.TABAGENT_PROFILE ?? "core");
+  try {
+    toolsForProfiles(profile);
+  } catch (e) {
+    die((e as Error).message);
+  }
+  const token = cfg.secret;
+  const sessionId = `${process.pid}-${randomBytes(3).toString("hex")}`;
+  let client = typeof f.label === "string" ? f.label : "";
+
+  const up = await ensureDaemon(cfg.port, CLI_PATH);
+  if (!up.health) log(`could not start a bridge on port ${cfg.port}; see ${join(dirname(configPath()), "bridge.log")}`);
+  else {
+    if (up.spawned) log(`started a background bridge on 127.0.0.1:${cfg.port}`);
+    const s = await api(cfg.port, token, "/v1/status").catch(() => null);
+    if (s?.ok && !s.extension && s.pairCode) log(`TabAgent pairing code: ${s.pairCode}  (enter it in the TabAgent side panel; \`tabagent status\` shows it again)`);
+  }
+
+  const headers = () => ({ "x-tabagent-mcp": "1", "x-tabagent-session": sessionId, ...(client ? { "x-tabagent-client": client } : {}) });
+  const call = async (tool: string, params: Record<string, unknown>): Promise<OutputResponse> => {
+    let r = await restCall({ port: cfg.port, token, headers: headers() }, tool, params);
+    if (!r.ok && r.error?.code === "NO_EXTENSION" && /Cannot reach/.test(r.error.message)) {
+      // The daemon went away (crash, manual stop): bring one back and retry once.
+      if ((await ensureDaemon(cfg.port, CLI_PATH)).health) r = await restCall({ port: cfg.port, token, headers: headers() }, tool, params);
+    }
+    return r;
+  };
+  const server = buildMcpServer({
+    call,
+    profile,
+    onClientInfo: (name) => {
+      if (!client && name) client = name.replace(/[^\w .-]/g, "").slice(0, 40);
+    },
+  });
+  const transport = new StdioServerTransport();
+  let ended = false;
+  const end = async () => {
+    if (ended) return;
+    ended = true;
+    try {
+      await fetch(`http://127.0.0.1:${cfg.port}/v1/session/end`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers() }, body: "{}", signal: AbortSignal.timeout(1000) }).catch(() => {});
+    } finally {
+      setTimeout(() => process.exit(0), 50);
+    }
+  };
+  transport.onclose = () => void end();
+  process.stdin.on("end", () => void end());
+  process.on("SIGTERM", () => void end());
+  process.on("SIGINT", () => void end());
+  await server.connect(transport);
+}
+
+async function cmdStatus(f: Flags) {
+  const cfg = portOf(f);
+  const h = await health(cfg.port);
+  if (!h) {
+    console.log(`Bridge: not running on port ${cfg.port}. Start it with \`tabagent serve\` (or let \`tabagent mcp\` start one).`);
+    process.exit(1);
+  }
+  const s = await api(cfg.port, cfg.secret, "/v1/status");
+  console.log(`Bridge: running v${s.bridgeVersion} (protocol ${s.protocolVersion}) on 127.0.0.1:${cfg.port}`);
+  console.log(`Extension: ${s.extension ? `connected (v${s.extensionVersion})` : "NOT connected"}${s.paired ? "" : " — not paired yet"}`);
+  if (!s.extension) console.log(s.pairCode ? `Pairing code: ${s.pairCode}  (enter it in the TabAgent side panel)` : "No valid pairing code; run `tabagent pair`.");
+  console.log(`Sessions: ${s.mcpSessions} MCP-HTTP, ${s.restSessions} REST/stdio`);
+}
+
+async function cmdPair(f: Flags) {
+  const cfg = portOf(f);
+  if (!(await health(cfg.port))) die("Bridge is not running. Start it with `tabagent serve`.");
+  const r = await api(cfg.port, cfg.secret, "/v1/pair", "POST");
+  console.log(`Pairing code: ${r.pairCode}  (valid ${Math.round(r.expiresInSec / 60)} min)`);
+}
+
+function cmdTools(f: Flags) {
+  print(toolsCommand(typeof f.profile === "string" ? f.profile : "full"));
+}
+
+function print(o: Out): void {
+  for (const l of o.out) console.log(l);
+  for (const l of o.err) process.stderr.write(l + "\n");
+  if (o.code) process.exit(o.code);
+}
+
+async function cmdTool(name: string, args: string[]) {
+  const tool = getTool(name);
+  if (!tool) die(`Unknown command or tool "${name}". Run \`tabagent help\` or \`tabagent tools\`.`);
+  const { f } = parseFlags(args);
+  let params: Record<string, unknown>;
+  try {
+    params = toolParamsFromArgs(tool, f);
+  } catch (e) {
+    die(`BAD_REQUEST: ${(e as Error).message}`);
+  }
+  const cfg = portOf(f);
+  if (!(await health(cfg.port))) die("NO_EXTENSION: Bridge is not running. Start it with `tabagent serve`.");
+  const resp = await restCall(
+    { port: cfg.port, token: cfg.secret, headers: typeof f.session === "string" ? { "x-tabagent-session": f.session } : {} },
+    tool.name,
+    params,
+  );
+  print(toolOutput(resp, f));
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+const { f } = parseFlags(rest);
+switch (cmd) {
+  case "serve":
+    await cmdServe(f);
+    break;
+  case "mcp":
+    await cmdMcp(f);
+    break;
+  case "status":
+    await cmdStatus(f);
+    break;
+  case "pair":
+    await cmdPair(f);
+    break;
+  case "tools":
+    cmdTools(f);
+    break;
+  case undefined:
+  case "help":
+  case "--help":
+  case "-h":
+    console.log(helpText());
+    break;
+  case "--version":
+  case "-v":
+    console.log(BRIDGE_VERSION);
+    break;
+  default:
+    await cmdTool(cmd, rest);
+}

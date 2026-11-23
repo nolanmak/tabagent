@@ -1,1 +1,8 @@
-{ "name": "@tabagent/extension", "version": "0.0.0", "private": true, "type": "module" }
+{
+  "name": "@tabagent/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": { "@tabagent/protocol": "*" }
+}

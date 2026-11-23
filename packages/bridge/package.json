@@ -1,7 +1,17 @@
 {
   "name": "tabagent",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Let any AI agent drive your real Chrome: MCP server + CLI bridge for the TabAgent extension.",
   "type": "module",
+  "license": "MIT",
   "bin": { "tabagent": "dist/cli.js" },
-  "dependencies": { "@tabagent/protocol": "workspace:*", "@modelcontextprotocol/sdk": "^1.0.0", "ws": "^8.18.0" }
+  "files": ["dist", "README.md"],
+  "scripts": { "build": "node build.mjs" },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ws": "^8.23.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": { "@tabagent/protocol": "*" }
 }
