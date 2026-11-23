@@ -1,160 +1,227 @@
-// TabAgent service worker: bridge connection, command router, kill switch, UI API.
-import { getTool, TabAgentError, validateParams, type BridgeToExt, type Command, type ExtToBridge, type Result } from "@tabagent/protocol";
-import { allCdpTabs, detachAll } from "./cdp";
-import { broadcast, feedAll, feedEnd, feedStart, summarize } from "./feed";
-import { answerPrompt, denyAllPrompts, pendingPrompts } from "./permissions";
-import { endAllSessions, endSession, getSession, listSessions, restoreSessions, updateBadge } from "./sessions";
-import { getSettings, updateSettings, type Settings } from "./settings";
+// TabAgent service worker: wires the bridge client, the command router, the
+// permission gate, the kill switch, the badge and the UI API together.
+// Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
+import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { badgeState, BADGE } from "./badge";
+import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
+import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
+import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
+import { disposeDrivers, driverFor } from "./driver";
+import { getDownload } from "./downloads";
+import { extraHandlers } from "./handlerRegistry";
+import { broadcast, feedAll, feedPush } from "./feed";
+import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
+import type { PromptInfo } from "./prompts";
+import { createRouter } from "./router";
+import { attachTarget, sessionHandlers } from "./sessionTools";
+import { endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
+import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { handlers } from "./tools";
 
 const VERSION = chrome.runtime.getManifest().version;
+const FEATURES = ["files.resolve"];
 
 // ---------------------------------------------------------------------------
-// Bridge connection
+// Bridge connection (D4, D5, D11)
 // ---------------------------------------------------------------------------
-type Status = "unpaired" | "connecting" | "connected" | "disconnected" | "pair-failed";
-let ws: WebSocket | null = null;
-let status: Status = "disconnected";
-let lastError = "";
-let pairCode: string | null = null;
-let heartbeat: ReturnType<typeof setInterval> | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let backoff = 500;
+const bridge = createBridgeClient({
+  makeSocket: (url) => new WebSocket(url) as unknown as WsLike,
+  loadConfig: async () => {
+    const s = await getSettings();
+    return { port: s.port, secret: s.secret };
+  },
+  saveSecret: async (secret) => {
+    await updateSettings({ secret });
+  },
+  onMessage: (m) => onBridgeMessage(m),
+  onStatus: (status, error) => {
+    broadcast({ type: "status", status, error });
+    refreshBadge();
+  },
+  protocolVersion: PROTOCOL_VERSION,
+  extensionVersion: VERSION,
+  extensionId: chrome.runtime.id,
+  features: FEATURES,
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+});
+setFilesSender((m) => bridge.send(m));
 
-function setStatus(s: Status, err = "") {
-  status = s;
-  lastError = err;
-  broadcast({ type: "status", status, error: lastError });
-  chrome.action.setTitle({ title: `TabAgent: ${s}${err ? ` (${err})` : ""}` }).catch(() => {});
+function sendEvent(event: string, data: Record<string, unknown> = {}) {
+  bridge.send({ type: "event", event, data });
 }
 
-function send(msg: ExtToBridge) {
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-}
-
-async function connect() {
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  const s = await getSettings();
-  if (!s.secret && !pairCode) {
-    setStatus("unpaired");
-    return;
-  }
-  setStatus("connecting");
-  let sock: WebSocket;
-  try {
-    sock = new WebSocket(`ws://127.0.0.1:${s.port}/ext`);
-  } catch (e) {
-    setStatus("disconnected", String(e));
-    scheduleReconnect();
-    return;
-  }
-  ws = sock;
-  sock.onopen = () => {
-    send({ type: "hello", secret: s.secret ?? undefined, pairCode: pairCode ?? undefined, version: VERSION, extensionId: chrome.runtime.id });
-  };
-  sock.onmessage = (ev) => onBridgeMessage(String(ev.data));
-  sock.onclose = (ev) => {
-    if (ws === sock) ws = null;
-    if (heartbeat) clearInterval(heartbeat);
-    heartbeat = null;
-    if (status !== "pair-failed" && status !== "unpaired") setStatus("disconnected", ev.reason || "");
-    scheduleReconnect();
-  };
-  sock.onerror = () => {
-    /* onclose follows */
-  };
-}
-
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  if (status === "pair-failed" || status === "unpaired") return;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, backoff);
-  backoff = Math.min(backoff * 2, 10_000);
-}
-
-async function onBridgeMessage(raw: string) {
-  let msg: BridgeToExt;
-  try {
-    msg = JSON.parse(raw);
-  } catch {
-    return;
-  }
-  switch (msg.type) {
-    case "welcome":
-      backoff = 500;
-      if (msg.secret) {
-        await updateSettings({ secret: msg.secret });
-        pairCode = null;
-      }
-      setStatus("connected");
-      if (heartbeat) clearInterval(heartbeat);
-      heartbeat = setInterval(() => send({ type: "ping" }), 20_000);
-      break;
-    case "error":
-      if (msg.error.code === "UNAUTHORIZED") {
-        pairCode = null;
-        const s = await getSettings();
-        if (s.secret && /secret/i.test(msg.error.message)) await updateSettings({ secret: null });
-        setStatus("pair-failed", msg.error.message);
-        ws?.close();
-      }
-      break;
+function onBridgeMessage(msg: any) {
+  switch (msg?.type) {
     case "command":
-      handleCommand(msg).then(send);
+      router.handle(msg).then((env) => bridge.send(env));
       break;
     case "session.closed":
       endSession(msg.sessionId).catch(() => {});
       break;
-    case "pong":
+    case "files.resolved":
+      onFilesResolved(msg);
       break;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Command router
+// Router (#3): validate -> paused -> resolve tab -> authorize -> handler -> envelope
 // ---------------------------------------------------------------------------
-async function handleCommand(cmd: Command): Promise<Result> {
-  const tool = getTool(cmd.tool);
-  if (!tool) return { type: "result", id: cmd.id, ok: false, error: { code: "NOT_FOUND", message: `Unknown tool ${cmd.tool}` } };
-  const entry = feedStart({ session: cmd.session.id, label: cmd.session.label, tool: tool.name, summary: summarize((cmd.params ?? {}) as Record<string, unknown>) });
-  try {
-    const s = await getSettings();
-    if (s.paused) throw new TabAgentError("PERMISSION_DENIED", "The user stopped all agents with the TabAgent kill switch", "Ask the user to press Resume in the TabAgent side panel.");
-    const params = validateParams(tool, cmd.params);
-    const sess = await getSession(cmd.session);
-    const h = handlers[tool.name];
-    if (!h) throw new TabAgentError("NOT_FOUND", `No handler for ${tool.name}`);
-    const result = await h({ s: sess, meta: cmd.session, p: params, tool });
-    feedEnd(entry, { status: "ok" });
-    return { type: "result", id: cmd.id, ok: true, result };
-  } catch (e) {
-    const err = e instanceof TabAgentError ? e.toJSON() : { code: "INTERNAL" as const, message: String((e as Error)?.message ?? e) };
-    feedEnd(entry, { status: err.code === "PERMISSION_DENIED" ? "denied" : "error", error: err.message });
-    return { type: "result", id: cmd.id, ok: false, error: err };
-  }
+async function tabUrl(tabId: number) {
+  const t = await chrome.tabs.get(tabId);
+  return t.pendingUrl || t.url || "";
 }
 
+const SENSITIVE_NAME = /pass(word|code)?|card|cc-?num|cvv|cvc|csc|security.?code|ssn|social.?sec|iban|routing|account.?num/i;
+
+async function refIsSensitive(tabId: number, url: string, ref: string): Promise<boolean> {
+  const drv = await driverFor(tabId, url);
+  const inf = (await Promise.race([drv.call("info", [], { ref }), new Promise((r) => setTimeout(() => r(null), 800))])) as { type?: string; name?: string; inputType?: string } | null;
+  if (!inf) return true; // unknown: mask
+  return inf.type === "password" || inf.inputType === "password" || SENSITIVE_NAME.test(inf.name ?? "");
+}
+
+export const router = createRouter<Session>({
+  getTool: (n) => getTool(n) as any,
+  validate: (t, p) => validateParams(t as any, p),
+  isPaused,
+  getSession: (m) => getSession(m as SessionMeta),
+  resolveTab: (s, id) => resolveTab(s, id),
+  tabUrl,
+  attachTarget: (m, id) => attachTarget(m as SessionMeta, id),
+  downloadUrl: (id, sid) => {
+    const d = getDownload(id);
+    return d && d.sessionId === sid ? d.url : undefined;
+  },
+  authorize: (r) => authorize({ meta: r.meta, url: r.url, level: r.level, sensitive: r.sensitive, tool: r.action ? `${r.tool} ${r.action}` : r.tool, summary: r.summary, reasons: r.reasons, tabId: r.tabId }),
+  holdApproval,
+  handler: (name) => (extraHandlers[name] ?? sessionHandlers[name] ?? (handlers as Record<string, any>)[name]) as any,
+  sensitivePaths: async (tool, p, tabId, url) => {
+    if (tabId == null) return [];
+    const out: string[] = [];
+    if ((tool === "act.type" || tool === "act.fill") && typeof p.ref === "string") {
+      if (await refIsSensitive(tabId, url, p.ref)) out.push(tool === "act.type" ? "text" : "value");
+    }
+    if (tool === "form.fill" && p.fields && typeof p.fields === "object") {
+      for (const k of Object.keys(p.fields)) if (/^e\d+$/.test(k) && (await refIsSensitive(tabId, url, k))) out.push(`fields.${k}`);
+    }
+    return out;
+  },
+  feed: (e) => feedPush(e),
+  onInflight: () => refreshBadge(),
+});
+
 // ---------------------------------------------------------------------------
-// Kill switch
+// Badge (D40)
+// ---------------------------------------------------------------------------
+let lastBadge = "";
+async function refreshBadge() {
+  const st = badgeState({ connected: bridge.connected(), paused: await isPaused().catch(() => false), pendingPrompts: prompts.size, inflight: router?.inflightCount?.() ?? 0 });
+  if (st === lastBadge) return;
+  lastBadge = st;
+  const b = BADGE[st];
+  chrome.action.setBadgeText({ text: b.text }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color: b.color }).catch(() => {});
+  chrome.action.setTitle({ title: b.title }).catch(() => {});
+}
+onSessionsChanged(() => refreshBadge());
+
+// ---------------------------------------------------------------------------
+// Prompt delivery (D19): badge "!", notification, informational in-tab banner.
+// Answers come only from extension pages (side panel / prompt.html).
+// ---------------------------------------------------------------------------
+const BANNER_ID = "tabagent-approval-banner";
+
+function showBanner(tabId: number, text: string) {
+  chrome.scripting
+    .executeScript({
+      target: { tabId },
+      func: (id: string, msg: string) => {
+        if (document.getElementById(id)) return;
+        const d = document.createElement("div");
+        d.id = id;
+        d.setAttribute("data-tabagent-overlay", "");
+        d.setAttribute("aria-hidden", "true");
+        d.textContent = msg;
+        d.style.cssText = "position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:#d97706;color:#fff;font:600 13px system-ui,sans-serif;padding:6px 14px;border-radius:0 0 8px 8px;box-shadow:0 2px 8px rgba(0,0,0,.25)";
+        (document.body ?? document.documentElement).appendChild(d);
+      },
+      args: [BANNER_ID, text],
+    })
+    .catch(() => {});
+}
+
+function hideBanner(tabId: number) {
+  chrome.scripting
+    .executeScript({
+      target: { tabId },
+      func: (id: string) => document.getElementById(id)?.remove(),
+      args: [BANNER_ID],
+    })
+    .catch(() => {});
+}
+
+function promptEventData(p: PromptInfo) {
+  return { promptId: p.promptId, sessionId: p.sessionId, sessionLabel: p.sessionLabel, kind: p.kind, origin: p.origin, level: p.level, category: p.sensitive?.category, tool: p.tool };
+}
+
+onPrompt((ev) => {
+  const p = ev.info;
+  if (ev.type === "added") {
+    sendEvent("prompt", promptEventData(p));
+    chrome.notifications
+      ?.create(`prompt:${p.promptId}`, {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/128.png"),
+        title: "TabAgent needs your approval",
+        message: `${p.sessionLabel}: ${p.kind === "site" ? `${p.level} access to ${p.origin}` : p.summary}`.slice(0, 200),
+        requireInteraction: true,
+        priority: 2,
+      })
+      .catch(() => {});
+    if (p.tabId != null) showBanner(p.tabId, "TabAgent is waiting for your approval. Open the TabAgent side panel (toolbar icon) to answer.");
+  } else {
+    sendEvent("decision", { ...promptEventData(p), answer: ev.outcome });
+    chrome.notifications?.clear(`prompt:${p.promptId}`).catch(() => {});
+    if (p.tabId != null && !prompts.list().some((x) => x.tabId === p.tabId)) hideBanner(p.tabId);
+  }
+  refreshBadge();
+});
+
+chrome.notifications?.onClicked.addListener((nid) => {
+  if (!nid.startsWith("prompt:")) return;
+  const id = nid.slice("prompt:".length);
+  chrome.windows
+    .getLastFocused()
+    .then((w) => (w?.id != null ? chrome.sidePanel.open({ windowId: w.id }) : Promise.reject()))
+    .catch(() => chrome.windows.create({ url: chrome.runtime.getURL(`prompt.html?id=${id}`), type: "popup", width: 460, height: 440, focused: true }))
+    .catch(() => {});
+});
+
+// ---------------------------------------------------------------------------
+// Kill switch (D12)
 // ---------------------------------------------------------------------------
 async function kill() {
   await updateSettings({ paused: true });
-  denyAllPrompts();
-  await endAllSessions();
+  router.abortAll();
+  prompts.dropAll("killed");
+  rejectAllFiles(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
+  for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
-  send({ type: "event", event: "killed", data: {} });
+  await clearGrants();
+  sendEvent("killed");
   broadcast({ type: "paused", paused: true });
-  chrome.action.setBadgeText({ text: "⏸" }).catch(() => {});
-  chrome.action.setBadgeBackgroundColor({ color: "#dc2626" }).catch(() => {});
+  refreshBadge();
 }
 
 async function resume() {
   await updateSettings({ paused: false });
-  updateBadge();
+  sendEvent("resumed");
   broadcast({ type: "paused", paused: false });
+  refreshBadge();
 }
 
 chrome.commands.onCommand.addListener((c) => {
@@ -162,39 +229,42 @@ chrome.commands.onCommand.addListener((c) => {
 });
 
 // ---------------------------------------------------------------------------
-// UI API (side panel + prompt window)
+// UI API (side panel + prompt window). Only our own extension pages may call it.
 // ---------------------------------------------------------------------------
-const UI_KEYS: (keyof Settings)[] = ["policies", "sensitiveAllowed", "defaultPolicy", "denylist", "liteSites", "forceLite", "showOverlay", "onSessionEnd", "autoAcceptBeforeUnload"];
+const UI_KEYS = ["sites", "denylist", "devAllowSensitive", "onSessionEnd", "beforeUnload", "showOverlay", "forceLite", "liteSites"] as const;
+
+function publicSettings(s: Settings) {
+  const { secret: _s, autoAcceptBeforeUnload: _a, sensitiveAllowed: _x, ...rest } = s;
+  return rest;
+}
+
+function stoppedTabs() {
+  return allCdpTabs()
+    .filter((t) => t.userDetached)
+    .map((t) => t.tabId);
+}
+
+async function uiState() {
+  const s = await getSettings();
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-  // Only our own extension pages may drive the UI API.
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) return false;
   (async () => {
     switch (msg?.type) {
-      case "ui.state": {
-        const s = await getSettings();
-        const { secret, ...rest } = s;
-        return { status, error: lastError, paired: !!secret, settings: rest, sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), version: VERSION, extensionId: chrome.runtime.id };
-      }
-      case "ui.pair": {
-        pairCode = String(msg.code ?? "").trim().toUpperCase();
+      case "ui.state":
+        return uiState();
+      case "ui.pair":
         if (msg.port) await updateSettings({ port: Number(msg.port) });
-        ws?.close();
-        ws = null;
-        backoff = 500;
-        setStatus("connecting");
-        connect();
+        await bridge.pair(String(msg.code ?? ""));
         return { ok: true };
-      }
       case "ui.unpair":
         await updateSettings({ secret: null });
-        ws?.close();
-        setStatus("unpaired");
+        bridge.disconnect("unpaired");
         return { ok: true };
       case "ui.reconnect":
-        backoff = 500;
-        if (status === "pair-failed") setStatus("disconnected");
-        connect();
+        await bridge.reconnect();
         return { ok: true };
       case "ui.kill":
         await kill();
@@ -204,45 +274,67 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return { ok: true };
       case "ui.endSession":
         await endSession(msg.id);
-        send({ type: "event", event: "session.ended", data: { sessionId: msg.id } });
+        sendEvent("session.ended", { sessionId: msg.id });
         return { ok: true };
       case "ui.answer":
-        return { ok: answerPrompt(msg.id, msg.answer) };
+        return { ok: answerPrompt(msg.promptId ?? msg.id, msg.answer) };
       case "ui.prompt.get":
-        return pendingPrompts().find((p) => p.id === msg.id) ?? null;
+        return pendingPrompts().find((p) => p.promptId === msg.id) ?? null;
+      case "ui.handoff":
+        return { ok: endHandoff(Number(msg.tabId), msg.result === "done" ? "done" : "cancel") };
+      case "ui.resumeTab": {
+        const t = peekCdpTab(Number(msg.tabId));
+        if (t) t.userDetached = false;
+        broadcast({ type: "stoppedTabs", tabs: stoppedTabs() });
+        return { ok: !!t };
+      }
       case "ui.settings": {
-        const patch: Partial<Settings> = {};
-        for (const k of UI_KEYS) if (k in (msg.patch ?? {})) (patch as any)[k] = msg.patch[k];
+        const patch: Record<string, unknown> = {};
+        for (const k of UI_KEYS) if (msg.patch && k in msg.patch) patch[k] = msg.patch[k];
         const s = await updateSettings(patch);
-        const { secret, ...rest } = s;
-        return { ok: true, settings: rest };
+        return { ok: true, settings: publicSettings(s) };
       }
     }
     return { error: "unknown message" };
-  })().then(reply, (e) => reply({ error: String(e) }));
+  })().then(reply, (e) => reply({ error: String((e as Error)?.message ?? e) }));
   return true;
 });
 
 // ---------------------------------------------------------------------------
-// Lifecycle
+// Lifecycle (D11): alarm-driven reconnect every 30s; ping every 20s once welcomed.
 // ---------------------------------------------------------------------------
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-chrome.alarms.create("tabagent-keepalive", { periodInMinutes: 0.5 });
+chrome.alarms.create("tabagent-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "tabagent-keepalive") connect();
+  if (a.name === "tabagent-reconnect") bridge.tick();
 });
-chrome.runtime.onStartup.addListener(() => connect());
-chrome.runtime.onInstalled.addListener(() => connect());
+chrome.runtime.onStartup.addListener(() => bridge.connect());
+chrome.runtime.onInstalled.addListener(() => bridge.connect());
 
 (async () => {
   await restoreSessions();
-  const s = await getSettings();
-  if (s.paused) {
-    chrome.action.setBadgeText({ text: "⏸" }).catch(() => {});
-    chrome.action.setBadgeBackgroundColor({ color: "#dc2626" }).catch(() => {});
-  } else updateBadge();
-  connect();
+  await getSettings();
+  refreshBadge();
+  bridge.connect();
 })();
 
 // Exposed for e2e tests via serviceWorker.evaluate.
-(globalThis as any).__tabagent = { getSettings, updateSettings, connect, kill, resume, status: () => status, pendingPrompts, answerPrompt, listSessions, debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))), attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId) };
+(globalThis as any).__tabagent = {
+  getSettings,
+  updateSettings,
+  connect: () => bridge.connect(),
+  kill,
+  resume,
+  status: () => bridge.status(),
+  features: FEATURES,
+  pendingPrompts,
+  answerPrompt,
+  listSessions,
+  feed: feedAll,
+  inflight: () => router.inflightCount(),
+  badge: async () => ({ text: await chrome.action.getBadgeText({}), state: lastBadge }),
+  stoppedTabs,
+  debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
+  attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
+};
+export type { Status };

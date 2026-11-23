@@ -5,13 +5,50 @@
   "description": "Let AI agents (Claude Code, Codex, any MCP client) drive your browser, with permissions you control.",
   "minimum_chrome_version": "125",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtozrv3YwFAa405x0qBGjaRxWDpCVpx+GMLoFU/7YvMK/DvUUi35IF5b5iuAgh+gdJ6R+dJKQ/V9IizIaiIKoowW8wYbypR6t2tQVp7gpj5DI61N9Ii2TXuV49U/T1GX93+nrwwGm2hfA2ej7ty2bOFwtT8+Sc1VOOWhfxpLQtHSAyfPx2Uxhp/mQvptTpHBOqDVAve1AicB/9geGMTtPJSo4vWUA4q3sBBbjzwyvw6Fc602SWAHqlNbLWLYWOm9lg+ySObe3Ha92sDJIPhq0Q78E7geexrZXK1JlHVg2Rde+usH36C69w/eAMzJlZdRP4YR4o0dxQVln0/pJV+F88wIDAQAB",
-  "background": { "service_worker": "background.js", "type": "module" },
-  "side_panel": { "default_path": "sidepanel.html" },
-  "action": { "default_title": "TabAgent", "default_icon": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" } },
-  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
-  "permissions": ["tabs", "tabGroups", "scripting", "storage", "sidePanel", "downloads", "debugger", "webNavigation", "alarms", "cookies"],
-  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "TabAgent",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "sidePanel",
+    "storage",
+    "downloads",
+    "cookies",
+    "alarms",
+    "notifications",
+    "scripting",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "commands": {
-    "kill-switch": { "suggested_key": { "default": "Alt+Shift+K" }, "description": "Stop all agent sessions (kill switch)" }
+    "kill-switch": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Stop all agents (kill switch)"
+    }
   }
 }
