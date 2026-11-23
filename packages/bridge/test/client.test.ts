@@ -3,7 +3,14 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { api, ensureDaemon, health, restCall } from "../src/client";
+import { api, ensureDaemon, health, restCall, stripInspector } from "../src/client";
+
+describe("spawn hygiene (#37)", () => {
+  it("strips inspector flags from NODE_OPTIONS", () => {
+    expect(stripInspector("--inspect=9229 --max-old-space-size=100 --inspect-brk --inspect-port=1")).toBe("--max-old-space-size=100");
+    expect(stripInspector(undefined)).toBe("");
+  });
+});
 import type { Daemon } from "../src/daemon";
 import { okEnvelope, pairedExt, startDaemon, tempHome } from "./helpers";
 

@@ -94,6 +94,17 @@ describe("CLI commands", () => {
     expect(existsSync(join(dir, "s.jpg"))).toBe(true);
     expect(toolOutput({ ok: true, result: { ...shot.result, mime: "image/jpeg" } }, {}, 7).out[0]).toMatch(/\.jpg$/);
   });
+  it("loadConfig/saveConfig preserve unknown top-level keys (e.g. auth)", async () => {
+    const { saveConfig } = await import("../src/config");
+    const h = tempHome();
+    writeFileSync(join(h, "config.json"), JSON.stringify({ auth: { sms: { x: 1 } } }));
+    const cfg = loadConfig();
+    cfg.extensionIds.push("abc");
+    saveConfig(cfg);
+    const disk = JSON.parse(readFileSync(join(h, "config.json"), "utf8"));
+    expect(disk.auth).toEqual({ sms: { x: 1 } });
+    expect(disk.extensionIds).toEqual(["abc"]);
+  });
   it("help mentions the canonical --json form", () => {
     expect(helpText()).toMatch(/--json/);
   });

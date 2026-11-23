@@ -29,10 +29,10 @@ export async function ensureDaemon(port: number, cliPath: string, waitMs = 10_00
   const h = await health(port);
   if (h) return { spawned: false, health: h };
   const log = openSync(join(home(), "bridge.log"), "a", 0o600);
-  const child = spawn(process.execPath, [cliPath, "serve", "--port", String(port)], {
+  const child = spawn(process.execPath, [...(process.allowedNodeEnvironmentFlags.has("--disable-sigusr1") ? ["--disable-sigusr1"] : []), cliPath, "serve", "--port", String(port)], {
     detached: true,
     stdio: ["ignore", log, log],
-    env: { ...process.env },
+    env: { ...process.env, NODE_OPTIONS: stripInspector(process.env.NODE_OPTIONS) },
   });
   child.unref();
   const deadline = Date.now() + waitMs;
@@ -42,6 +42,14 @@ export async function ensureDaemon(port: number, cliPath: string, waitMs = 10_00
     await new Promise((r) => setTimeout(r, 100));
   }
   return { spawned: true, health: null };
+}
+
+/** The long-lived daemon must not inherit a debugger port from the agent that started it (#37). */
+export function stripInspector(opts: string | undefined): string {
+  return (opts ?? "")
+    .split(/\s+/)
+    .filter((o) => o && !/^--(inspect|inspect-brk|inspect-port|inspect-publish-uid|debug-port)(=|$)/.test(o))
+    .join(" ");
 }
 
 export interface RestOpts {
