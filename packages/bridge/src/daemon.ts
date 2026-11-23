@@ -10,12 +10,14 @@ import {
   HelloSchema,
   normalizeHello,
   PROTOCOL_VERSION,
+  ResultEnvelopeSchema,
   TabAgentError,
   TIMEOUTS,
   toolsForProfiles,
   toTabAgentError,
   validateParams,
   versionMismatchHint,
+  wrapResponse,
   type BridgeToExt,
   type ErrorCode,
   type OutputResponse,
@@ -310,6 +312,8 @@ export class Daemon {
     if (!p) return;
     this.pending.delete(raw.id);
     clearTimeout(p.timer);
+    // The audit log is #15; until then the extension's audit record is checked for shape only.
+    ResultEnvelopeSchema.safeParse(raw);
     const out: OutputResponse = { ok: !!raw.ok };
     if (raw.ok) out.result = raw.result;
     else out.error = TabAgentError.from(raw.error ?? {}).toJSON();
@@ -317,7 +321,7 @@ export class Daemon {
     if (raw.navigation && typeof raw.navigation === "object") out.navigation = raw.navigation;
     if (Array.isArray(raw.dialogs)) out.dialogs = raw.dialogs;
     if (Array.isArray(raw.downloads)) out.downloads = raw.downloads;
-    // Pre-D14 extensions put the diff inside the result; lift it to the envelope.
+    // Pre-D14 extensions put the diff inside the result; lift it so it is wrapped the same way.
     const res = out.result as Record<string, unknown> | undefined;
     if (res && typeof res === "object" && typeof res.snapshotDiff === "string" && out.snapshotDiff === undefined) {
       const { snapshotDiff, ...rest } = res;
@@ -345,8 +349,8 @@ export class Daemon {
   // -------------------------------------------------------------------------
   // Dispatch
   // -------------------------------------------------------------------------
-  /** Run one tool call; never throws. MCP, REST and CLI all go through here. */
-  async call(meta: SessionMeta, toolName: string, rawParams: unknown): Promise<OutputResponse> {
+  /** Run one tool call; never throws. The response is NOT yet wrapped. */
+  async dispatchRaw(meta: SessionMeta, toolName: string, rawParams: unknown): Promise<OutputResponse> {
     const tool = getTool(toolName);
     try {
       if (!tool) throw new TabAgentError("BAD_REQUEST", `Unknown tool "${toolName}"`, "GET /v1/tools lists tools.");
@@ -358,6 +362,11 @@ export class Daemon {
     } catch (e) {
       return { ok: false, error: toTabAgentError(e).toJSON() };
     }
+  }
+
+  /** Wrapped response for the output edge (D21). MCP, REST and CLI all go through here. */
+  async call(meta: SessionMeta, toolName: string, params: unknown): Promise<OutputResponse> {
+    return wrapResponse(await this.dispatchRaw(meta, toolName, params), getTool(toolName)).response;
   }
 
   private send(meta: SessionMeta, tool: string, params: Record<string, unknown>): Promise<OutputResponse> {

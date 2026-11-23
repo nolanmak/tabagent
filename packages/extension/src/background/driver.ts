@@ -1,0 +1,613 @@
+// D26 Driver interface + the CDP driver (the only M1 implementation). Tool
+// handlers talk only to a Driver; nothing outside cdp.ts / driver.ts calls chrome.debugger. Decisions live in
+// the pure modules (snapshot, refs, autowait, frames, screenshot-plan, wait);
+// this file wires them to CDP.
+import { TabAgentError } from "@tabagent/protocol";
+import { autoWait, type Observation } from "./autowait";
+import { CdpTab, getCdpTab, sleep, type FrameInfo } from "./cdp";
+import { staleRef, taErr } from "./errors";
+import { ancestry, contentOffset, translate, translateBox, type Offset, type OwnerMetrics } from "./frames";
+import { editCommand, keyDef, MOD_BITS, parseChord } from "./keys";
+import { baselines, refTable } from "./refstore";
+import type { RefTable, RefTarget } from "./refs";
+import { marksInView, planCapture, type Metrics, type Target } from "./screenshot-plan";
+import { getSettings } from "./settings";
+import { render, type FrameTree, type RefSource, type RenderResult, type AXNode } from "./snapshot";
+import { capMatches, type FindMatch, type FindSpec } from "./wait";
+
+export interface SnapshotOpts {
+  mode?: "interactive" | "full";
+  root?: string;
+  maxTokens?: number;
+}
+
+export interface ClickOpts {
+  button?: "left" | "right" | "middle";
+  clickCount?: number;
+  modifiers?: string[];
+  timeout?: number;
+}
+
+export interface ScreenshotOpts {
+  target?: Target;
+  ref?: string;
+  format?: "png" | "jpeg";
+  quality?: number;
+  marks?: boolean;
+}
+
+export interface Screenshot {
+  mime: string;
+  dataBase64: string;
+  width: number;
+  height: number;
+  note?: string;
+}
+
+export interface FrameCall {
+  frameKey: string;
+  url: string;
+  isMain: boolean;
+  value: any;
+}
+
+/** D26: what tool handlers may ask of a tab. CDP is the only M1 implementation; lite mode (#21) adds a second. */
+export interface Driver {
+  kind: "cdp";
+  tabId: number;
+  snapshot(o: SnapshotOpts): Promise<RenderResult>;
+  find(spec: FindSpec): Promise<{ matches: FindMatch[]; truncated: boolean }>;
+  resolveRef(ref: string): Promise<RefTarget>;
+  call(fn: string, args: unknown[], o?: { ref?: string; frameKey?: string }): Promise<any>;
+  callAllFrames(fn: string, args: unknown[]): Promise<FrameCall[]>;
+  click(ref: string, o?: ClickOpts): Promise<void>;
+  hover(ref: string, timeout?: number): Promise<void>;
+  focus(ref: string, end?: boolean): Promise<void>;
+  /** Wait until `ref` can take text input (attached, visible, enabled, editable). */
+  prepareInput(ref: string, timeout?: number): Promise<void>;
+  typeText(text: string): Promise<void>;
+  press(chord: string): Promise<void>;
+  fill(ref: string, value: string, timeout?: number): Promise<void>;
+  scroll(ref: string | undefined, dx: number, dy: number): Promise<unknown>;
+  drag(from: string, to: string, timeout?: number): Promise<void>;
+  screenshot(o: ScreenshotOpts): Promise<Screenshot>;
+  evaluate(expression: string, world: "main" | "isolated"): Promise<unknown>;
+  navigate(url: string, waitUntil: string, timeout: number): Promise<{ url: string; warning?: string }>;
+  history(action: "back" | "forward" | "reload", timeout: number): Promise<void>;
+  waitLoad(timeout: number): Promise<boolean>;
+  networkIdle(quiet: number, timeout: number): Promise<boolean>;
+  /** D24: wait for the DOM to be quiet (100ms, max 1s). */
+  quiet(): Promise<void>;
+  settle(beforeEpoch: number, timeout?: number): Promise<void>;
+  navEpoch(): number;
+  currentUrl(): Promise<string>;
+  dispose(): void;
+}
+
+// ---------------------------------------------------------------------------
+// driverFor: one CDP driver per tab
+// ---------------------------------------------------------------------------
+const drivers = new Map<number, CdpDriver>();
+
+export async function driverFor(tabId: number, _url: string): Promise<Driver> {
+  let d = drivers.get(tabId);
+  if (!d) drivers.set(tabId, (d = new CdpDriver(getCdpTab(tabId), refTable)));
+  return d;
+}
+
+export function peekDriver(tabId: number): Driver | undefined {
+  return drivers.get(tabId);
+}
+
+export function disposeDrivers(tabId: number) {
+  drivers.get(tabId)?.dispose();
+  drivers.delete(tabId);
+  refTable.dropTab(tabId);
+  baselines.clearTab(tabId);
+}
+
+/** Replace `{el: i}` (and `submit: i`) in pagelib results with refs. */
+export function mapEls(v: unknown, refs: (string | null)[]): unknown {
+  if (Array.isArray(v)) return v.map((x) => mapEls(x, refs));
+  if (v && typeof v === "object") {
+    const o: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "el" && typeof x === "number") o.ref = refs[x] ?? null;
+      else if (k === "submit" && typeof x === "number") o.submitRef = refs[x] ?? null;
+      else o[k] = mapEls(x, refs);
+    }
+    return o;
+  }
+  return v;
+}
+
+export function refSource(table: RefTable, tabId: number, loaderOf: (frameKey: string) => string): RefSource {
+  return {
+    peek: (frameKey, backendNodeId) => table.peek({ tabId, frameKey, backendNodeId, loaderId: loaderOf(frameKey) }),
+    mint: (frameKey, backendNodeId) => table.mint({ tabId, frameKey, backendNodeId, loaderId: loaderOf(frameKey) }),
+    nextNumber: () => table.peekNext(),
+  };
+}
+
+// ===========================================================================
+// CDP driver
+// ===========================================================================
+export class CdpDriver implements Driver {
+  kind = "cdp" as const;
+  tabId: number;
+  private frameCache: { at: number; frames: FrameInfo[] } | null = null;
+  private offs: (() => void)[] = [];
+
+  constructor(
+    public tab: CdpTab,
+    private refs: RefTable,
+    private clock: { now(): number; sleep(ms: number): Promise<void> } = { now: () => Date.now(), sleep: (ms) => sleep(ms) as Promise<void> },
+  ) {
+    this.tabId = tab.tabId;
+    // D24: a navigation clears every session's baseline for this tab.
+    this.offs.push(tab.onNavigated?.(() => baselines.clearTab(this.tabId)) ?? (() => {}));
+  }
+
+  dispose() {
+    this.offs.forEach((f) => f());
+    this.offs = [];
+  }
+
+  private loaderOf = (frameKey: string) => this.tab.loaders.get(frameKey) ?? "";
+
+  private async frames(fresh = false): Promise<{ frames: FrameInfo[] }> {
+    if (!fresh && this.frameCache && this.clock.now() - this.frameCache.at < 300) return this.frameCache;
+    const frames = await this.tab.frames();
+    // main frame first
+    const mk = this.tab.mainKey();
+    frames.sort((a, b) => (a.key === mk ? -1 : b.key === mk ? 1 : 0));
+    this.frameCache = { at: this.clock.now(), frames };
+    return this.frameCache;
+  }
+
+  async resolveRef(ref: string): Promise<RefTarget> {
+    await this.tab.ensure();
+    try {
+      return this.refs.resolve(ref, this.tabId, (fk) => this.tab.loaders.get(fk));
+    } catch (e) {
+      // The frame may simply not be in our loader map yet (late iframe): refresh once.
+      const t = this.refs.get(ref);
+      if (t && t.tabId === this.tabId && !this.tab.loaders.has(t.frameKey)) {
+        await this.frames(true);
+        return this.refs.resolve(ref, this.tabId, (fk) => this.tab.loaders.get(fk));
+      }
+      throw e;
+    }
+  }
+
+  async snapshot(o: SnapshotOpts): Promise<RenderResult> {
+    await this.tab.ensure();
+    const { frames } = await this.frames(true);
+    const trees: FrameTree[] = [];
+    let total = 0;
+    for (const f of frames) {
+      try {
+        const r = await this.tab.send<{ nodes: AXNode[] }>("Accessibility.getFullAXTree", { frameId: f.frameId }, f.sessionId);
+        let sensitive: number[] = [];
+        try {
+          sensitive = (await this.tab.pagelib(f.key, "sensitiveInputs", [])).nodes.filter((n) => n > 0);
+        } catch {
+          /* frame busy: values still masked by the bullet heuristic */
+        }
+        total += r.nodes.length;
+        trees.push({ key: f.key, nodes: r.nodes, ownerBackendNodeId: f.ownerBackendNodeId, ownerFrameKey: f.parentKey, sensitive });
+      } catch (e) {
+        if (!f.parentKey) throw taErr("INTERNAL", `Could not read the accessibility tree: ${(e as Error).message}`);
+      }
+    }
+    let root: { frameKey: string; backendNodeId: number } | undefined;
+    if (o.root) {
+      const t = await this.resolveRef(o.root);
+      root = { frameKey: t.frameKey, backendNodeId: t.backendNodeId };
+    }
+    await this.refs.reserve(total + 1);
+    return render(trees, { mode: o.mode, maxTokens: o.maxTokens, root, refs: refSource(this.refs, this.tabId, this.loaderOf) });
+  }
+
+  private toRefs(frameKey: string, value: unknown, nodes: number[]) {
+    const loaderId = this.loaderOf(frameKey);
+    const refs = nodes.map((n) => (n > 0 ? this.refs.mint({ tabId: this.tabId, frameKey, backendNodeId: n, loaderId }) : null));
+    return mapEls(value, refs);
+  }
+
+  async find(spec: FindSpec) {
+    await this.tab.ensure();
+    const per: FindMatch[][] = [];
+    const run = async (frameKey: string, self?: number) => {
+      const r = await this.tab.pagelib(frameKey, "findNodes", [{ by: spec.by, value: spec.value, name: spec.name, limit: 20 }], self);
+      const v = this.toRefs(frameKey, r.value, r.nodes) as { matches: { ref: string | null; role: string; name: string }[] };
+      per.push(v.matches.filter((m) => m.ref).map((m) => ({ ref: m.ref!, role: m.role, name: m.name })));
+    };
+    if (spec.root) {
+      const t = await this.resolveRef(spec.root);
+      await run(t.frameKey, t.backendNodeId);
+    } else {
+      const { frames } = await this.frames(true);
+      for (const f of frames) {
+        if (per.flat().length > 20) break;
+        try {
+          await run(f.key);
+        } catch (e) {
+          if (!f.parentKey) throw e instanceof TabAgentError ? e : taErr("BAD_REQUEST", `page.find failed: ${(e as Error).message}`);
+        }
+      }
+    }
+    return capMatches(per);
+  }
+
+  async call(fn: string, args: unknown[], o: { ref?: string; frameKey?: string } = {}) {
+    await this.tab.ensure();
+    let frameKey = o.frameKey ?? this.tab.mainKey();
+    let self: number | undefined;
+    if (o.ref) {
+      const t = await this.resolveRef(o.ref);
+      frameKey = t.frameKey;
+      self = t.backendNodeId;
+    }
+    const r = await this.tab.pagelib(frameKey, fn, args, self);
+    return this.toRefs(frameKey, r.value, r.nodes);
+  }
+
+  async callAllFrames(fn: string, args: unknown[]): Promise<FrameCall[]> {
+    await this.tab.ensure();
+    const { frames } = await this.frames();
+    const out: FrameCall[] = [];
+    for (const f of frames) {
+      try {
+        const r = await this.tab.pagelib(f.key, fn, args);
+        out.push({ frameKey: f.key, url: f.url, isMain: !f.parentKey, value: this.toRefs(f.key, r.value, r.nodes) });
+      } catch (e) {
+        if (!f.parentKey) throw e;
+      }
+    }
+    return out;
+  }
+
+  /** Offsets from a (same-process) frame's viewport to the top-level viewport, innermost first. */
+  async offsetChain(frameKey: string): Promise<Offset[]> {
+    const { frames } = await this.frames();
+    const chain: Offset[] = [];
+    for (const k of ancestry(frames, frameKey)) {
+      const f = frames.find((x) => x.key === k)!;
+      if (f.ownerBackendNodeId == null || !f.parentKey) continue;
+      const m = (await this.tab.pagelib(f.parentKey, "ownerMetrics", [], f.ownerBackendNodeId)).value as OwnerMetrics;
+      chain.push(contentOffset(m));
+    }
+    return chain;
+  }
+
+  /** Auto-wait (#7) then return the top-level viewport point to act on. */
+  async actionPoint(ref: string, opts: { timeout?: number; needEditable?: boolean } = {}) {
+    const t = await this.resolveRef(ref);
+    const local = await this.tab.guard(
+      autoWait(
+        ref,
+        {
+          now: () => this.clock.now(),
+          sleep: (ms) => this.clock.sleep(ms),
+          check: () => {
+            if (this.tab.userDetached) throw this.tab.detachedError();
+          },
+          observe: async (scroll) => {
+            try {
+              return (await this.tab.pagelib(t.frameKey, "observe", [{ scroll }], t.backendNodeId)).value as Observation;
+            } catch (e) {
+              if (e instanceof TabAgentError && (e.code as string) === "REF_STALE") throw staleRef(ref, "the element is no longer in the page");
+              throw e;
+            }
+          },
+        },
+        { timeout: opts.timeout, needEditable: opts.needEditable },
+      ),
+    );
+    const chain = await this.offsetChain(t.frameKey);
+    return { ...translate(local, chain), target: t };
+  }
+
+  private modBits(mods: string[] = []) {
+    return mods.reduce((a, m) => a | (MOD_BITS[m] ?? 0), 0);
+  }
+
+  async click(ref: string, o: ClickOpts = {}) {
+    const { x, y } = await this.actionPoint(ref, { timeout: o.timeout });
+    await this.overlay(ref);
+    const button = o.button ?? "left";
+    const clickCount = o.clickCount ?? 1;
+    const modifiers = this.modBits(o.modifiers);
+    const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
+    await this.tab.guard(
+      (async () => {
+        await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
+        for (let i = 1; i <= clickCount; i++) {
+          await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, buttons, clickCount: i, modifiers });
+          await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, buttons: 0, clickCount: i, modifiers });
+        }
+      })(),
+    );
+  }
+
+  async hover(ref: string, timeout?: number) {
+    const { x, y } = await this.actionPoint(ref, { timeout });
+    await this.tab.guard(this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }));
+  }
+
+  async focus(ref: string, end = true) {
+    await this.call("focus", [{ end }], { ref });
+  }
+
+  async prepareInput(ref: string, timeout?: number) {
+    await this.actionPoint(ref, { timeout, needEditable: true });
+  }
+
+  private async keyEvent(def: ReturnType<typeof keyDef>, mods: string[], commands?: string[]) {
+    const modifiers = this.modBits(def.shift && !mods.includes("Shift") ? [...mods, "Shift"] : mods);
+    const hasText = def.text && !mods.some((m) => m === "Control" || m === "Meta" || m === "Alt");
+    const base = { key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, nativeVirtualKeyCode: def.keyCode, modifiers, location: def.location ?? 0 };
+    await this.tab.send("Input.dispatchKeyEvent", { type: hasText ? "keyDown" : "rawKeyDown", ...base, ...(hasText ? { text: def.text, unmodifiedText: def.text } : {}), ...(commands ? { commands } : {}) });
+    await this.tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
+
+  async press(chord: string) {
+    let parsed: { mods: string[]; key: string };
+    let def: ReturnType<typeof keyDef>;
+    try {
+      parsed = parseChord(chord);
+      def = keyDef(parsed.key);
+    } catch (e) {
+      throw taErr("BAD_REQUEST", (e as Error).message, "Examples: Enter, Tab, Escape, ArrowDown, Control+a, Meta+Shift+k");
+    }
+    await this.tab.ensure();
+    const seq = (async () => {
+      await this.wakeInput();
+      const held: string[] = [];
+      for (const m of parsed.mods) {
+        held.push(m);
+        const md = keyDef(m);
+        await this.tab.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: md.key, code: md.code, windowsVirtualKeyCode: md.keyCode, modifiers: this.modBits(held), location: 1 });
+      }
+      await this.keyEvent(def, parsed.mods, editCommand(parsed.mods, parsed.key));
+      for (const m of [...parsed.mods].reverse()) {
+        held.pop();
+        const md = keyDef(m);
+        await this.tab.send("Input.dispatchKeyEvent", { type: "keyUp", key: md.key, code: md.code, windowsVirtualKeyCode: md.keyCode, modifiers: this.modBits(held), location: 1 });
+      }
+    })();
+    await this.tab.guard(seq);
+  }
+
+  /** #7: act.type inserts text at the focused element with CDP Input.insertText; newlines press Enter. */
+  async typeText(text: string) {
+    await this.tab.ensure();
+    const seq = (async () => {
+      await this.wakeInput();
+      const parts = text.split("\n");
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) await this.tab.send("Input.insertText", { text: parts[i] });
+        if (i < parts.length - 1) await this.keyEvent(keyDef("Enter"), []);
+      }
+    })();
+    await this.tab.guard(seq);
+  }
+
+  /**
+   * Background tabs in headless Chromium never produce frames, and input that
+   * needs a frame ack (keys, insertText) waits forever. Focus emulation makes
+   * the page behave as focused without bringing the tab to the front (D10).
+   */
+  private woke = false;
+  private async wakeInput() {
+    if (this.woke) return;
+    this.woke = true;
+    await this.tab.send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+  }
+
+  /** #7: act.fill clears, then sets through the native value setter and fires input + change. */
+  async fill(ref: string, value: string, timeout?: number) {
+    await this.actionPoint(ref, { timeout, needEditable: true });
+    await this.overlay(ref);
+    await this.call("setValue", [value], { ref });
+  }
+
+  async scroll(ref: string | undefined, dx: number, dy: number) {
+    await this.tab.ensure();
+    if (ref && !dx && !dy) return this.call("scrollIntoView", [], { ref });
+    if (ref) {
+      await this.call("scrollBy", [dx, dy], { ref });
+    } else {
+      await this.tab.evalMain(`window.scrollBy({left: ${Number(dx) || 0}, top: ${Number(dy) || 0}, behavior: "instant"}); 0`);
+    }
+    return (await this.tab.evalMain("({scrollX, scrollY})")) as unknown;
+  }
+
+  async drag(from: string, to: string, timeout?: number) {
+    const a = await this.actionPoint(from, { timeout });
+    const b = await this.actionPoint(to, { timeout });
+    this.tab.dragData = null;
+    await this.tab.send("Input.setInterceptDrags", { enabled: true });
+    try {
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: a.x, y: a.y });
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: a.x, y: a.y, button: "left", buttons: 1, clickCount: 1 });
+      const steps = 8;
+      for (let i = 1; i <= steps; i++) {
+        const x = a.x + ((b.x - a.x) * i) / steps;
+        const y = a.y + ((b.y - a.y) * i) / steps;
+        await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 });
+        if (this.tab.dragData) break;
+      }
+      await this.clock.sleep(30);
+      if (this.tab.dragData) {
+        const data = this.tab.dragData;
+        await this.tab.send("Input.dispatchDragEvent", { type: "dragEnter", x: b.x, y: b.y, data });
+        await this.tab.send("Input.dispatchDragEvent", { type: "dragOver", x: b.x, y: b.y, data });
+        await this.tab.send("Input.dispatchDragEvent", { type: "drop", x: b.x, y: b.y, data });
+      }
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 });
+    } finally {
+      await this.tab.send("Input.setInterceptDrags", { enabled: false }).catch(() => {});
+      this.tab.dragData = null;
+    }
+  }
+
+  private async metrics(): Promise<Metrics> {
+    const m = await this.tab.send<any>("Page.getLayoutMetrics", {});
+    const vv = m.cssVisualViewport;
+    const cs = m.cssContentSize ?? m.contentSize;
+    return { viewport: { w: vv.clientWidth, h: vv.clientHeight, pageX: vv.pageX, pageY: vv.pageY }, content: { w: cs.width, h: cs.height } };
+  }
+
+  private async boxOf(t: RefTarget, chain?: Offset[]) {
+    const r = (await this.tab.pagelib(t.frameKey, "rectOf", [], t.backendNodeId)).value as { x: number; y: number; w: number; h: number };
+    return translateBox(r, chain ?? (await this.offsetChain(t.frameKey)));
+  }
+
+  /** #8: D30 result; overlay hidden during capture (D40); marks label only refs from the shared table. */
+  async screenshot(o: ScreenshotOpts): Promise<Screenshot> {
+    await this.tab.ensure();
+    const target: Target = o.target ?? (o.ref ? "ref" : "viewport");
+    const format = o.format ?? "png";
+    let box: { x: number; y: number; w: number; h: number } | undefined;
+    if (target === "ref") {
+      if (!o.ref) throw taErr("BAD_REQUEST", "target=ref needs ref");
+      const t = await this.resolveRef(o.ref);
+      await this.call("scrollIntoView", [], { ref: o.ref });
+      box = await this.boxOf(t);
+    }
+    const m = await this.metrics();
+    const plan = planCapture(target, m, box);
+    const { frames } = await this.frames();
+    let marked = false;
+    if (o.marks) {
+      const snap = await this.snapshot({ mode: "interactive", maxTokens: 1_000_000 });
+      const byFrame = new Map<string, { ref: string; backendNodeId: number }[]>();
+      for (const s of snap.shown) if (s.interactive) byFrame.set(s.frameKey, [...(byFrame.get(s.frameKey) ?? []), s]);
+      const entries: { ref: string; box: { x: number; y: number; w: number; h: number } | null }[] = [];
+      for (const [fk, list] of byFrame) {
+        try {
+          const chain = await this.offsetChain(fk);
+          const r = await this.tab.pagelib(fk, "rectsOf", [], undefined, list.map((l) => l.backendNodeId));
+          (r.value as ({ x: number; y: number; w: number; h: number } | null)[]).forEach((b, i) => entries.push({ ref: list[i].ref, box: b ? translateBox(b, chain) : null }));
+        } catch {
+          /* frame went away */
+        }
+      }
+      await this.tab.pagelib(this.tab.mainKey(), "drawMarks", [marksInView(entries, m.viewport)]);
+      marked = true;
+    }
+    for (const f of frames) await this.tab.pagelib(f.key, "hideOverlay", [true]).catch(() => {});
+    try {
+      const params: Record<string, unknown> = { format, fromSurface: true, captureBeyondViewport: plan.captureBeyondViewport, ...(format === "jpeg" ? { quality: o.quality ?? 80 } : {}), ...(plan.clip ? { clip: plan.clip } : {}) };
+      const r = await this.tab.guard(this.tab.send<{ data: string }>("Page.captureScreenshot", params));
+      return { mime: `image/${format}`, dataBase64: r.data, width: plan.width, height: plan.height, ...(plan.note ? { note: plan.note } : {}) };
+    } finally {
+      for (const f of frames) await this.tab.pagelib(f.key, "hideOverlay", [false]).catch(() => {});
+      if (marked) await this.tab.pagelib(this.tab.mainKey(), "clearOverlay", []).catch(() => {});
+    }
+  }
+
+  async evaluate(expression: string, world: "main" | "isolated") {
+    await this.tab.ensure();
+    if (world === "main") return this.tab.evalMain(expression);
+    const ctx = await this.tab.isolatedContext(this.tab.mainKey());
+    const r = await this.tab.send<any>("Runtime.evaluate", { expression, contextId: ctx, awaitPromise: true, returnByValue: true, replMode: true });
+    if (r.exceptionDetails) throw taErr("BAD_REQUEST", `Evaluation failed: ${r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text}`, undefined, { pageText: true });
+    return r.result.value;
+  }
+
+  navEpoch() {
+    return this.tab.navEpoch;
+  }
+
+  async currentUrl() {
+    if (this.tab.attached && this.tab.url) return this.tab.url;
+    return (await chrome.tabs.get(this.tabId)).url ?? "";
+  }
+
+  private async waitLifecycle(loaderId: string | undefined, names: string[], timeout: number): Promise<boolean> {
+    const mf = this.tab.mainFrameId;
+    const match = (e: { frameId: string; loaderId: string; name: string; sessionId?: string }) => !e.sessionId && e.frameId === mf && names.includes(e.name) && (!loaderId || e.loaderId === loaderId);
+    if (this.tab.lifecycle.some(match)) return true;
+    const ev = await this.tab.waitEvent((m, p, sid) => m === "Page.lifecycleEvent" && match({ ...p, sessionId: sid }), timeout);
+    return !!ev;
+  }
+
+  async navigate(url: string, waitUntil: string, timeout: number) {
+    await this.tab.ensure();
+    baselines.clearTab(this.tabId);
+    const r = await this.tab.guard(this.tab.send<any>("Page.navigate", { url, transitionType: "typed" }));
+    if (r.errorText && r.errorText !== "net::ERR_ABORTED") throw taErr("BAD_REQUEST", `Navigation failed: ${r.errorText}`);
+    let warning: string | undefined;
+    if (r.loaderId && waitUntil !== "none") {
+      const names = waitUntil === "domcontentloaded" ? ["DOMContentLoaded", "load"] : ["load"];
+      const ok = await this.tab.guard(this.waitLifecycle(r.loaderId, names, timeout));
+      if (!ok) warning = `Timed out after ${timeout}ms waiting for ${waitUntil}; the page may still be loading.`;
+      else if (waitUntil === "networkidle") {
+        if (!(await this.tab.networkIdle(500, timeout))) warning = "Network did not go idle before timeout.";
+      }
+    }
+    await this.clock.sleep(50);
+    return { url: await this.currentUrl(), ...(warning ? { warning } : {}) };
+  }
+
+  async history(action: "back" | "forward" | "reload", timeout: number) {
+    await this.tab.ensure();
+    baselines.clearTab(this.tabId);
+    const before = this.tab.navEpoch;
+    if (action === "reload") await this.tab.send("Page.reload", {});
+    else {
+      const h = await this.tab.send<any>("Page.getNavigationHistory", {});
+      const idx = h.currentIndex + (action === "back" ? -1 : 1);
+      const entry = h.entries[idx];
+      if (!entry) throw taErr("BAD_REQUEST", `No ${action} history entry`);
+      await this.tab.send("Page.navigateToHistoryEntry", { entryId: entry.id });
+    }
+    await this.settle(before, timeout);
+  }
+
+  async waitLoad(timeout: number) {
+    const end = this.clock.now() + timeout;
+    while (this.clock.now() < end) {
+      try {
+        const rs = await this.tab.evalMain("document.readyState");
+        if (rs === "complete") return true;
+      } catch (e) {
+        if (e instanceof TabAgentError && (e.code as string) === "DEBUGGER_DETACHED") throw e;
+      }
+      await this.clock.sleep(100);
+    }
+    return false;
+  }
+
+  networkIdle(quiet: number, timeout: number) {
+    return this.tab.networkIdle(quiet, timeout);
+  }
+
+  async quiet() {
+    await this.tab.pagelib(this.tab.mainKey(), "quietDom", [100, 1000]).catch(() => {});
+  }
+
+  /** After an action: wait for any navigation it triggered, then a short network quiet period. */
+  async settle(beforeEpoch: number, timeout = 5000) {
+    await this.clock.sleep(120);
+    if (this.tab.navEpoch !== beforeEpoch) {
+      const end = this.clock.now() + timeout;
+      while (this.clock.now() < end) {
+        const mf = this.tab.mainFrameId;
+        const lastStart = [...this.tab.lifecycle].reverse().find((e) => !e.sessionId && e.frameId === mf && e.name === "init");
+        if (lastStart && this.tab.lifecycle.some((e) => !e.sessionId && e.loaderId === lastStart.loaderId && e.name === "load")) break;
+        await this.clock.sleep(50);
+      }
+    }
+    await this.tab.networkIdle(300, 1500);
+  }
+
+  private async overlay(ref: string) {
+    const s = await getSettings();
+    if (!s.showOverlay) return;
+    await this.call("showActivity", [""], { ref }).catch(() => {});
+  }
+}

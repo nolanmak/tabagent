@@ -1,8 +1,10 @@
-// Extension settings (D32). Persistent settings live in chrome.storage.local
-// (access level TRUSTED_CONTEXTS so content scripts can't read the secret, D7).
-import { migrateSettings, type StoredShape } from "./settingsModel";
+// Extension settings (D32, contract §7). Persistent settings live in
+// chrome.storage.local (access level TRUSTED_CONTEXTS so content scripts can't
+// read the secret, D7).
+import { migrateSettings, type OnSessionEnd, type StoredShape } from "./settingsModel";
 
 export { migrateSettings };
+export type { OnSessionEnd };
 
 export type Settings = StoredShape;
 

@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "bin": { "tabagent": "dist/cli.js" },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "skill", "README.md"],
   "scripts": { "build": "node build.mjs" },
   "engines": { "node": ">=20" },
   "dependencies": {

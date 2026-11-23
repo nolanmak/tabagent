@@ -12,7 +12,7 @@
   <span id="status" class="pill">…</span>
 </header>
 
-<section id="pairBox" class="card">
+<section id="pairBox" class="card" hidden>
   <h2>Pair with the bridge</h2>
   <p class="muted">Run <code>tabagent serve</code> (or <code>npx tabagent serve</code>) and enter the pairing code it prints (<code>tabagent status</code> shows it again).</p>
   <form id="pairForm">
@@ -21,6 +21,11 @@
     <button type="submit" id="pairBtn">Pair</button>
   </form>
   <p id="pairErr" class="err" hidden></p>
+</section>
+
+<section class="card">
+  <div class="row"><button id="unpair" class="link">Unpair bridge</button></div>
+  <p class="muted small" id="about"></p>
 </section>
 <script src="sidepanel.js"></script>
 </body>

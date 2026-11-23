@@ -1,0 +1,393 @@
+// chrome.debugger wrapper: one CdpTab per attached tab. Tracks in-flight
+// requests (D35), navigation lifecycle, same-process frames and isolated worlds.
+// Cross-origin (out-of-process) frames are #19.
+import { TabAgentError } from "@tabagent/protocol";
+import { taErr } from "./errors";
+
+declare const PAGELIB_SRC: string;
+
+export interface FrameInfo {
+  key: string; // `${sessionId}|${frameId}`
+  sessionId?: string;
+  frameId: string;
+  parentKey?: string;
+  url: string;
+  ownerBackendNodeId?: number;
+  /** Current document's loaderId (D22 ref staleness). */
+  loaderId?: string;
+}
+
+type Waiter = { pred: (method: string, params: any, sessionId?: string) => boolean; resolve: (v: any) => void };
+
+const tabs = new Map<number, CdpTab>();
+
+export function getCdpTab(tabId: number): CdpTab {
+  let t = tabs.get(tabId);
+  if (!t) {
+    t = new CdpTab(tabId);
+    tabs.set(tabId, t);
+  }
+  return t;
+}
+
+export function peekCdpTab(tabId: number): CdpTab | undefined {
+  return tabs.get(tabId);
+}
+
+export function allCdpTabs(): CdpTab[] {
+  return [...tabs.values()];
+}
+
+export async function detachTab(tabId: number) {
+  const t = tabs.get(tabId);
+  tabs.delete(tabId);
+  if (t?.attached) {
+    t.attached = false;
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
+export async function detachAll() {
+  for (const id of [...tabs.keys()]) await detachTab(id);
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (source.tabId == null) return;
+  const t = tabs.get(source.tabId);
+  t?.onEvent(method, params as any, (source as { sessionId?: string }).sessionId);
+});
+
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source.tabId == null) return;
+  const t = tabs.get(source.tabId);
+  if (t) {
+    t.attached = false;
+    t.contexts.clear();
+    t.loaders.clear();
+    if (reason === "canceled_by_user") t.userDetached = true;
+    t.fireDetached(String(reason));
+  }
+});
+
+export class CdpTab {
+  attached = false;
+  userDetached = false;
+  attaching: Promise<void> | null = null;
+  contexts = new Map<string, number>(); // frameKey -> isolated contextId
+  inflight = new Map<string, number>(); // requestId -> start ts (D35: the driver's own counter)
+  lastNetActivity = Date.now();
+  navEpoch = 0;
+  lifecycle: { frameId: string; loaderId: string; name: string; sessionId?: string }[] = [];
+  mainFrameId: string | null = null;
+  url = "";
+  waiters = new Set<Waiter>();
+  dragData: unknown = null;
+  /** frameKey -> current loaderId */
+  loaders = new Map<string, string>();
+  private detachHandlers = new Set<(reason: string) => void>();
+  private navHandlers = new Set<(url: string) => void>();
+
+  constructor(public tabId: number) {}
+
+  /** Called when the debugger detaches (user cancelled the bar, tab closed, ...). */
+  onDetached(fn: (reason: string) => void): () => void {
+    this.detachHandlers.add(fn);
+    return () => this.detachHandlers.delete(fn);
+  }
+  fireDetached(reason: string) {
+    for (const f of [...this.detachHandlers]) f(reason);
+  }
+  /** Main-frame cross-document navigation. */
+  onNavigated(fn: (url: string) => void): () => void {
+    this.navHandlers.add(fn);
+    return () => this.navHandlers.delete(fn);
+  }
+
+  detachedError() {
+    return taErr("DEBUGGER_DETACHED", "The user cancelled debugging on this tab (Chrome's debugging bar).", "Ask the user to resume the tab in the TabAgent side panel, or open a new tab with tabs action=new.");
+  }
+
+  /** Reject when the user cancels the debugging bar while `p` runs (D27). */
+  guard<T>(p: Promise<T>): Promise<T> {
+    if (this.userDetached) return Promise.reject(this.detachedError());
+    let off: () => void = () => {};
+    const det = new Promise<never>((_r, reject) => {
+      off = this.onDetached((reason) => {
+        if (reason === "canceled_by_user") reject(this.detachedError());
+      });
+    });
+    return Promise.race([p, det]).finally(off);
+  }
+
+  async ensure(): Promise<void> {
+    if (this.userDetached) throw this.detachedError();
+    if (this.attached) return;
+    if (this.attaching) return this.attaching;
+    this.attaching = this.doAttach().finally(() => (this.attaching = null));
+    return this.attaching;
+  }
+
+  private async doAttach() {
+    const target = { tabId: this.tabId };
+    try {
+      await chrome.debugger.attach(target, "1.3");
+    } catch (e) {
+      const msg = String((e as Error).message ?? e);
+      if (/already attached/i.test(msg)) {
+        // Possibly a stale attachment from a previous service-worker life.
+        await chrome.debugger.detach(target).catch(() => {});
+        await chrome.debugger.attach(target, "1.3");
+      } else if (/Cannot access|Cannot attach/i.test(msg)) {
+        throw new TabAgentError("PERMISSION_DENIED", `Cannot debug this tab: ${msg}`, "Restricted pages (chrome://, Web Store) are off-limits.");
+      } else throw e;
+    }
+    this.attached = true;
+    this.contexts.clear();
+    await this.enableDomains(undefined);
+    const tree = await this.send<any>("Page.getFrameTree", {});
+    this.mainFrameId = tree.frameTree.frame.id;
+    this.url = tree.frameTree.frame.url;
+    this.loaders.set(`|${this.mainFrameId}`, tree.frameTree.frame.loaderId);
+  }
+
+  private async enableDomains(sessionId?: string) {
+    await Promise.all([
+      this.send("Page.enable", {}, sessionId),
+      this.send("Page.setLifecycleEventsEnabled", { enabled: true }, sessionId),
+      this.send("Runtime.enable", {}, sessionId),
+      this.send("Network.enable", {}, sessionId),
+      this.send("DOM.enable", {}, sessionId),
+    ]);
+    await this.send("DOM.getDocument", { depth: 0 }, sessionId).catch(() => {});
+  }
+
+  async send<T = any>(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
+    const target: chrome.debugger.DebuggerSession = sessionId ? ({ tabId: this.tabId, sessionId } as chrome.debugger.DebuggerSession) : { tabId: this.tabId };
+    try {
+      return (await chrome.debugger.sendCommand(target, method, params)) as T;
+    } catch (e) {
+      const msg = String((e as Error).message ?? e);
+      if (/not attached|Detached while handling/i.test(msg)) this.attached = false;
+      if (this.userDetached) throw this.detachedError();
+      throw new Error(`${method}: ${msg}`);
+    }
+  }
+
+  onEvent(method: string, p: any, sessionId?: string) {
+    for (const w of [...this.waiters]) {
+      try {
+        if (w.pred(method, p, sessionId)) {
+          this.waiters.delete(w);
+          w.resolve({ method, params: p, sessionId });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    switch (method) {
+      case "Page.frameNavigated":
+        this.loaders.set(`${sessionId ?? ""}|${p.frame.id}`, p.frame.loaderId);
+        if (!p.frame.parentId && !sessionId) {
+          this.mainFrameId = p.frame.id;
+          this.url = p.frame.url + (p.frame.urlFragment ?? "");
+          for (const f of [...this.navHandlers]) f(this.url);
+        }
+        this.contexts.delete(`${sessionId ?? ""}|${p.frame.id}`);
+        break;
+      case "Page.frameDetached":
+        this.loaders.delete(`${sessionId ?? ""}|${p.frameId}`);
+        break;
+      case "Page.navigatedWithinDocument":
+        if (!sessionId && p.frameId === this.mainFrameId) this.url = p.url;
+        break;
+      case "Page.frameStartedLoading":
+        if (!sessionId && p.frameId === this.mainFrameId) this.navEpoch++;
+        break;
+      case "Page.lifecycleEvent":
+        this.lifecycle.push({ frameId: p.frameId, loaderId: p.loaderId, name: p.name, sessionId });
+        if (this.lifecycle.length > 100) this.lifecycle.splice(0, 50);
+        break;
+      case "Runtime.executionContextsCleared":
+        for (const k of [...this.contexts.keys()]) if (k.startsWith(`${sessionId ?? ""}|`)) this.contexts.delete(k);
+        break;
+      case "Runtime.executionContextDestroyed":
+        for (const [k, v] of this.contexts) if (v === p.executionContextId && k.startsWith(`${sessionId ?? ""}|`)) this.contexts.delete(k);
+        break;
+      case "Network.requestWillBeSent":
+        if (!["EventSource", "WebSocket", "Ping"].includes(p.type)) this.inflight.set(`${sessionId ?? ""}:${p.requestId}`, Date.now());
+        this.lastNetActivity = Date.now();
+        break;
+      case "Network.responseReceived":
+        this.lastNetActivity = Date.now();
+        break;
+      case "Network.loadingFinished":
+      case "Network.loadingFailed":
+        this.inflight.delete(`${sessionId ?? ""}:${p.requestId}`);
+        this.lastNetActivity = Date.now();
+        break;
+      case "Input.dragIntercepted":
+        this.dragData = p.data;
+        break;
+    }
+  }
+
+  waitEvent(pred: Waiter["pred"], timeoutMs: number): Promise<{ method: string; params: any; sessionId?: string } | null> {
+    return new Promise((resolve) => {
+      const w: Waiter = { pred, resolve };
+      this.waiters.add(w);
+      setTimeout(() => {
+        if (this.waiters.delete(w)) resolve(null);
+      }, timeoutMs);
+    });
+  }
+
+  /** Wait until no tracked requests are in flight for `quietMs`. */
+  async networkIdle(quietMs = 500, timeoutMs = 5000): Promise<boolean> {
+    const end = Date.now() + timeoutMs;
+    while (Date.now() < end) {
+      // ignore requests stuck for > 10s (long-poll, streaming)
+      const now = Date.now();
+      for (const [k, t] of this.inflight) if (now - t > 10_000) this.inflight.delete(k);
+      if (this.inflight.size === 0 && now - this.lastNetActivity >= quietMs) return true;
+      await sleep(50);
+    }
+    return false;
+  }
+
+  // ---------------------------------------------------------------------
+  // Frames + isolated worlds
+  // ---------------------------------------------------------------------
+  async frames(): Promise<FrameInfo[]> {
+    await this.ensure();
+    const out: FrameInfo[] = [];
+    const visit = async (sid: string | undefined, node: any, parentKey?: string) => {
+      const fid = node.frame.id as string;
+      const key = `${sid ?? ""}|${fid}`;
+      let owner: number | undefined;
+      if (parentKey) {
+        try {
+          owner = (await this.send<any>("DOM.getFrameOwner", { frameId: fid }, sid)).backendNodeId;
+        } catch {
+          /* ignore */
+        }
+      }
+      out.push({ key, sessionId: sid, frameId: fid, parentKey, url: node.frame.url, ownerBackendNodeId: owner, loaderId: node.frame.loaderId });
+      for (const ch of node.childFrames ?? []) await visit(sid, ch, key);
+    };
+    const tree = (await this.send<any>("Page.getFrameTree", {})).frameTree;
+    this.mainFrameId = tree.frame.id;
+    await visit(undefined, tree);
+    for (const f of out) if (f.loaderId) this.loaders.set(f.key, f.loaderId);
+    return out;
+  }
+
+  mainKey(): string {
+    return `|${this.mainFrameId}`;
+  }
+
+  async isolatedContext(frameKey: string): Promise<number> {
+    const cached = this.contexts.get(frameKey);
+    if (cached) return cached;
+    const [sid, frameId] = splitKey(frameKey);
+    const r = await this.send<any>("Page.createIsolatedWorld", { frameId, worldName: "__tabagent__", grantUniveralAccess: false }, sid);
+    const ctx = r.executionContextId as number;
+    await this.send("Runtime.evaluate", { expression: PAGELIB_SRC, contextId: ctx, returnByValue: true, silent: true }, sid);
+    this.contexts.set(frameKey, ctx);
+    return ctx;
+  }
+
+  /**
+   * Call a pagelib function in a frame (optionally with `self` = backendNodeId element).
+   * Returns { value, nodes } where nodes are backendNodeIds of returned elements.
+   */
+  async pagelib(frameKey: string, name: string, args: unknown[], selfNode?: number, extraNodes: number[] = [], attempt = 0): Promise<{ value: any; nodes: number[] }> {
+    const [sid] = splitKey(frameKey);
+    try {
+      const ctx = await this.isolatedContext(frameKey);
+      let objectId: string | undefined;
+      const argObjs: { objectId: string }[] = [];
+      if (selfNode != null) {
+        try {
+          objectId = (await this.send<any>("DOM.resolveNode", { backendNodeId: selfNode, executionContextId: ctx, objectGroup: "ta" }, sid)).object.objectId;
+        } catch {
+          throw new TabAgentError("REF_STALE", "Element is no longer in the page", "Take a new page.snapshot and use fresh refs.");
+        }
+      }
+      for (const n of extraNodes) {
+        const o = (await this.send<any>("DOM.resolveNode", { backendNodeId: n, executionContextId: ctx, objectGroup: "ta" }, sid)).object.objectId;
+        argObjs.push({ objectId: o });
+      }
+      const fn = `async function(__n, __a, ...__els){ const s = (typeof Element !== 'undefined' && this instanceof Element) ? this : null; return await globalThis.__ta.invoke(s, __n, [...__a, ...__els]); }`;
+      const callArgs = [{ value: name }, { value: args }, ...argObjs];
+      const r = await this.send<any>(
+        "Runtime.callFunctionOn",
+        {
+          functionDeclaration: fn,
+          ...(objectId ? { objectId } : { executionContextId: ctx }),
+          arguments: callArgs,
+          returnByValue: false,
+          awaitPromise: true,
+          objectGroup: "ta",
+          userGesture: true,
+        },
+        sid,
+      );
+      if (r.exceptionDetails) {
+        const d = r.exceptionDetails.exception?.description ?? r.exceptionDetails.text;
+        throw new Error(String(d).split("\n")[0]);
+      }
+      const resId = r.result.objectId as string;
+      const val = await this.send<any>(
+        "Runtime.callFunctionOn",
+        { functionDeclaration: "function(){ return { v: this.value, n: this.elements.length }; }", objectId: resId, returnByValue: true, objectGroup: "ta" },
+        sid,
+      );
+      const { v, n } = val.result.value as { v: unknown; n: number };
+      const nodes: number[] = [];
+      if (n > 0) {
+        const arr = await this.send<any>("Runtime.callFunctionOn", { functionDeclaration: "function(){ return this.elements; }", objectId: resId, returnByValue: false, objectGroup: "ta" }, sid);
+        const props = await this.send<any>("Runtime.getProperties", { objectId: arr.result.objectId, ownProperties: true }, sid);
+        const byIdx: Record<number, string> = {};
+        for (const p of props.result) if (/^\d+$/.test(p.name) && p.value?.objectId) byIdx[+p.name] = p.value.objectId;
+        for (let i = 0; i < n; i++) {
+          const oid = byIdx[i];
+          if (!oid) {
+            nodes.push(-1);
+            continue;
+          }
+          const d = await this.send<any>("DOM.describeNode", { objectId: oid }, sid);
+          nodes.push(d.node.backendNodeId);
+        }
+      }
+      this.send("Runtime.releaseObjectGroup", { objectGroup: "ta" }, sid).catch(() => {});
+      return { value: v, nodes };
+    } catch (e) {
+      const msg = String((e as Error).message ?? e);
+      if (attempt < 2 && /Cannot find context|context with specified id|Execution context was destroyed|Inspected target navigated|No frame with given id|Cannot find execution context/i.test(msg)) {
+        this.contexts.delete(frameKey);
+        await sleep(100);
+        return this.pagelib(frameKey, name, args, selfNode, extraNodes, attempt + 1);
+      }
+      throw e;
+    }
+  }
+
+  /** Evaluate in the main world of the top frame. */
+  async evalMain(expression: string, awaitPromise = true): Promise<any> {
+    const r = await this.send<any>("Runtime.evaluate", { expression, awaitPromise, returnByValue: true, userGesture: true, replMode: true });
+    if (r.exceptionDetails) {
+      throw new TabAgentError("BAD_REQUEST", `Evaluation failed: ${r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text}`);
+    }
+    return r.result.value ?? (r.result.unserializableValue ? r.result.unserializableValue : r.result.type === "undefined" ? undefined : r.result.description);
+  }
+}
+
+export function splitKey(key: string): [string | undefined, string] {
+  const i = key.indexOf("|");
+  const sid = key.slice(0, i);
+  return [sid || undefined, key.slice(i + 1)];
+}
+
+export function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}

@@ -17,6 +17,7 @@ export function home(): string {
 export function configPath() {
   return join(home(), "config.json");
 }
+
 function ensureDir(dir: string) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {

@@ -1,11 +1,13 @@
 // Synchronous CLI commands as plain functions returning their output, so they are unit-tested in-process.
 // cli.ts prints the Out and sets the exit code.
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PROFILES, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
 import type { Flags } from "./args";
+import { configPath, loadConfig } from "./config";
 import { renderCli } from "./format";
+import { installSkill, skillTargets, uninstallSkill } from "./skill";
 import { BRIDGE_VERSION } from "./version";
 
 export interface Out {
@@ -23,6 +25,48 @@ export function toolsCommand(profile: string): Out {
   } catch (e) {
     return fail((e as Error).message);
   }
+}
+
+export function skillCommand(rest: string[], f: Flags, src: string): Out {
+  const sub = rest[0];
+  if (sub === "print") return ok([readFileSync(src, "utf8")]);
+  const targets = skillTargets({ claude: !!f.claude, codex: !!f.codex });
+  const o = ok();
+  if (sub === "install") {
+    for (const r of installSkill(src, targets, !!f.force)) {
+      if (r.action === "refused") {
+        o.code = 1;
+        o.err.push(`Refused: ${r.path} was edited locally. Re-run with --force to overwrite.`);
+      } else o.out.push(`${r.action === "unchanged" ? "Up to date" : r.action === "updated" ? "Updated" : "Installed"} (${r.target.name}): ${r.path}`);
+    }
+    return o;
+  }
+  if (sub === "uninstall") {
+    for (const r of uninstallSkill(targets, !!f.force)) {
+      if (r.action === "refused") {
+        o.code = 1;
+        o.err.push(`Refused: ${r.target.dir}/SKILL.md was edited locally. Re-run with --force to remove it.`);
+      } else o.out.push(`${r.action === "removed" ? "Removed" : "Not installed"} (${r.target.name}): ${r.target.dir}`);
+    }
+    return o;
+  }
+  return fail("Usage: tabagent skill install [--claude] [--codex] [--force] | uninstall [--claude] [--codex] [--force] | print");
+}
+
+export function configCommand(rest: string[]): Out {
+  const cfg = loadConfig();
+  const [sub, a, b] = rest;
+  if (sub === "show" || !sub) {
+    const { secret, ...safe } = cfg;
+    return ok([JSON.stringify({ ...safe, secret: secret ? "(set)" : null, path: configPath() }, null, 2)]);
+  }
+  if (sub === "set" && a === "port" && b && Number.isInteger(Number(b))) {
+    const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+    raw.port = Number(b);
+    writeFileSync(configPath(), JSON.stringify(raw, null, 2), { mode: 0o600 });
+    return ok([`Port set to ${b}. Also set it in the extension side panel when pairing.`]);
+  }
+  return fail("Usage: tabagent config [show] | set port <n>");
 }
 
 /** D30 CLI output for a tool response: screenshots are written to a file and the path printed. */
@@ -49,12 +93,15 @@ Usage:
   tabagent pair                        Mint a new pairing code on the running bridge
   tabagent status                      Bridge + extension status (and the pairing code when unpaired)
   tabagent tools [--profile P]         List tools (profiles: ${PROFILES.join(", ")})
-  tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw]
+  tabagent skill install [--claude] [--codex] [--force] | uninstall | print
+  tabagent config [show] | set port <n>
+  tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw] [--out file.png]
 
 Examples:
   claude mcp add tabagent -- npx tabagent mcp
   codex mcp add tabagent -- npx tabagent mcp
-  tabagent tabs --action new
   tabagent nav.goto --json '{"url":"https://example.com"}'
-  tabagent nav.back`;
+  tabagent page.snapshot
+  tabagent act.click --ref e7
+  tabagent page.screenshot --out shot.png`;
 }

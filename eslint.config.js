@@ -15,7 +15,7 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "module",
-      globals: { ...globals.node, ...globals.browser, ...globals.webextensions },
+      globals: { ...globals.node, ...globals.browser, ...globals.webextensions, PAGELIB_SRC: "readonly" },
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "off",

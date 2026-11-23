@@ -1,5 +1,6 @@
-// tabagent CLI: serve | mcp | pair | status | tools | <tool>
+// tabagent CLI: serve | mcp | pair | status | tools | skill | config | <tool>
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -9,9 +10,10 @@ import { api, ensureDaemon, health, restCall } from "./client";
 import { configPath, loadConfig } from "./config";
 import { Daemon } from "./daemon";
 import { buildMcpServer } from "./mcp";
-import { helpText, toolOutput, toolsCommand, type Out } from "./commands";
+import { configCommand, helpText, skillCommand, toolOutput, toolsCommand, type Out } from "./commands";
 import { BRIDGE_VERSION } from "./version";
 
+const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = fileURLToPath(import.meta.url);
 
 function die(msg: string, code = 1): never {
@@ -124,14 +126,33 @@ async function cmdPair(f: Flags) {
   console.log(`Pairing code: ${r.pairCode}  (valid ${Math.round(r.expiresInSec / 60)} min)`);
 }
 
-function cmdTools(f: Flags) {
-  print(toolsCommand(typeof f.profile === "string" ? f.profile : "full"));
+async function cmdTools(f: Flags) {
+  const profile = typeof f.profile === "string" ? f.profile : "full";
+  if (f["mcp-json"]) {
+    // Exactly what MCP tools/list returns for this profile (used by scripts/tool-budget.mjs).
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+    const server = buildMcpServer({ call: async () => ({ ok: true }), profile });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "tool-budget", version: "0" });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const { tools } = await client.listTools();
+    process.stdout.write(JSON.stringify(tools) + "\n");
+    await client.close();
+    return;
+  }
+  print(toolsCommand(profile));
 }
 
 function print(o: Out): void {
   for (const l of o.out) console.log(l);
   for (const l of o.err) process.stderr.write(l + "\n");
   if (o.code) process.exit(o.code);
+}
+
+export function skillSource(): string {
+  for (const p of [join(HERE, "../skill/SKILL.md"), join(HERE, "../../skill/SKILL.md")]) if (existsSync(p)) return p;
+  die("SKILL.md not found in the package");
 }
 
 async function cmdTool(name: string, args: string[]) {
@@ -155,7 +176,7 @@ async function cmdTool(name: string, args: string[]) {
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
-const { f } = parseFlags(rest);
+const { f, rest: pos } = parseFlags(rest);
 switch (cmd) {
   case "serve":
     await cmdServe(f);
@@ -170,7 +191,13 @@ switch (cmd) {
     await cmdPair(f);
     break;
   case "tools":
-    cmdTools(f);
+    await cmdTools(f);
+    break;
+  case "skill":
+    print(skillCommand(pos, f, skillSource()));
+    break;
+  case "config":
+    print(configCommand(pos));
     break;
   case undefined:
   case "help":

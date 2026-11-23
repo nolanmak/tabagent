@@ -209,14 +209,3 @@ export function versionMismatchHint(extProtocol: number, bridgeProtocol: number 
     ? `Update the TabAgent extension (it speaks protocol ${extProtocol}; the bridge speaks ${bridgeProtocol}).`
     : `Update the tabagent npm package: npm i -g tabagent@latest (bridge speaks protocol ${bridgeProtocol}; the extension speaks ${extProtocol}).`;
 }
-
-/** Response leaving the bridge (MCP, REST, CLI). */
-export interface OutputResponse {
-  ok: boolean;
-  result?: unknown;
-  error?: ToolErrorWire;
-  snapshotDiff?: string;
-  navigation?: Navigation;
-  dialogs?: DialogInfo[];
-  downloads?: DownloadInfo[];
-}

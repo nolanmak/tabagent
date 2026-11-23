@@ -28,11 +28,14 @@
     "128": "icons/128.png"
   },
   "permissions": [
+    "debugger",
     "tabs",
+    "tabGroups",
     "sidePanel",
     "storage",
     "alarms",
-    "scripting"
+    "scripting",
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"

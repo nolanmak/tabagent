@@ -1,4 +1,4 @@
-// HTTP credentials (D2, D3). Until #15 the bridge secret from config.json is the only credential.
+// HTTP credentials (D2, D3). Until per-client tokens (#15) the bridge secret is the only credential.
 import { timingSafeEqual } from "node:crypto";
 import type { Cap } from "@tabagent/protocol";
 import type { Config } from "./config";
