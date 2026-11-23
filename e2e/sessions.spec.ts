@@ -31,7 +31,7 @@ test("two agents at once: separate tab groups, TAB_BUSY on each other's tabs", a
   await expect.poll(async () => h.sw.evaluate(() => (globalThis as any).__tabagent.listSessions().map((s: any) => s.label)), { timeout: 5000 }).not.toContain("alpha");
 });
 
-test("tabs attach adopts a user tab only after the user agrees", async ({ h }) => {
+test("tabs attach adopts a user tab only after the user agrees; session end ungroups it and leaves it open", async ({ h }) => {
   await h.trustFixtures();
   const userTab = await h.ctx.newPage();
   await userTab.goto(`${h.A}/article.html`);
@@ -41,10 +41,82 @@ test("tabs attach adopts a user tab only after the user agrees", async ({ h }) =
   expect(notMine.text).toContain("not in this session");
   const d = await h.answerPrompt("deny", () => h.call(c, "tabs", { action: "attach", tabId }));
   expect(d.title).toContain("take over your tab");
+  expect(d.prompt.sensitive.category).toBe("f");
   expect((d.result as any).text).toContain("PERMISSION_DENIED");
+  // f is never pre-approvable: devAllowSensitive (on via trustFixtures) does not skip it
   await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "attach", tabId }));
   const s = await h.ok(c, "page.snapshot", { tabId });
   expect(s.json.title).toBe("Article");
+  const grouped = await h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).groupId, tabId);
+  expect(grouped).toBeGreaterThan(-1);
+  await h.ok(c, "session.end");
+  const after = await h.sw.evaluate(async (id) => {
+    const t = await chrome.tabs.get(id).catch(() => null);
+    return t ? { open: true, groupId: t.groupId } : { open: false, groupId: -2 };
+  }, tabId);
+  expect(after).toEqual({ open: true, groupId: -1 });
+  await userTab.close();
+});
+
+test("tabs attach with no tabId adopts the active tab of the last-focused window", async ({ h }) => {
+  await h.trustFixtures();
+  const userTab = await h.ctx.newPage();
+  await userTab.goto(`${h.A}/table.html`);
+  await userTab.bringToFront();
+  const c = await h.mcp({ label: "adopt-active" });
+  const r = await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "attach" }));
+  expect((r.result as any).text).toContain("table.html");
+  await h.ok(c, "session.end");
+  await userTab.close();
+});
+
+test("tabs select changes the session's active tab without activating it; tabs list shows own tabs only", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "selector" });
+  const t1 = (await h.ok(c, "tabs", { action: "new", url: `${h.A}/index.html` })).json.tabId;
+  const t2 = (await h.ok(c, "tabs", { action: "new", url: `${h.A}/article.html` })).json.tabId;
+  const activeBefore = await h.sw.evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id);
+  await h.ok(c, "tabs", { action: "select", tabId: t1 });
+  const s = await h.ok(c, "page.snapshot");
+  expect(s.json.title).toBe("Fixtures home");
+  const activeAfter = await h.sw.evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id);
+  expect(activeAfter).toBe(activeBefore);
+  expect(activeAfter).not.toBe(t1);
+  const other = await h.mcp({ label: "other-lister" });
+  await h.ok(other, "tabs", { action: "new" });
+  const list = await h.ok(c, "tabs", { action: "list" });
+  const ids = (list.json.tabs as any[]).map((t) => t.tabId).sort();
+  expect(ids).toEqual([t1, t2].sort());
+  await h.ok(c, "session.end");
+  await h.ok(other, "session.end");
+});
+
+test("tabs opened by a session tab join the session; a tab dragged out of the group leaves", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "opener" });
+  await h.ok(c, "nav.goto", { url: `${h.A}/popup.html` });
+  const s = await h.ok(c, "page.snapshot");
+  await h.ok(c, "act.click", { ref: Harness.ref(s.text, /link "Open child"/) });
+  await expect.poll(async () => ((await h.ok(c, "tabs", { action: "list" })).json.tabs as any[]).length, { timeout: 10000 }).toBe(2);
+  const tabs = (await h.ok(c, "tabs", { action: "list" })).json.tabs as any[];
+  const child = tabs.find((t) => String(t.url).includes("/p/child"));
+  expect(child).toBeTruthy();
+  // the user drags it out of the group
+  await h.sw.evaluate(async (id) => chrome.tabs.ungroup(id), child.tabId);
+  await expect.poll(async () => ((await h.ok(c, "tabs", { action: "list" })).json.tabs as any[]).length, { timeout: 5000 }).toBe(1);
+  const gone = await h.call(c, "page.snapshot", { tabId: child.tabId });
+  expect(gone.text).toContain("not in this session");
+  await h.ok(c, "session.end");
+});
+
+test("ownership is persisted in storage.session", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "survivor" });
+  const t = (await h.ok(c, "tabs", { action: "new", url: `${h.A}/index.html` })).json.tabId;
+  const stored = await h.sw.evaluate(async () => (await chrome.storage.session.get("sessions")).sessions);
+  expect(JSON.stringify(stored)).toContain("survivor");
+  expect(JSON.stringify(stored)).toContain(String(t));
+  await h.ok(c, "session.end");
 });
 
 test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
@@ -74,7 +146,7 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
 });
 
 test("lite mode (no debugger): snapshot, click, fill, form.fill", async ({ h }) => {
-  await h.trustFixtures({ liteSites: ["127.0.0.1"] });
+  await h.trustFixtures({ sites: { [h.B]: { lite: true } } });
   const c = await h.mcp();
   await h.ok(c, "nav.goto", { url: `${h.B}/form.html` });
   const info = await h.ok(c, "session.info");
@@ -97,5 +169,5 @@ test("lite mode (no debugger): snapshot, click, fill, form.fill", async ({ h }) 
   const liteTab = info.json.tabs.find((t: any) => t.active).tabId;
   const attached: number[] = await h.sw.evaluate(() => (globalThis as any).__tabagent.attachedTabs());
   expect(attached).not.toContain(liteTab);
-  await h.trustFixtures({ liteSites: [] });
+  await h.trustFixtures();
 });
