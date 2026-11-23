@@ -5,6 +5,7 @@ import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionM
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
+import * as cdpMod from "./cdp";
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
 import { disposeDrivers, driverFor } from "./driver";
 import { getDownload } from "./downloads";
@@ -240,10 +241,24 @@ function publicSettings(s: Settings) {
   return rest;
 }
 
-function stoppedTabs() {
+// D27: prefer the driver's stoppedTabs()/resumeDebugger() (agent/driver); fall back to the CdpTab flag.
+const cdpApi = cdpMod as unknown as { stoppedTabs?: () => number[]; resumeDebugger?: (tabId: number) => unknown };
+
+function stoppedTabs(): number[] {
+  if (typeof cdpApi.stoppedTabs === "function") return cdpApi.stoppedTabs();
   return allCdpTabs()
     .filter((t) => t.userDetached)
     .map((t) => t.tabId);
+}
+
+async function resumeStoppedTab(tabId: number): Promise<boolean> {
+  if (typeof cdpApi.resumeDebugger === "function") {
+    await cdpApi.resumeDebugger(tabId);
+    return true;
+  }
+  const t = peekCdpTab(tabId);
+  if (t) t.userDetached = false;
+  return !!t;
 }
 
 async function uiState() {
@@ -285,10 +300,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "ui.handoff":
         return { ok: endHandoff(Number(msg.tabId), msg.result === "done" ? "done" : "cancel") };
       case "ui.resumeTab": {
-        const t = peekCdpTab(Number(msg.tabId));
-        if (t) t.userDetached = false;
+        const ok = await resumeStoppedTab(Number(msg.tabId));
         broadcast({ type: "stoppedTabs", tabs: stoppedTabs() });
-        return { ok: !!t };
+        return { ok };
       }
       case "ui.settings": {
         const patch: Record<string, unknown> = {};
