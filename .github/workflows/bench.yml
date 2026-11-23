@@ -1,0 +1,50 @@
+# Benchmark (#24). Real runs need model credentials, so this is manual only and
+# never a required check. The dry run (scripted fake agent) is part of `npm test`.
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "Agent adapter"
+        type: choice
+        options: [claude-code]
+        default: claude-code
+      model:
+        description: "Model id passed to the agent (recorded in every result row)"
+        required: true
+      tasks:
+        description: "Comma-separated task ids (empty = all 20)"
+        required: false
+      max_steps:
+        description: "Step limit per task (keep equal across compared agents)"
+        default: "30"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Run benchmark
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: >
+          node bench/run.mjs --agent "${{ inputs.agent }}" --model "${{ inputs.model }}"
+          --max-steps "${{ inputs.max_steps }}"
+          ${{ inputs.tasks && format('--tasks "{0}"', inputs.tasks) || '' }}
+          --out bench-results.md
+      - run: cat bench-results.md >> "$GITHUB_STEP_SUMMARY"
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: bench-results, path: bench-results.md, if-no-files-found: ignore }
