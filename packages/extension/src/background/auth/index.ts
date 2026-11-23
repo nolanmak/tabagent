@@ -2,13 +2,14 @@
 // bridge socket. Holds no decisions. Hooked in with one import line in background/index.ts.
 import { pollCode, TabAgentError, type SessionMeta } from "@tabagent/protocol";
 import { detachTab } from "../cdp";
+import * as driverMod from "../driver";
 import { disposeDrivers, driverFor, type Driver } from "../driver";
-import { registerHandlers } from "../handlerRegistry";
+import { onKilled, registerHandlers } from "../handlerRegistry";
 import { requireSensitive } from "../permissions";
 import { AUTH_DENY_HOSTS } from "../policy";
 import { endHandoff, inHandoff, markPrivateTab, startHandoff, unmarkPrivateTab } from "../sessions";
-import { getSettings, isPaused } from "../settings";
-import { clearAuthMasks, markAuthMaskedNode } from "./mask";
+import { getSettings } from "../settings";
+import { clearAuthMasks, isAuthMaskedNode, markAuthMaskedNode } from "./mask";
 import { createAuthChannel, type Sender } from "./pure/channel";
 import { authCode, authLogin, authStatus, newMemory, type AuthEnv, type AuthPage, type EmailReader, type PageField } from "./pure/flows";
 import { GMAIL_FEED_URL, readFeed } from "./pure/gmail";
@@ -30,6 +31,12 @@ export function onAuthBridgeMessage(msg: unknown): boolean {
 export function rejectAllAuth(e: Error) {
   channel.rejectAll(e);
 }
+// Kill switch (D12): pending secret requests fail with KILLED; handoffs end via their own hook below.
+onKilled(() => {
+  channel.rejectAll(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
+});
+// Snapshot/diff masking (DA2): the driver renders these nodes' values as "••••" (agent/driver addMaskHook).
+(driverMod as any).addMaskHook?.((tabId: number, backendNodeId: number) => isAuthMaskedNode(tabId, backendNodeId));
 function event(name: string, data: Record<string, unknown>) {
   sender?.({ type: "event", event: name, data });
 }
@@ -67,7 +74,7 @@ function realPage(tabId: number): AuthPage {
       const dr = await d();
       await dr.call("authMark", [], { ref });
       try {
-        markAuthMaskedNode(tabId, dr.resolveRef(ref).backendNodeId);
+        markAuthMaskedNode(tabId, (await Promise.resolve(dr.resolveRef(ref))).backendNodeId);
       } catch {
         /* ref gone: nothing to mask */
       }
@@ -131,7 +138,7 @@ function emailReader(agentTabId: number): EmailReader {
         const first = readFeed((await chrome.tabs.get(id)).url ?? "", "<feed><fullcount>0</fullcount></feed>");
         if (!first.ok && first.code === "NOT_FOUND") throw new TabAgentError("NOT_FOUND", first.reason, "Sign in to Gmail in this browser yourself, or use source=totp / sms. TabAgent never signs in to Gmail.");
         const ac = new AbortController();
-        const killWatch = setInterval(() => isPaused().then((p) => p && ac.abort(), () => {}), 500);
+        const stopKill = onKilled(() => ac.abort());
         try {
           const r = await pollCode(
             async () => {
@@ -153,7 +160,7 @@ function emailReader(agentTabId: number): EmailReader {
           if (r.messageId) usedMessages.add(r.messageId);
           return r.code;
         } finally {
-          clearInterval(killWatch);
+          stopKill();
         }
       } finally {
         await chrome.tabs.remove(id).catch(() => {});
@@ -266,8 +273,7 @@ async function handoff(c: Ctx) {
         return () => chrome.tabs.onRemoved.removeListener(on);
       },
       onKilled(cb) {
-        const t = setInterval(() => isPaused().then((p) => p && cb(), () => {}), 300);
-        return () => clearInterval(t);
+        return onKilled(cb);
       },
       event: (name, data) => event(name, data),
       setTimeout: (fn, ms) => setTimeout(fn, ms),

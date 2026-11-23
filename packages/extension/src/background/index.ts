@@ -5,17 +5,17 @@ import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionM
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
-import { onAuthBridgeMessage, rejectAllAuth, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
+import { onAuthBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
 import { disposeDrivers, driverFor } from "./driver";
 import { getDownload } from "./downloads";
-import { extraHandlers } from "./handlerRegistry";
+import { extraHandlers, fireKilled } from "./handlerRegistry";
 import { broadcast, feedAll, feedPush } from "./feed";
 import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
 import type { PromptInfo } from "./prompts";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
-import { endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
+import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { handlers } from "./tools";
 
@@ -215,7 +215,8 @@ async function kill() {
   router.abortAll();
   prompts.dropAll("killed");
   rejectAllFiles(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
-  rejectAllAuth(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
+  fireKilled();
+  endAllHandoffs();
   for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
   await clearGrants();
