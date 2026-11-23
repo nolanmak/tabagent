@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TabAgentError } from "@tabagent/protocol";
-import { render, type FrameTree } from "../src/background/snapshot";
-import { ax, GOLDENS, loadAx, M1_PAGES, source } from "./helpers";
+import { render, tokensOf, type FrameTree } from "../src/background/snapshot";
+import { ax, GOLDENS, list, loadAx, M1_PAGES, source } from "./helpers";
 
 const UPDATE = !!process.env.UPDATE_GOLDENS;
 mkdirSync(GOLDENS, { recursive: true });
@@ -68,10 +68,10 @@ describe("render: D23 interactive mode", () => {
 
   it("maxTokens: output within budget, ends with the truncation line carrying the right N", () => {
     const fx = loadAx("form");
-    const all = render(fx.nodes, { refs: source() });
+    const all = render(fx.nodes, { refs: source(), collapse: false });
     for (const max of [20, 60, 120]) {
       const src = source();
-      const r = render(fx.nodes, { maxTokens: max, refs: src });
+      const r = render(fx.nodes, { maxTokens: max, refs: src, collapse: false });
       expect(r.tokens).toBeLessThanOrEqual(max);
       expect(r.truncated).toBe(true);
       const last = r.lines[r.lines.length - 1];
@@ -113,17 +113,19 @@ describe("render: D23 interactive mode", () => {
   });
 });
 
-describe("render: frames", () => {
+describe("render: frames (#19)", () => {
   const frames = (): FrameTree[] => {
-    const main = ax(["RootWebArea", "Top", [["main", undefined, [["button", "Top button"], ["Iframe", "Child", []]]]]]);
+    const main = ax(["RootWebArea", "Top", [["main", undefined, [["button", "Top button"], ["Iframe", "Child", []], ["Iframe", "Blocked", []]]]]]);
     const iframes = main.filter((n) => n.role?.value === "Iframe");
     const child = ax(["RootWebArea", "c", [["button", "Inner button"]]]);
     // same backendNodeId in both frames, different frames
     const innerBtn = child.find((n) => n.role?.value === "button")!;
     innerBtn.backendDOMNodeId = main.find((n) => n.role?.value === "button")!.backendDOMNodeId;
+    const blocked = ax(["RootWebArea", "b", [["button", "Secret button"]]]);
     return [
       { key: "|main", nodes: main },
       { key: "S1|child", nodes: child, ownerBackendNodeId: iframes[0].backendDOMNodeId, ownerFrameKey: "|main" },
+      { key: "S2|blocked", nodes: blocked, ownerBackendNodeId: iframes[1].backendDOMNodeId, ownerFrameKey: "|main", denied: "http://evil.test" },
     ];
   };
 
@@ -136,5 +138,68 @@ describe("render: frames", () => {
     expect(top.backendNodeId).toBe(inner.backendNodeId);
     expect(top.ref).not.toBe(inner.ref);
   });
+
+  it("denied-origin frame renders as a one-line placeholder and none of its nodes get refs", () => {
+    const r = render(frames(), { refs: source() });
+    expect(r.text).toContain('- iframe "Blocked" (content hidden: http://evil.test is denied by site policy)');
+    expect(r.text).not.toContain("Secret button");
+    expect(r.shown.some((s) => s.frameKey === "S2|blocked")).toBe(false);
+  });
+
+  it("a denied main frame renders a placeholder", () => {
+    const r = render([{ key: "|main", nodes: [], denied: "http://x.test" }], { refs: source() });
+    expect(r.text).toContain("denied by site policy");
+    expect(r.refs).toEqual([]);
+  });
 });
 
+describe("render: smart collapse (#20)", () => {
+  const page = (n: number) =>
+    ax(["RootWebArea", "p", [["main", undefined, [["heading", "Rows", [], { properties: [{ name: "level", value: { value: 1 } }] }], list(n, (i) => ["listitem", undefined, [["link", `Row number ${i}`], ["button", `Open ${i}`]]]), ["button", "After"]]]]]);
+
+  it("collapses the longest same-role run: first 3 + last 1, container gets a ref, output <= budget", () => {
+    const nodes = page(500);
+    const src = source();
+    const r = render(nodes, { maxTokens: 600, refs: src });
+    expect(r.tokens).toBeLessThanOrEqual(600);
+    expect(r.collapsed).toBe(1);
+    const m = r.text.match(/… (\d+) more listitem items, expand with root=(e\d+)/)!;
+    expect(Number(m[1])).toBe(496);
+    for (const i of [1, 2, 3, 500]) expect(r.text).toContain(`link "Row number ${i}"`);
+    expect(r.text).not.toContain('link "Row number 4"');
+    expect(r.text).toContain('button "After"');
+    // the container ref expands to the full list via root
+    const t = src.table.get(m[2])!;
+    const sub = render(nodes, { root: { frameKey: t.frameKey, backendNodeId: t.backendNodeId }, maxTokens: 100_000, refs: src });
+    expect(sub.text).toContain('link "Row number 250"');
+    // collapsed items had no refs until shown
+    const minted = src.table.size();
+    expect(minted).toBeGreaterThan(r.refs.length);
+  });
+
+  it("picks the longest run first", () => {
+    const nodes = ax(["RootWebArea", "p", [list(8, (i) => ["listitem", undefined, [["link", `Short ${i}`]]]), list(400, (i) => ["listitem", undefined, [["link", `Long ${i}`]]])]]);
+    const r = render(nodes, { maxTokens: 300, refs: source() });
+    expect(r.text).toContain("… 396 more listitem items");
+    expect(r.text).toContain('link "Short 5"');
+  });
+
+  it("pathological page: one 5,000-item list stays within budget", () => {
+    const r = render(page(5000), { refs: source() });
+    expect(r.tokens).toBeLessThanOrEqual(6000);
+    expect(r.text).toContain("… 4996 more listitem items");
+  });
+
+  it("falls back to the hard stop when collapsing is not enough", () => {
+    const r = render(page(500), { maxTokens: 30, refs: source() });
+    expect(r.tokens).toBeLessThanOrEqual(30);
+    expect(r.text).toMatch(/… truncated, \d+ more nodes; narrow with root=<ref>$/);
+  });
+
+  it("no collapse when the page fits", () => {
+    const r = render(page(10), { refs: source() });
+    expect(r.collapsed).toBe(0);
+    expect(r.truncated).toBe(false);
+    expect(tokensOf(r.text)).toBe(r.tokens);
+  });
+});

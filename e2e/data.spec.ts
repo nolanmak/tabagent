@@ -235,7 +235,7 @@ test("extract.paginate: a hop to a denied origin stops with the pages so far", a
   const c = await h.mcp();
   await h.ok(c, "nav.goto", { url: `${h.A}/table.html` });
   // point the page's Next link at the denied origin
-  await h.ok(c, "nav.wait", { for: "fn", value: `(document.getElementById("next").setAttribute("href", ${JSON.stringify(h.B)} + "/table.html?page=2"), true)`, timeout: 5000 });
+  await h.ok(c, "js.eval", { expression: `document.getElementById("next").setAttribute("href", ${JSON.stringify(h.B)} + "/table.html?page=2")` });
   const r = payload(await h.ok(c, "extract.paginate", { extractor: "table" }));
   expect(r.pages).toBe(1);
   expect(r.error.code).toBe("PERMISSION_DENIED");

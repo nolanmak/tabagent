@@ -31,7 +31,7 @@ function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partia
       return { snapshot: "x", tab: c.p.tabId, __side: { snapshotDiff: "+ a" } };
     }),
     "nav.goto": vi.fn(async () => ({ url: "u" })),
-    "act.upload": vi.fn(async () => ({ files: [] })),
+    "js.eval": vi.fn(async () => ({ value: 2 })),
     "act.type": vi.fn(async () => ({ ok: true })),
     "act.click": vi.fn(async () => {
       throw new Error("boom\n    at secretFrame (file.ts:1:1)");
@@ -120,9 +120,9 @@ describe("interim policy table (D17) through the router", () => {
   });
   it("each D18 static gate is refused unless devAllowSensitive", async () => {
     const off = world();
-    expect((await off.router.handle(cmd("act.upload", { ref: "e1", paths: ["/x"], tabId: 1 }))).error?.message).toContain("would ask (sensitive)");
+    expect((await off.router.handle(cmd("js.eval", { expression: "1", tabId: 1 }))).error?.message).toContain("would ask (sensitive)");
     const on = world({}, { devAllowSensitive: true });
-    expect((await on.router.handle(cmd("act.upload", { ref: "e1", paths: ["/x"], tabId: 1 }))).ok).toBe(true);
+    expect((await on.router.handle(cmd("js.eval", { expression: "1", tabId: 1 }))).ok).toBe(true);
   });
   it("no session tabs + tool needing a tab -> NOT_FOUND with the tabs new hint", async () => {
     const w = world();
@@ -211,8 +211,8 @@ describe("redaction in feed + audit", () => {
     const release = vi.fn();
     const hold = vi.fn(() => release);
     const w = world({ holdApproval: hold }, { devAllowSensitive: true });
-    await w.router.handle(cmd("act.upload", { ref: "e1", paths: ["/x"], tabId: 1 }));
-    expect(hold).toHaveBeenCalledWith("s1", "https://a.example", "e");
+    await w.router.handle(cmd("js.eval", { expression: "1", tabId: 1 }));
+    expect(hold).toHaveBeenCalledWith("s1", "https://a.example", "c");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

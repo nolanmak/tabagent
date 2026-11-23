@@ -1,6 +1,6 @@
 // Root Vitest config (#25).
 //
-// One project:
+// Project:
 //   unit  - pure modules, no build needed. `npm test` / `npm run test:coverage`.
 //
 // Coverage floors are the TDD rules in roadmap #28: protocol 90% lines,
@@ -21,7 +21,7 @@ export const EXTENSION_PURE = [
   "packages/extension/src/**/pure/**/*.ts",
   // DOM extractors unit-tested under happy-dom
   "packages/extension/src/pagelib/{forms,extract}.ts",
-  "packages/extension/src/background/{snapshot,keys,refs,autowait,router,diff,frames,screenshot-plan,policy,wait}.ts",
+  "packages/extension/src/background/{snapshot,keys,refs,autowait,router,diff,collapse,frames,screenshot-plan,dialogs,policy,sensitive,redact,wait,find,form,lite}.ts",
 ];
 
 export default defineConfig({
