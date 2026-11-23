@@ -16,6 +16,8 @@ export interface ToolLike {
  */
 export const STATIC_SENSITIVE: Record<string, SensitiveCategory> = {
   "nav.wait": "c", // only when for=fn
+  "act.upload": "e",
+  "downloads.read": "e",
   "tabs.attach": "f",
 };
 
@@ -44,7 +46,7 @@ export interface Requirements {
 }
 
 /** Tools that work without a session tab. */
-const NO_TAB = new Set(["tabs", "session.info", "session.permissions", "session.end"]);
+const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end"]);
 
 export function requirementsFor(tool: ToolLike, params: Record<string, unknown>): Requirements {
   const levelOf = (l: Level | "none" | undefined) => (l && l !== "none" ? l : null);
@@ -61,6 +63,7 @@ export function requirementsFor(tool: ToolLike, params: Record<string, unknown>)
   const when = tool.sensitiveWhen ?? (tool.name === "nav.wait" ? { param: "for", values: ["fn"] } : undefined);
   if (sensitive && when && !when.values.includes(String(params[when.param]))) sensitive = undefined;
   if (tool.name === "nav.goto") return { level: level ?? "act", sensitive, urlSource: "param", needsTab: false, tabOptional: true };
+  if (tool.name === "downloads.read") return { level: null, sensitive: sensitive ?? "e", urlSource: "download", needsTab: false };
   if (NO_TAB.has(tool.name)) return { level: null, sensitive, urlSource: "none", needsTab: false };
   return { level, sensitive, urlSource: level || sensitive ? "tab" : "none", needsTab: true };
 }

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PROFILES, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
 import type { Flags } from "./args";
-import { configPath, loadConfig } from "./config";
+import { configPath, loadConfig, saveConfig } from "./config";
 import { renderCli } from "./format";
 import { installSkill, skillTargets, uninstallSkill } from "./skill";
 import { BRIDGE_VERSION } from "./version";
@@ -60,13 +60,18 @@ export function configCommand(rest: string[]): Out {
     const { secret, ...safe } = cfg;
     return ok([JSON.stringify({ ...safe, secret: secret ? "(set)" : null, path: configPath() }, null, 2)]);
   }
+  if (sub === "add-upload-dir" && a) {
+    cfg.uploadDirs = [...new Set([...cfg.uploadDirs, resolve(a)])];
+    saveConfig(cfg);
+    return ok([`Upload dirs: ${cfg.uploadDirs.join(", ")}`]);
+  }
   if (sub === "set" && a === "port" && b && Number.isInteger(Number(b))) {
     const raw = JSON.parse(readFileSync(configPath(), "utf8"));
     raw.port = Number(b);
     writeFileSync(configPath(), JSON.stringify(raw, null, 2), { mode: 0o600 });
     return ok([`Port set to ${b}. Also set it in the extension side panel when pairing.`]);
   }
-  return fail("Usage: tabagent config [show] | set port <n>");
+  return fail("Usage: tabagent config [show] | add-upload-dir <dir> | set port <n>");
 }
 
 /** D30 CLI output for a tool response: screenshots are written to a file and the path printed. */
@@ -94,7 +99,7 @@ Usage:
   tabagent status                      Bridge + extension status (and the pairing code when unpaired)
   tabagent tools [--profile P]         List tools (profiles: ${PROFILES.join(", ")})
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
-  tabagent config [show] | set port <n>
+  tabagent config [show] | add-upload-dir <dir> | set port <n>
   tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw] [--out file.png]
 
 Examples:

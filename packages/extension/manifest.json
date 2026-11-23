@@ -33,6 +33,7 @@
     "tabGroups",
     "sidePanel",
     "storage",
+    "downloads",
     "alarms",
     "scripting",
     "webNavigation"

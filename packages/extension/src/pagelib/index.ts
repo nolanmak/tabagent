@@ -3,7 +3,8 @@
 // reference elements inside `value` as { el: <index> }; the background maps those
 // indexes to refs.
 
-import { clickGateInfo, isFormControl, keyGateInfo } from "./forms";
+import { clickGateInfo, clickSensitivity, comboOptions, describeFields, fieldInfo, isFormControl, keyGateInfo, keySensitivity, requestSubmit, resolveFileInput, submitInfo } from "./forms";
+import { extractLinks, extractSchema, extractTable, markdown, nextControl, text } from "./extract";
 
 export type El = Element;
 export interface Ret<T = unknown> {
@@ -850,9 +851,24 @@ const api = {
   selectOptions,
   getChecked,
   labelFor,
-  // D18 a/b gate inputs (./forms.ts)
+  // forms (./forms.ts)
+  describeFields,
+  fieldInfo,
   clickGateInfo,
   keyGateInfo,
+  submitInfo,
+  requestSubmit,
+  comboOptions,
+  resolveFileInput,
+  clickSensitivity,
+  keySensitivity,
+  // extraction (./extract.ts)
+  extractTable,
+  extractLinks,
+  extractSchema: (_s: unknown, o: Parameters<typeof extractSchema>[0]) => extractSchema(o),
+  nextControl,
+  markdown,
+  text,
   pageState,
   waitSelector,
   waitText,

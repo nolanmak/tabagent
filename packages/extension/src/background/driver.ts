@@ -1,12 +1,12 @@
-// D26 Driver interface + the CDP driver (the only M1 implementation). Tool
-// handlers talk only to a Driver; nothing outside cdp.ts / driver.ts calls chrome.debugger. Decisions live in
+// D26 Driver interface + the CDP driver. Tool handlers talk only to a Driver;
+// nothing outside cdp.ts / driver.ts calls chrome.debugger. Decisions live in
 // the pure modules (snapshot, refs, autowait, frames, screenshot-plan, wait);
 // this file wires them to CDP.
 import { TabAgentError } from "@tabagent/protocol";
 import { autoWait, type Observation } from "./autowait";
 import { CdpTab, getCdpTab, sleep, type FrameInfo } from "./cdp";
 import { staleRef, taErr } from "./errors";
-import { ancestry, contentOffset, translate, translateBox, type Offset, type OwnerMetrics } from "./frames";
+import { ancestry, contentOffset, translate, translateBox, splitKey, type Offset, type OwnerMetrics } from "./frames";
 import { editCommand, keyDef, MOD_BITS, parseChord } from "./keys";
 import { baselines, refTable } from "./refstore";
 import type { RefTable, RefTarget } from "./refs";
@@ -44,6 +44,12 @@ export interface Screenshot {
   note?: string;
 }
 
+export interface DialogInfo {
+  type: string;
+  message: string;
+  defaultPrompt?: string;
+}
+
 export interface FrameCall {
   frameKey: string;
   url: string;
@@ -51,25 +57,26 @@ export interface FrameCall {
   value: any;
 }
 
-/** D26: what tool handlers may ask of a tab. CDP is the only M1 implementation; lite mode (#21) adds a second. */
+/** D26: what tool handlers may ask of a tab. CDP is one implementation, lite (#21) the other. */
 export interface Driver {
-  kind: "cdp";
+  kind: "cdp" | "lite";
   tabId: number;
   snapshot(o: SnapshotOpts): Promise<RenderResult>;
   find(spec: FindSpec): Promise<{ matches: FindMatch[]; truncated: boolean }>;
   resolveRef(ref: string): Promise<RefTarget>;
   call(fn: string, args: unknown[], o?: { ref?: string; frameKey?: string }): Promise<any>;
   callAllFrames(fn: string, args: unknown[]): Promise<FrameCall[]>;
-  click(ref: string, o?: ClickOpts): Promise<void>;
+  click(ref: string, o?: ClickOpts): Promise<{ dialog?: DialogInfo }>;
   hover(ref: string, timeout?: number): Promise<void>;
   focus(ref: string, end?: boolean): Promise<void>;
   /** Wait until `ref` can take text input (attached, visible, enabled, editable). */
   prepareInput(ref: string, timeout?: number): Promise<void>;
-  typeText(text: string): Promise<void>;
-  press(chord: string): Promise<void>;
+  typeText(text: string): Promise<{ dialog?: DialogInfo }>;
+  press(chord: string): Promise<{ dialog?: DialogInfo }>;
   fill(ref: string, value: string, timeout?: number): Promise<void>;
   scroll(ref: string | undefined, dx: number, dy: number): Promise<unknown>;
   drag(from: string, to: string, timeout?: number): Promise<void>;
+  upload(ref: string, paths: string[]): Promise<void>;
   screenshot(o: ScreenshotOpts): Promise<Screenshot>;
   evaluate(expression: string, world: "main" | "isolated"): Promise<unknown>;
   navigate(url: string, waitUntil: string, timeout: number): Promise<{ url: string; warning?: string }>;
@@ -81,26 +88,29 @@ export interface Driver {
   settle(beforeEpoch: number, timeout?: number): Promise<void>;
   navEpoch(): number;
   currentUrl(): Promise<string>;
+  dialog(): DialogInfo | null;
+  handleDialog(accept: boolean, promptText?: string): Promise<unknown>;
   dispose(): void;
 }
 
 // ---------------------------------------------------------------------------
-// driverFor: one CDP driver per tab
+// driverFor: the CDP driver is the only implementation until lite mode (#21)
 // ---------------------------------------------------------------------------
-const drivers = new Map<number, CdpDriver>();
+const drivers = new Map<number, { cdp?: CdpDriver }>();
 
 export async function driverFor(tabId: number, _url: string): Promise<Driver> {
   let d = drivers.get(tabId);
-  if (!d) drivers.set(tabId, (d = new CdpDriver(getCdpTab(tabId), refTable)));
-  return d;
+  if (!d) drivers.set(tabId, (d = {}));
+  return (d.cdp ??= new CdpDriver(getCdpTab(tabId), refTable));
 }
 
 export function peekDriver(tabId: number): Driver | undefined {
-  return drivers.get(tabId);
+  return drivers.get(tabId)?.cdp;
 }
 
 export function disposeDrivers(tabId: number) {
-  drivers.get(tabId)?.dispose();
+  const d = drivers.get(tabId);
+  d?.cdp?.dispose();
   drivers.delete(tabId);
   refTable.dropTab(tabId);
   baselines.clearTab(tabId);
@@ -135,7 +145,7 @@ export function refSource(table: RefTable, tabId: number, loaderOf: (frameKey: s
 export class CdpDriver implements Driver {
   kind = "cdp" as const;
   tabId: number;
-  private frameCache: { at: number; frames: FrameInfo[] } | null = null;
+  private frameCache: { at: number; frames: FrameInfo[]; allowed: FrameInfo[] } | null = null;
   private offs: (() => void)[] = [];
 
   constructor(
@@ -155,13 +165,13 @@ export class CdpDriver implements Driver {
 
   private loaderOf = (frameKey: string) => this.tab.loaders.get(frameKey) ?? "";
 
-  private async frames(fresh = false): Promise<{ frames: FrameInfo[] }> {
+  private async frames(fresh = false): Promise<{ frames: FrameInfo[]; allowed: FrameInfo[] }> {
     if (!fresh && this.frameCache && this.clock.now() - this.frameCache.at < 300) return this.frameCache;
     const frames = await this.tab.frames();
     // main frame first
     const mk = this.tab.mainKey();
     frames.sort((a, b) => (a.key === mk ? -1 : b.key === mk ? 1 : 0));
-    this.frameCache = { at: this.clock.now(), frames };
+    this.frameCache = { at: this.clock.now(), frames, allowed: frames };
     return this.frameCache;
   }
 
@@ -170,7 +180,7 @@ export class CdpDriver implements Driver {
     try {
       return this.refs.resolve(ref, this.tabId, (fk) => this.tab.loaders.get(fk));
     } catch (e) {
-      // The frame may simply not be in our loader map yet (late iframe): refresh once.
+      // The frame may simply not be in our loader map yet (late OOPIF): refresh once.
       const t = this.refs.get(ref);
       if (t && t.tabId === this.tabId && !this.tab.loaders.has(t.frameKey)) {
         await this.frames(true);
@@ -182,6 +192,7 @@ export class CdpDriver implements Driver {
 
   async snapshot(o: SnapshotOpts): Promise<RenderResult> {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     const { frames } = await this.frames(true);
     const trees: FrameTree[] = [];
     let total = 0;
@@ -217,6 +228,7 @@ export class CdpDriver implements Driver {
 
   async find(spec: FindSpec) {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     const per: FindMatch[][] = [];
     const run = async (frameKey: string, self?: number) => {
       const r = await this.tab.pagelib(frameKey, "findNodes", [{ by: spec.by, value: spec.value, name: spec.name, limit: 20 }], self);
@@ -227,8 +239,8 @@ export class CdpDriver implements Driver {
       const t = await this.resolveRef(spec.root);
       await run(t.frameKey, t.backendNodeId);
     } else {
-      const { frames } = await this.frames(true);
-      for (const f of frames) {
+      const { allowed } = await this.frames(true);
+      for (const f of allowed) {
         if (per.flat().length > 20) break;
         try {
           await run(f.key);
@@ -255,9 +267,9 @@ export class CdpDriver implements Driver {
 
   async callAllFrames(fn: string, args: unknown[]): Promise<FrameCall[]> {
     await this.tab.ensure();
-    const { frames } = await this.frames();
+    const { allowed } = await this.frames();
     const out: FrameCall[] = [];
-    for (const f of frames) {
+    for (const f of allowed) {
       try {
         const r = await this.tab.pagelib(f.key, fn, args);
         out.push({ frameKey: f.key, url: f.url, isMain: !f.parentKey, value: this.toRefs(f.key, r.value, r.nodes) });
@@ -268,7 +280,7 @@ export class CdpDriver implements Driver {
     return out;
   }
 
-  /** Offsets from a (same-process) frame's viewport to the top-level viewport, innermost first. */
+  /** Offsets from a frame's viewport to the top-level viewport, innermost first (#19). */
   async offsetChain(frameKey: string): Promise<Offset[]> {
     const { frames } = await this.frames();
     const chain: Offset[] = [];
@@ -291,6 +303,7 @@ export class CdpDriver implements Driver {
           now: () => this.clock.now(),
           sleep: (ms) => this.clock.sleep(ms),
           check: () => {
+            this.tab.assertNoDialog();
             if (this.tab.userDetached) throw this.tab.detachedError();
           },
           observe: async (scroll) => {
@@ -309,6 +322,19 @@ export class CdpDriver implements Driver {
     return { ...translate(local, chain), target: t };
   }
 
+  /** Run input, but return early if it opens a JS dialog (which blocks the renderer, D28). */
+  private async raceDialog(p: Promise<unknown>): Promise<{ dialog?: DialogInfo }> {
+    const dlg = this.tab.waitEvent((m) => m === "Page.javascriptDialogOpening", 30000);
+    const r = await this.tab.guard(Promise.race([p.then(() => "done" as const), dlg.then((d) => (d ? ("dialog" as const) : ("done" as const)))]));
+    if (r === "dialog") {
+      p.catch(() => {});
+      await this.clock.sleep(50);
+      return { dialog: this.dialog() ?? undefined };
+    }
+    const d = this.dialog();
+    return d ? { dialog: d } : {};
+  }
+
   private modBits(mods: string[] = []) {
     return mods.reduce((a, m) => a | (MOD_BITS[m] ?? 0), 0);
   }
@@ -320,15 +346,14 @@ export class CdpDriver implements Driver {
     const clickCount = o.clickCount ?? 1;
     const modifiers = this.modBits(o.modifiers);
     const buttons = button === "left" ? 1 : button === "right" ? 2 : 4;
-    await this.tab.guard(
-      (async () => {
-        await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
-        for (let i = 1; i <= clickCount; i++) {
-          await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, buttons, clickCount: i, modifiers });
-          await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, buttons: 0, clickCount: i, modifiers });
-        }
-      })(),
-    );
+    const seq = (async () => {
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
+      for (let i = 1; i <= clickCount; i++) {
+        await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, buttons, clickCount: i, modifiers });
+        await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, buttons: 0, clickCount: i, modifiers });
+      }
+    })();
+    return this.raceDialog(seq);
   }
 
   async hover(ref: string, timeout?: number) {
@@ -362,6 +387,7 @@ export class CdpDriver implements Driver {
       throw taErr("BAD_REQUEST", (e as Error).message, "Examples: Enter, Tab, Escape, ArrowDown, Control+a, Meta+Shift+k");
     }
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     const seq = (async () => {
       await this.wakeInput();
       const held: string[] = [];
@@ -377,12 +403,13 @@ export class CdpDriver implements Driver {
         await this.tab.send("Input.dispatchKeyEvent", { type: "keyUp", key: md.key, code: md.code, windowsVirtualKeyCode: md.keyCode, modifiers: this.modBits(held), location: 1 });
       }
     })();
-    await this.tab.guard(seq);
+    return this.raceDialog(seq);
   }
 
   /** #7: act.type inserts text at the focused element with CDP Input.insertText; newlines press Enter. */
   async typeText(text: string) {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     const seq = (async () => {
       await this.wakeInput();
       const parts = text.split("\n");
@@ -391,7 +418,7 @@ export class CdpDriver implements Driver {
         if (i < parts.length - 1) await this.keyEvent(keyDef("Enter"), []);
       }
     })();
-    await this.tab.guard(seq);
+    return this.raceDialog(seq);
   }
 
   /**
@@ -415,6 +442,7 @@ export class CdpDriver implements Driver {
 
   async scroll(ref: string | undefined, dx: number, dy: number) {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     if (ref && !dx && !dy) return this.call("scrollIntoView", [], { ref });
     if (ref) {
       await this.call("scrollBy", [dx, dy], { ref });
@@ -453,6 +481,14 @@ export class CdpDriver implements Driver {
     }
   }
 
+  async upload(ref: string, paths: string[]) {
+    const t = await this.resolveRef(ref);
+    const inf = (await this.call("info", [], { ref })) as { isFile: boolean };
+    if (!inf.isFile) throw taErr("NOT_ACTIONABLE", `${ref} is not a file input`, "Use page.find by=css value='input[type=file]' to locate the file input (it may be hidden behind a button).");
+    const [sid] = splitKey(t.frameKey);
+    await this.tab.send("DOM.setFileInputFiles", { files: paths, backendNodeId: t.backendNodeId }, sid);
+  }
+
   private async metrics(): Promise<Metrics> {
     const m = await this.tab.send<any>("Page.getLayoutMetrics", {});
     const vv = m.cssVisualViewport;
@@ -468,6 +504,7 @@ export class CdpDriver implements Driver {
   /** #8: D30 result; overlay hidden during capture (D40); marks label only refs from the shared table. */
   async screenshot(o: ScreenshotOpts): Promise<Screenshot> {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     const target: Target = o.target ?? (o.ref ? "ref" : "viewport");
     const format = o.format ?? "png";
     let box: { x: number; y: number; w: number; h: number } | undefined;
@@ -479,7 +516,7 @@ export class CdpDriver implements Driver {
     }
     const m = await this.metrics();
     const plan = planCapture(target, m, box);
-    const { frames } = await this.frames();
+    const { allowed } = await this.frames();
     let marked = false;
     if (o.marks) {
       const snap = await this.snapshot({ mode: "interactive", maxTokens: 1_000_000 });
@@ -498,19 +535,20 @@ export class CdpDriver implements Driver {
       await this.tab.pagelib(this.tab.mainKey(), "drawMarks", [marksInView(entries, m.viewport)]);
       marked = true;
     }
-    for (const f of frames) await this.tab.pagelib(f.key, "hideOverlay", [true]).catch(() => {});
+    for (const f of allowed) await this.tab.pagelib(f.key, "hideOverlay", [true]).catch(() => {});
     try {
       const params: Record<string, unknown> = { format, fromSurface: true, captureBeyondViewport: plan.captureBeyondViewport, ...(format === "jpeg" ? { quality: o.quality ?? 80 } : {}), ...(plan.clip ? { clip: plan.clip } : {}) };
       const r = await this.tab.guard(this.tab.send<{ data: string }>("Page.captureScreenshot", params));
       return { mime: `image/${format}`, dataBase64: r.data, width: plan.width, height: plan.height, ...(plan.note ? { note: plan.note } : {}) };
     } finally {
-      for (const f of frames) await this.tab.pagelib(f.key, "hideOverlay", [false]).catch(() => {});
+      for (const f of allowed) await this.tab.pagelib(f.key, "hideOverlay", [false]).catch(() => {});
       if (marked) await this.tab.pagelib(this.tab.mainKey(), "clearOverlay", []).catch(() => {});
     }
   }
 
   async evaluate(expression: string, world: "main" | "isolated") {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     if (world === "main") return this.tab.evalMain(expression);
     const ctx = await this.tab.isolatedContext(this.tab.mainKey());
     const r = await this.tab.send<any>("Runtime.evaluate", { expression, contextId: ctx, awaitPromise: true, returnByValue: true, replMode: true });
@@ -537,6 +575,7 @@ export class CdpDriver implements Driver {
 
   async navigate(url: string, waitUntil: string, timeout: number) {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     baselines.clearTab(this.tabId);
     const r = await this.tab.guard(this.tab.send<any>("Page.navigate", { url, transitionType: "typed" }));
     if (r.errorText && r.errorText !== "net::ERR_ABORTED") throw taErr("BAD_REQUEST", `Navigation failed: ${r.errorText}`);
@@ -555,6 +594,7 @@ export class CdpDriver implements Driver {
 
   async history(action: "back" | "forward" | "reload", timeout: number) {
     await this.tab.ensure();
+    this.tab.assertNoDialog();
     baselines.clearTab(this.tabId);
     const before = this.tab.navEpoch;
     if (action === "reload") await this.tab.send("Page.reload", {});
@@ -575,7 +615,7 @@ export class CdpDriver implements Driver {
         const rs = await this.tab.evalMain("document.readyState");
         if (rs === "complete") return true;
       } catch (e) {
-        if (e instanceof TabAgentError && (e.code as string) === "DEBUGGER_DETACHED") throw e;
+        if (e instanceof TabAgentError && ["DIALOG_OPEN", "DEBUGGER_DETACHED"].includes(e.code as string)) throw e;
       }
       await this.clock.sleep(100);
     }
@@ -593,16 +633,27 @@ export class CdpDriver implements Driver {
   /** After an action: wait for any navigation it triggered, then a short network quiet period. */
   async settle(beforeEpoch: number, timeout = 5000) {
     await this.clock.sleep(120);
+    if (this.tab.dialog) return;
     if (this.tab.navEpoch !== beforeEpoch) {
       const end = this.clock.now() + timeout;
       while (this.clock.now() < end) {
         const mf = this.tab.mainFrameId;
         const lastStart = [...this.tab.lifecycle].reverse().find((e) => !e.sessionId && e.frameId === mf && e.name === "init");
         if (lastStart && this.tab.lifecycle.some((e) => !e.sessionId && e.loaderId === lastStart.loaderId && e.name === "load")) break;
+        if (this.tab.dialog) return;
         await this.clock.sleep(50);
       }
     }
     await this.tab.networkIdle(300, 1500);
+  }
+
+  dialog(): DialogInfo | null {
+    const d = this.tab.dialog;
+    return d ? { type: d.type, message: d.message, ...(d.defaultPrompt !== undefined ? { defaultPrompt: d.defaultPrompt } : {}) } : null;
+  }
+
+  handleDialog(accept: boolean, promptText?: string) {
+    return this.tab.handleDialog(accept, promptText);
   }
 
   private async overlay(ref: string) {

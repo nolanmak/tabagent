@@ -3,8 +3,10 @@
 // Decisions live in pure modules (policy, router, audit, bridgeClient).
 import { getTool, PROTOCOL_VERSION, validateParams, type SessionMeta } from "@tabagent/protocol";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
+import { onFilesResolved, setFilesSender } from "./bridgeFiles";
 import { allCdpTabs } from "./cdp";
 import { driverFor } from "./driver";
+import { getDownload } from "./downloads";
 import { broadcast } from "./feed";
 import { authorize } from "./permissions";
 import { createRouter } from "./router";
@@ -14,7 +16,7 @@ import { getSettings, updateSettings } from "./settings";
 import { handlers } from "./tools";
 
 const VERSION = chrome.runtime.getManifest().version;
-const FEATURES: string[] = [];
+const FEATURES = ["files.resolve"];
 
 // ---------------------------------------------------------------------------
 // Bridge connection (D4, D5, D11)
@@ -41,6 +43,7 @@ const bridge = createBridgeClient({
   setTimeout: (fn, ms) => setTimeout(fn, ms),
   clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 });
+setFilesSender((m) => bridge.send(m));
 
 function onBridgeMessage(msg: any) {
   switch (msg?.type) {
@@ -49,6 +52,9 @@ function onBridgeMessage(msg: any) {
       break;
     case "session.closed":
       endSession(msg.sessionId).catch(() => {});
+      break;
+    case "files.resolved":
+      onFilesResolved(msg);
       break;
   }
 }
@@ -79,7 +85,10 @@ export const router = createRouter<Session>({
   resolveTab: (s, id) => resolveTab(s, id),
   tabUrl,
   attachTarget: (m, id) => attachTarget(m as SessionMeta, id),
-  downloadUrl: () => undefined,
+  downloadUrl: (id, sid) => {
+    const d = getDownload(id);
+    return d && d.sessionId === sid ? d.url : undefined;
+  },
   authorize: (r) => authorize({ meta: r.meta, url: r.url, level: r.level, sensitive: r.sensitive, tool: r.action ? `${r.tool} ${r.action}` : r.tool, summary: r.summary, reasons: r.reasons, tabId: r.tabId }),
   handler: (name) => (sessionHandlers[name] ?? (handlers as Record<string, any>)[name]) as any,
   sensitivePaths: async (tool, p, tabId, url) => {
@@ -87,6 +96,9 @@ export const router = createRouter<Session>({
     const out: string[] = [];
     if ((tool === "act.type" || tool === "act.fill") && typeof p.ref === "string") {
       if (await refIsSensitive(tabId, url, p.ref)) out.push(tool === "act.type" ? "text" : "value");
+    }
+    if (tool === "form.fill" && p.fields && typeof p.fields === "object") {
+      for (const k of Object.keys(p.fields)) if (/^e\d+$/.test(k) && (await refIsSensitive(tabId, url, k))) out.push(`fields.${k}`);
     }
     return out;
   },
@@ -150,6 +162,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   listSessions,
   endSession,
   inflight: () => router.inflightCount(),
+  debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
   attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
 };
 export type { Status };

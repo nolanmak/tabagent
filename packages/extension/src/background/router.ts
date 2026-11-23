@@ -122,6 +122,10 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
       return `open ${p.url}`;
     case "nav.wait":
       return `wait for a JavaScript condition: ${String(p.value ?? "").slice(0, 120)}`;
+    case "act.upload":
+      return `upload ${Array.isArray(p.paths) ? p.paths.length : 0} local file(s)`;
+    case "downloads.read":
+      return "read a downloaded file";
     case "tabs":
       if (p.action === "attach") return `take over your tab "${(attach?.title ?? "").slice(0, 60)}"`;
       return `tabs ${p.action}`;
@@ -132,6 +136,7 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
 
 const REASONS: Record<string, string> = {
   c: "Runs code in the page with access to its data",
+  e: "Moves a local file between your computer and the page",
   f: "Adopting a tab you opened gives the agent your page and its sign-ins",
 };
 
