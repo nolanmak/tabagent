@@ -38,6 +38,12 @@ function looksSensitiveValue(v: string) {
   return CARD_LIKE.test(d) || SSN_LIKE.test(v.trim());
 }
 
+function maskDeep(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(maskDeep);
+  if (v && typeof v === "object") return Object.fromEntries(Object.keys(v as object).map((k) => [k, maskDeep((v as Record<string, unknown>)[k])]));
+  return MASK;
+}
+
 /** Redact params for the feed and audit log. Never returns a raw sensitive value. */
 export function redactParams(value: unknown, opts: RedactOpts = {}, path = "", keyHint = ""): unknown {
   const max = opts.maxString ?? 300;
@@ -52,6 +58,7 @@ export function redactParams(value: unknown, opts: RedactOpts = {}, path = "", k
     if (typeof value === "number" && looksSensitiveValue(String(value))) return MASK;
     return value;
   }
+  if (forced || sensitiveKey(keyHint)) return maskDeep(value);
   if (Array.isArray(value)) return value.map((v, i) => redactParams(v, opts, path ? `${path}.${i}` : String(i), keyHint));
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
