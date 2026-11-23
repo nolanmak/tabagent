@@ -36,20 +36,22 @@ interface GateInput {
   formFields?: (FieldLike & { value?: string })[];
 }
 
-async function gateDetections(c: Ctx, t: TabCtx, dets: Detection[], label: string, fields: GateInput["formFields"], action: string) {
-  for (const cat of ["a", "b"] as const) {
-    const hits = dets.filter((d) => d.category === cat);
-    if (!hits.length) continue;
-    const conf = cat === "a" && fields ? submitConfirmation({ control: label, fields }) : { summary: `${action} "${label.slice(0, 60)}"`, reasons: [] as string[] };
-    await sensitiveGate(c.meta, t.url, cat, c.tool.name, conf.summary, [...hits.map((h) => h.reason), ...conf.reasons]);
-  }
+/**
+ * One prompt per action. A click that is both (a) and (b), e.g. "Pay" on a card form,
+ * is asked once under (a), the stronger category, listing every reason.
+ */
+export async function gateDetections(c: Ctx, url: string, dets: Detection[], label: string, fields: GateInput["formFields"], action: string) {
+  if (!dets.length) return;
+  const cat = dets.some((d) => d.category === "a") ? "a" : "b";
+  const masked = cat === "a" && fields ? submitConfirmation({ control: label, fields }).reasons : [];
+  await sensitiveGate(c.meta, url, cat, c.tool.name, `${action} "${label.slice(0, 60)}"`, [...dets.map((h) => h.reason), ...masked]);
 }
 
 /** act.click / act.dblclick / extract.paginate hops: D18(a) submit control of a sensitive form, D18(b) keywords. */
 export async function checkClickGate(c: Ctx, t: TabCtx, ref: string) {
   const info = (await t.drv.call("clickGateInfo", [], { ref })) as GateInput;
   const dets = submitSensitivity(info);
-  if (dets.length) await gateDetections(c, t, dets, info.name || ref, info.formFields, "click");
+  await gateDetections(c, t.url, dets, info.name || ref, info.formFields, "click");
 }
 
 /** act.press / act.type submit=true: D18(a) Enter inside a sensitive form. */
@@ -57,5 +59,5 @@ export async function checkKeyGate(c: Ctx, t: TabCtx, key: string) {
   if (!/enter$/i.test(key)) return;
   const info = (await t.drv.call("keyGateInfo", [])) as { inForm: boolean; textarea?: boolean; formFields?: GateInput["formFields"]; formName?: string };
   const dets = keySensitivity(key, info);
-  if (dets.length) await gateDetections(c, t, dets, info.formName || "form", info.formFields, "press Enter in");
+  await gateDetections(c, t.url, dets, info.formName || "form", info.formFields, "press Enter in");
 }

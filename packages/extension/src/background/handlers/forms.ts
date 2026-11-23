@@ -3,10 +3,10 @@ import { TabAgentError, TIMEOUTS, type ErrorCode } from "@tabagent/protocol";
 import { planValue, type FillAction, type FillValue } from "../../pure/coerce";
 import { fillResult, type Failed, type Filled } from "../../pure/fill";
 import { isRefKey, matchKey, normLabel, type FieldDesc } from "../../pure/labels";
-import { formSensitivity, submitConfirmation, clickSensitivity } from "../../pure/sensitive";
+import { clickSensitivity, formSensitivity, type Detection } from "../../pure/sensitive";
 import { sleep } from "../cdp";
 import { act, onTab, type Ctx, type TabCtx } from "./ctx";
-import { sensitiveGate } from "./gates";
+import { gateDetections } from "./gates";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 const CALL_CAP_MS = 120_000;
@@ -214,11 +214,8 @@ export const formHandlers: Record<string, Handler> = {
       if (v?.error) severalForms(v);
       if (!v) throw new TabAgentError("NOT_FOUND", "No form found", "Pass ref of the form or a field inside it.");
       const fields = v.fields as Parameters<typeof formSensitivity>[0];
-      const conf = submitConfirmation({ control: v.control, fields });
-      const a = formSensitivity(fields);
-      if (a.length) await sensitiveGate(c.meta, t.url, "a", c.tool.name, conf.summary, [...a.map((r) => `submits a form with a ${r}`), ...conf.reasons]);
-      const b = v.submitRef ? clickSensitivity({ role: "button", name: v.control }) : [];
-      if (b.length) await sensitiveGate(c.meta, t.url, "b", c.tool.name, conf.summary, b.map((d) => d.reason));
+      const dets: Detection[] = [...formSensitivity(fields).map((r) => ({ category: "a" as const, reason: `submits a form with a ${r}` })), ...(v.submitRef ? clickSensitivity({ role: "button", name: v.control }) : [])];
+      await gateDetections(c, t.url, dets, v.control || "form", fields, "submit");
       if (v.submitRef) return t.drv.click(v.submitRef, { timeout: c.p.timeout });
       await t.drv.call("requestSubmit", [], { ref: v.ref });
     });

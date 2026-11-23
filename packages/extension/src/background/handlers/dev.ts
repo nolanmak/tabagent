@@ -9,7 +9,7 @@ import { staticGate } from "./gates";
 type Handler = (c: Ctx) => Promise<unknown>;
 
 function needCdp(t: TabCtx, tool: string) {
-  if (t.drv.kind !== "cdp") throw new TabAgentError("UNSUPPORTED", `${tool} is not available in lite mode`, "Remove this site from Lite sites in the TabAgent side panel.");
+  if (t.drv.kind !== "cdp") throw new TabAgentError("UNSUPPORTED", `${tool} needs full (debugger) mode; this site is in lite mode`, "Remove this site from Lite sites in the TabAgent side panel.");
   return cdp(t.drv).tab;
 }
 

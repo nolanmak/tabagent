@@ -42,7 +42,14 @@ describe("page.markdown / page.text", () => {
     expect(r.text).not.toContain("Buy cheap widgets");
     expect(r.text).not.toContain("Hidden paragraph");
   });
+  it("page.text keeps button labels (visible text); markdown drops controls", () => {
+    load(`<main><p>Counter</p><button>Clicked 2 times</button><input value="secret-ish"></main>`);
+    expect(text(null).text).toContain("Clicked 2 times");
+    expect(text(null).text).not.toContain("secret-ish");
+    expect(markdown(null).markdown).not.toContain("Clicked");
+  });
   it("page.text of an element", () => {
+    load(fixture("news.html"), "http://news.test/2026/field-notes");
     expect(text(document.querySelector("blockquote")).text).toBe("Refs are cheap; selectors are brittle.");
   });
 });

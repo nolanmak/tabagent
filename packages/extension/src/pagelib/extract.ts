@@ -572,7 +572,7 @@ function render(node: Node, ctx: Ctx): string {
   if (node.nodeType !== 1) return "";
   const el = node as El;
   const tag = el.tagName.toLowerCase();
-  if (SKIP_TAGS.has(tag)) return "";
+  if (SKIP_TAGS.has(tag) && !(ctx.plain && tag === "button")) return ""; // button labels are visible text
   if (hiddenSelf(el)) return "";
   if (el !== ctx.root && isChrome(el)) return "";
   const kids = () => Array.from((el.shadowRoot ?? el).childNodes).map((c) => render(c, ctx)).join("");
