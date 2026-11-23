@@ -7,6 +7,7 @@ import { memoryStore, RefTable } from "../src/background/refs";
 import { loadAx } from "./helpers";
 
 vi.mock("../src/background/permissions", () => ({
+  effectivePolicy: async (url: string) => ({ origin: new URL(url).origin, policy: "full" }),
   requireSite: async () => {},
   requireSensitive: async () => {},
 }));
@@ -231,7 +232,7 @@ describe("CdpDriver screenshot (#8)", () => {
   });
 });
 
-describe("CdpDriver same-process frames and find (#26)", () => {
+describe("CdpDriver frames and find (#26)", () => {
   it("child frame clicks are translated by the owner iframe's offset", async () => {
     const child = loadAx("index");
     const ownerId = 777;

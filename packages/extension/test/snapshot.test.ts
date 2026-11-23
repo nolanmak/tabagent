@@ -113,7 +113,7 @@ describe("render: D23 interactive mode", () => {
   });
 });
 
-describe("render: same-process frames", () => {
+describe("render: frames", () => {
   const frames = (): FrameTree[] => {
     const main = ax(["RootWebArea", "Top", [["main", undefined, [["button", "Top button"], ["Iframe", "Child", []]]]]]);
     const iframes = main.filter((n) => n.role?.value === "Iframe");
@@ -136,5 +136,5 @@ describe("render: same-process frames", () => {
     expect(top.backendNodeId).toBe(inner.backendNodeId);
     expect(top.ref).not.toBe(inner.ref);
   });
-
 });
+

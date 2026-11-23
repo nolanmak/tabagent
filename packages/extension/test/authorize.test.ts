@@ -17,7 +17,7 @@ describe("requirementsFor: every D18 static path reaches the gate", () => {
     for (const f of ["load", "networkidle", "selector", "text", "url"]) expect(requirementsFor(reg("nav.wait"), { for: f }).sensitive).toBeUndefined();
   });
   it("registry fallback map applies when the registry carries no category", () => {
-    expect(requirementsFor({ name: "nav.wait", level: "read" }, { for: "fn" }).sensitive).toBe("c");
+    expect(requirementsFor({ name: "act.upload", level: "act" }, {}).sensitive).toBe("e");
     expect(requirementsFor({ name: "nav.wait", level: "read" }, { for: "load" }).sensitive).toBeUndefined();
     expect(requirementsFor({ name: "nav.wait", level: "read", sensitive: true }, { for: "fn" }).sensitive).toBe("c");
     expect(requirementsFor({ name: "tabs", level: "none" }, { action: "attach" })).toMatchObject({ level: "read", sensitive: "f" });

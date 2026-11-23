@@ -178,3 +178,4 @@ describe("sessions + tab ownership (#5)", () => {
     expect(s.active).toBeUndefined();
   });
 });
+

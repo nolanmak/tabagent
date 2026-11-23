@@ -1,6 +1,7 @@
 // Root Vitest config (#25).
 //
-// Unit project: pure modules, no build needed. `npm test` / `npm run test:coverage`.
+// One project:
+//   unit  - pure modules, no build needed. `npm test` / `npm run test:coverage`.
 //
 // Coverage floors are the TDD rules in roadmap #28: protocol 90% lines,
 // bridge 80%, extension *pure modules* 80%. Adapters (chrome.*, CDP, sockets)
@@ -12,8 +13,9 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 const alias = { "@tabagent/protocol": `${root}packages/protocol/src/index.ts` };
 
 /**
- * Extension modules that take plain data in and return plain data. Anything
- * placed under a `pure/` directory is counted automatically.
+ * Extension modules that take plain data in and return plain data. Files that
+ * do not exist yet are simply absent from the report. Anything placed under a
+ * `pure/` directory is counted automatically.
  */
 export const EXTENSION_PURE = [
   "packages/extension/src/**/pure/**/*.ts",

@@ -31,7 +31,7 @@ test("two agents at once: separate tab groups, TAB_BUSY on each other's tabs", a
   await expect.poll(async () => h.sw.evaluate(() => (globalThis as any).__tabagent.listSessions().map((s: any) => s.label)), { timeout: 5000 }).not.toContain("alpha");
 });
 
-test("tabs attach is refused unless devAllowSensitive (D17, D18f); session end ungroups it and leaves it open", async ({ h }) => {
+test("tabs attach adopts a user tab only after the user agrees; session end ungroups it and leaves it open", async ({ h }) => {
   await h.trustFixtures();
   const userTab = await h.ctx.newPage();
   // unique URL: earlier specs leave agent-owned tabs on article.html in the shared browser
@@ -41,13 +41,12 @@ test("tabs attach is refused unless devAllowSensitive (D17, D18f); session end u
   const c = await h.mcp({ label: "adopter" });
   const notMine = await h.call(c, "page.snapshot", { tabId });
   expect(notMine.text).toContain("not in this session");
-  const d = await h.withGatesOn(() => h.call(c, "tabs", { action: "attach", tabId }));
-  expect(d.text).toContain("PERMISSION_DENIED");
-  expect(d.text).toContain("devAllowSensitive");
-  const still = await h.call(c, "page.snapshot", { tabId });
-  expect(still.text).toContain("not in this session");
-  // devAllowSensitive is on via trustFixtures: the attach goes through
-  await h.ok(c, "tabs", { action: "attach", tabId });
+  const d = await h.answerPrompt("deny", () => h.call(c, "tabs", { action: "attach", tabId }));
+  expect(d.title).toContain("take over your tab");
+  expect(d.prompt.sensitive.category).toBe("f");
+  expect((d.result as any).text).toContain("PERMISSION_DENIED");
+  // f is never pre-approvable: devAllowSensitive (on via trustFixtures) does not skip it
+  await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "attach", tabId }));
   const s = await h.ok(c, "page.snapshot", { tabId });
   expect(s.json.title).toBe("Article");
   await expect.poll(() => h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).groupId, tabId)).toBeGreaterThan(-1);
@@ -69,8 +68,8 @@ test("tabs attach with no tabId adopts the active tab of the last-focused window
   await userTab.goto(`${h.A}/table.html`);
   await userTab.bringToFront();
   const c = await h.mcp({ label: "adopt-active" });
-  const r = await h.ok(c, "tabs", { action: "attach" });
-  expect(r.text).toContain("table.html");
+  const r = await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "attach" }));
+  expect((r.result as any).text).toContain("table.html");
   await h.ok(c, "session.end");
   await userTab.close();
 });
@@ -149,4 +148,3 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
   const unauth = await fetch(`http://127.0.0.1:${h.port}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   expect(unauth.status).toBe(401);
 });
-

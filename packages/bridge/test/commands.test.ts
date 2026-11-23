@@ -2,8 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { configCommand, helpText, skillCommand, toolOutput, toolsCommand } from "../src/commands";
-import { loadConfig } from "../src/config";
+import { AuditWriter } from "../src/audit";
+import { auditTail, configCommand, formatAuditLine, helpText, skillCommand, tokenCommand, toolOutput, toolsCommand } from "../src/commands";
+import { auditPath, loadConfig } from "../src/config";
 import { tempHome } from "./helpers";
 
 const SKILL = join(__dirname, "../skill/SKILL.md");
@@ -12,6 +13,35 @@ describe("CLI commands", () => {
   it("tools lists a profile; bad profile fails", () => {
     expect(toolsCommand("core").out.at(-1)).toMatch(/^13 tools/);
     expect(toolsCommand("nope").code).toBe(1);
+  });
+  it("token create/list/revoke", () => {
+    tempHome();
+    expect(tokenCommand(["list"], {}).out).toEqual(["No tokens."]);
+    const c = tokenCommand(["create"], { name: "bot", caps: "read", sites: "*.a.com" });
+    expect(c.code).toBe(0);
+    expect(c.out[0]).toMatch(/^tab_/);
+    expect(c.err[0]).toMatch(/caps=read, sites=\*\.a\.com/);
+    expect(loadConfig().tokens[0]).toMatchObject({ name: "bot", cap: "read" });
+    expect(tokenCommand(["create", "legacy"], { cap: "full" }).code).toBe(0);
+    expect(tokenCommand(["list"], {}).out[0]).toMatch(/bot\s+caps=read\s+sites=\*\.a\.com/);
+    expect(tokenCommand(["create"], { name: "x", caps: "root" }).code).toBe(1);
+    expect(tokenCommand(["revoke", "bot"], {}).code).toBe(0);
+    expect(tokenCommand(["revoke", "bot"], {}).err[0]).toMatch(/No token/);
+    expect(tokenCommand([], {}).err[0]).toMatch(/Usage/);
+  });
+  it("audit tail formats records and events", () => {
+    tempHome();
+    expect(auditTail(5).out).toEqual(["No audit log yet."]);
+    const w = new AuditWriter(auditPath());
+    w.record({ tool: "tabs", action: "new", origin: "https://a", params: { url: "x" }, outcome: "ok", errorCode: undefined, resultSummary: { bytes: 1, sha256: "s" } }, { caller: "cc" });
+    w.minimal("act.click", "error", { caller: "cc" }, "NO_EXTENSION");
+    w.event("killed", { by: "user" });
+    const lines = auditTail(2).out;
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/cc\s+error\s+act\.click\s+-\s+NO_EXTENSION/);
+    expect(lines[1]).toMatch(/event killed \{"by":"user"\}/);
+    expect(auditTail(5).out[0]).toMatch(/tabs\(new\)\s+https:\/\/a\s+\{"url":"x"\}/);
+    expect(formatAuditLine("not json")).toBe("not json");
   });
   it("skill install/uninstall/print", () => {
     const home = mkdtempSync(join(tmpdir(), "tabagent-ch-"));
@@ -64,7 +94,7 @@ describe("CLI commands", () => {
     expect(existsSync(join(dir, "s.jpg"))).toBe(true);
     expect(toolOutput({ ok: true, result: { ...shot.result, mime: "image/jpeg" } }, {}, 7).out[0]).toMatch(/\.jpg$/);
   });
-  it("loadConfig/saveConfig preserve unknown top-level keys", async () => {
+  it("loadConfig/saveConfig preserve unknown top-level keys (e.g. auth)", async () => {
     const { saveConfig } = await import("../src/config");
     const h = tempHome();
     writeFileSync(join(h, "config.json"), JSON.stringify({ auth: { sms: { x: 1 } } }));
