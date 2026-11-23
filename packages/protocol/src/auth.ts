@@ -507,6 +507,26 @@ export const AUTH_TOOLS = [
 /** Groups that no profile includes implicitly, not even `full` (DA10). Add them by name: `--profile auth`. */
 export const OPT_IN_GROUPS: readonly string[] = ["auth"];
 
+/**
+ * #37 / #34: which account `auth.code source:"totp"` uses. The account the last successful auth.login
+ * used on this tab and origin (the caller clears it on off-origin navigation, lock and kill), else the
+ * single matching account with a TOTP. More than one → BAD_REQUEST with the masked list; none → NOT_FOUND.
+ */
+export function selectTotpAccount(
+  accounts: readonly AuthAccount[],
+  lastLoginAccountId?: string | null,
+): { account: AuthAccount } | { error: "NOT_FOUND" } | { error: "BAD_REQUEST"; candidates: { id: string; accountMasked: string }[] } {
+  const usable = accounts.filter((a) => a.hasTotp !== false && !a.passkeyOnly && !a.reprompt);
+  if (lastLoginAccountId) {
+    const last = usable.find((a) => a.id === lastLoginAccountId);
+    if (last) return { account: last };
+  }
+  const withTotp = usable.filter((a) => a.hasTotp === true || (a.hasTotp === undefined && a.provider === "1password"));
+  if (withTotp.length === 1) return { account: withTotp[0] };
+  if (withTotp.length === 0) return { error: "NOT_FOUND" };
+  return { error: "BAD_REQUEST", candidates: withTotp.map((a) => ({ id: a.id, accountMasked: a.accountMasked })) };
+}
+
 /** Extra bridge wait for tools that outlive the normal prompt + timeout budget. */
 export function authExtraTimeout(tool: string): number {
   return tool === "auth.handoff" ? AUTH_HANDOFF_TIMEOUT : 0;
