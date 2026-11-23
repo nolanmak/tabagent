@@ -41,7 +41,8 @@ function promptHtml(p: any) {
       : p.sensitive
         ? `${p.sensitive.description} · on ${p.origin}`
         : `on ${p.origin}`;
-  const always = p.kind === "attach" ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : "Always allow on this site"}</button>`;
+  const isAuth = p.sensitive?.category === "g";
+  const always = p.kind === "attach" ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
   const left = Math.max(0, Math.round((p.expires - Date.now()) / 1000));
   return `<li class="prompt-item" data-prompt-id="${esc(p.promptId)}">
     <div class="ptitle">${esc(title)}</div>
@@ -61,6 +62,15 @@ function renderStopped() {
   const tabs: number[] = state.stoppedTabs ?? [];
   $("stoppedBox").hidden = !tabs.length;
   $("stopped").innerHTML = tabs.map((t) => `<li><span>Tab ${t}</span><button data-resume-tab="${t}">Resume</button></li>`).join("");
+}
+
+function renderHandoffs() {
+  const list: any[] = state.handoffs ?? [];
+  $("handoffBox").hidden = !list.length;
+  $("handoffs").innerHTML = list
+    .map((h) => `<li data-handoff-tab="${Number(h.tabId)}"><span><b>${esc(h.sessionLabel)}</b> · ${esc(h.origin)}<br><span class="muted small">${esc(h.reason)}</span></span><span><button data-handoff="cancel" data-tab="${Number(h.tabId)}">Cancel</button> <button data-handoff="done" data-tab="${Number(h.tabId)}" class="primary">Done</button></span></li>`)
+    .join("");
+  window.dispatchEvent(new CustomEvent("tabagent:handoffs", { detail: list }));
 }
 
 function renderSessions() {
@@ -98,7 +108,7 @@ function renderSettings() {
       .map(([o, e]) => {
         const pol = e.policy ?? "ask";
         const pre = CATS.map((c) => `<label class="chip"><input type="checkbox" data-pre="${c}" data-origin="${esc(o)}" ${e.preapproved?.[c] ? "checked" : ""}/>${CAT_LABEL[c]}</label>`).join("");
-        return `<tr><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
+        return `<tr><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}<label class="chip" title="Let agents sign in here with your saved accounts"><input type="checkbox" data-auth data-origin="${esc(o)}" ${e.auth ? "checked" : ""}/>sign-in</label>${(e.authAlways ?? []).length ? `<span class="muted small"> (${(e.authAlways ?? []).length} account${(e.authAlways ?? []).length === 1 ? "" : "s"} always)</span>` : ""}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
       })
       .join("") || `<tr><td colspan="5" class="muted">No site settings yet.</td></tr>`;
   $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
@@ -109,6 +119,7 @@ function render() {
   renderStatus();
   renderPrompts();
   renderStopped();
+  renderHandoffs();
   renderSessions();
   renderFeed();
   renderSettings();
@@ -133,6 +144,10 @@ chrome.runtime.onMessage.addListener((m: any) => {
     case "sessions":
       state.sessions = m.sessions;
       renderSessions();
+      break;
+    case "handoffs":
+      state.handoffs = m.handoffs;
+      renderHandoffs();
       break;
     case "stoppedTabs":
       state.stoppedTabs = m.tabs;
@@ -165,6 +180,10 @@ $("stopped").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.resumeTab) send({ type: "ui.resumeTab", tabId: Number(b.dataset.resumeTab) }).then(refresh);
 });
+$("handoffs").addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest("button");
+  if (b?.dataset.handoff) send({ type: "ui.handoff", tabId: Number(b.dataset.tab), result: b.dataset.handoff }).then(refresh);
+});
 $("sessions").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.end) send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
@@ -187,6 +206,12 @@ $("sites").addEventListener("change", (e) => {
   } else if ("lite" in el.dataset) {
     if ((el as HTMLInputElement).checked) entry.lite = true;
     else delete entry.lite;
+  } else if ("auth" in el.dataset) {
+    if ((el as HTMLInputElement).checked) entry.auth = true;
+    else {
+      delete entry.auth;
+      delete entry.authAlways;
+    }
   } else if (el.dataset.pre) {
     entry.preapproved = { ...(entry.preapproved ?? {}) };
     if ((el as HTMLInputElement).checked) entry.preapproved[el.dataset.pre] = true;

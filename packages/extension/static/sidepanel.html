@@ -34,6 +34,13 @@
   <ul id="prompts" class="prompts"></ul>
 </section>
 
+<section id="handoffBox" class="card attention" hidden>
+  <h2>Your turn</h2>
+  <p class="muted small">An agent handed these tabs to you. Agents cannot use them until you press Done or Cancel.</p>
+  <ul id="handoffs" class="list"></ul>
+  <div id="authMount"></div>
+</section>
+
 <section id="stoppedBox" class="card" hidden>
   <h2>Stopped tabs</h2>
   <p class="muted small">Debugging was cancelled on these tabs. Resume lets agents drive them again.</p>
@@ -78,5 +85,6 @@
   <p class="muted small" id="about"></p>
 </details>
 <script src="sidepanel.js"></script>
+<script src="authpanel.js"></script>
 </body>
 </html>
