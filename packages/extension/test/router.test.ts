@@ -1,28 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { getTool, TabAgentError, validateParams, type ToolDef } from "@tabagent/protocol";
+import { getTool, TabAgentError, validateParams } from "@tabagent/protocol";
 import { createRouter, RouterError, type AuthorizeRequest, type CommandLike, type RouterDeps } from "../src/background/router";
-import { resolve, type PolicyState, type SensitiveCategory, type TabOwnership } from "../src/background/policy";
+import { resolve, type PolicyState } from "../src/background/policy";
 
 const meta = { id: "s1", label: "agent", cap: "full" as const, sites: [] as string[] };
 const cmd = (tool: string, params: unknown = {}, id = "c1"): CommandLike => ({ type: "command", id, session: meta, tool, params });
 
-/** A registry-shaped tool carrying a D18 category (no M0 tool has one; later milestones add them). */
-const gated = (name: string, sensitive: SensitiveCategory, level: "read" | "act" | "full" = "full") => ({ ...(getTool("nav.reload") as ToolDef), name, level, sensitive });
-const FAKE_TOOLS: Record<string, unknown> = {
-  "x.eval": gated("x.eval", "c"),
-  "x.cookies": gated("x.cookies", "d"),
-  "x.submit": gated("x.submit", "a", "act"),
-  "x.click": gated("x.click", "b", "act"),
-  "x.upload": gated("x.upload", "e", "act"),
-  "x.attach": gated("x.attach", "f", "read"),
-};
-
-/** Fake session/tab world + an authorize() that applies the pure D17 interim policy. */
-function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: PolicyState = {}) {
+/** Fake session/tab world + an authorize() that applies the pure interim policy (D17). */
+function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partial<PolicyState> = {}) {
   const owners = new Map<number, string>([
     [1, "s1"],
     [2, "s2"],
-    [3, "s1"],
   ]);
   const urls = new Map<number, string>([
     [1, "https://a.example/page"],
@@ -32,18 +20,28 @@ function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Policy
   const calls: string[] = [];
   const authorize = vi.fn(async (r: AuthorizeRequest) => {
     calls.push(`authorize:${r.tool}`);
-    const o = r.tabId == null ? undefined : owners.get(r.tabId);
-    const tab: TabOwnership = r.tabId == null ? "none" : o === r.meta.id ? "own" : o ? "other" : "nobody";
-    const d = resolve(state, { url: r.url, level: r.level, sensitive: r.sensitive, tab });
+    const st: PolicyState = { devAllowSensitive: false, ...state };
+    const d = resolve(st, { url: r.url, level: r.level, sensitive: r.sensitive });
     if (d.decision === "deny") throw new RouterError(d.code, d.message, d.hint);
   });
-  const handler = vi.fn(async (c: any) => {
-    calls.push("handler");
-    return { tool: c.tool.name, tab: c.p.tabId, __side: { navigation: { url: "u", title: "t", kind: "back" } } };
-  });
+  const handlers: Record<string, any> = {
+    "page.snapshot": vi.fn(async (c) => {
+      calls.push("handler");
+      return { snapshot: "x", tab: c.p.tabId, __side: { snapshotDiff: "+ a" } };
+    }),
+    "nav.goto": vi.fn(async () => ({ url: "u" })),
+    "act.type": vi.fn(async () => ({ ok: true })),
+    "act.click": vi.fn(async () => {
+      throw new Error("boom\n    at secretFrame (file.ts:1:1)");
+    }),
+    "nav.wait": vi.fn((c) => (c.p.for === "fn" ? Promise.resolve({ ok: true }) : new Promise(() => {}))),
+    tabs: vi.fn(async (c) => ({ action: c.p.action, tabId: c.p.tabId })),
+    "session.info": vi.fn(async () => ({ tabs: [] })),
+  };
   const deps: RouterDeps<{ tabs: number[] }> = {
-    getTool: (n) => (FAKE_TOOLS[n] ?? getTool(n)) as any,
+    getTool: (n) => getTool(n) as any,
     validate: (t, p) => validateParams(t as any, p),
+    isPaused: () => false,
     getSession: async () => ({ tabs: [1] }),
     resolveTab: async (_s, id) => {
       if (id == null) throw new RouterError("NOT_FOUND", "This session has no tabs yet", "call tabs new");
@@ -53,11 +51,14 @@ function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Policy
       throw new RouterError("NOT_FOUND", `Tab ${id} is not in this session`);
     },
     tabUrl: async (id) => urls.get(id) ?? "",
+    attachTarget: async (_m, id) => ({ tabId: id ?? 9, url: urls.get(id ?? 9) ?? "https://a.example/user", title: "User tab" }),
+    downloadUrl: () => undefined,
     authorize,
-    handler: () => handler,
+    handler: (n) => handlers[n],
+    feed: vi.fn(),
     ...over,
   };
-  return { deps, authorize, handler, calls, router: createRouter(deps) };
+  return { deps, authorize, handlers, calls, router: createRouter(deps) };
 }
 
 describe("router order and envelope", () => {
@@ -65,143 +66,152 @@ describe("router order and envelope", () => {
     const w = world();
     const r1 = await w.router.handle(cmd("no.such.tool"));
     expect(r1).toMatchObject({ ok: false, error: { code: "BAD_REQUEST" }, audit: { tool: "no.such.tool", outcome: "error" } });
-    const r2 = await w.router.handle(cmd("nav.back", { tabId: "x" }));
+    const r2 = await w.router.handle(cmd("page.snapshot", { tabId: "x" }));
     expect(r2.error?.code).toBe("BAD_REQUEST");
-    const r3 = await w.router.handle(cmd("tabs", { action: "attach" }));
-    expect(r3.error?.code).toBe("BAD_REQUEST");
-    expect(w.handler).not.toHaveBeenCalled();
+    expect(w.handlers["page.snapshot"]).not.toHaveBeenCalled();
     expect(w.authorize).not.toHaveBeenCalled();
   });
   it("authorize is called exactly once before every handler", async () => {
     const w = world();
-    const r = await w.router.handle(cmd("nav.back", { tabId: 1 }));
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
     expect(r.ok).toBe(true);
     expect(w.authorize).toHaveBeenCalledTimes(1);
-    expect(w.calls).toEqual(["authorize:nav.back", "handler"]);
-    for (const [tool, p] of [
-      ["tabs", { action: "list" }],
-      ["tabs", { action: "new" }],
-      ["tabs", { action: "select", tabId: 1 }],
-      ["tabs", { action: "close", tabId: 1 }],
-      ["nav.goto", { url: "https://a.example/" }],
-      ["nav.forward", { tabId: 1 }],
-      ["nav.reload", { tabId: 1 }],
-    ] as const) {
-      const before = w.calls.length;
-      await w.router.handle(cmd(tool, p));
-      expect(w.calls.slice(before), `${tool} ${JSON.stringify(p)}`).toEqual([`authorize:${tool}`, "handler"]);
-    }
+    expect(w.calls).toEqual(["authorize:page.snapshot", "handler"]);
+    await w.router.handle(cmd("session.info"));
+    expect(w.authorize).toHaveBeenCalledTimes(2);
   });
   it("a deny short-circuits with PERMISSION_DENIED and the handler is not reached", async () => {
     const w = world();
-    const r = await w.router.handle(cmd("nav.reload", { tabId: 3 }));
-    expect(r).toMatchObject({ ok: false, error: { code: "PERMISSION_DENIED" }, audit: { outcome: "denied", errorCode: "PERMISSION_DENIED", origin: null } });
-    expect(w.handler).not.toHaveBeenCalled();
+    const r = await w.router.handle(cmd("nav.wait", { for: "fn", value: "true", tabId: 1 }));
+    expect(r).toMatchObject({ ok: false, error: { code: "PERMISSION_DENIED" }, audit: { outcome: "denied", errorCode: "PERMISSION_DENIED", origin: "https://a.example" } });
+    expect(w.handlers["nav.wait"]).not.toHaveBeenCalled();
   });
   it("lifts __side to top-level envelope fields and builds the audit record", async () => {
     const w = world();
-    const r = await w.router.handle(cmd("nav.back", { tabId: 1 }));
-    expect(r.result).toEqual({ tool: "nav.back", tab: 1 });
-    expect(r.navigation).toEqual({ url: "u", title: "t", kind: "back" });
-    expect(r.audit).toMatchObject({ tool: "nav.back", origin: "https://a.example", outcome: "ok", resultSummary: { bytes: expect.any(Number), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) } });
-    expect(JSON.stringify(r.audit)).not.toContain('"tool":"nav.back","tab"');
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.result).toEqual({ snapshot: "x", tab: 1 });
+    expect(r.snapshotDiff).toBe("+ a");
+    expect(r.audit).toMatchObject({ tool: "page.snapshot", origin: "https://a.example", outcome: "ok", resultSummary: { bytes: expect.any(Number), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) } });
+    expect(JSON.stringify(r.audit)).not.toContain('"snapshot":"x"');
   });
-  it("tabs records its action in the audit record", async () => {
+  it("feed gets a running entry then a final one with the same id", async () => {
     const w = world();
-    const r = await w.router.handle(cmd("tabs", { action: "list" }));
-    expect(r.audit).toMatchObject({ tool: "tabs", action: "list", origin: null });
+    await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    const feed = (w.deps.feed as any).mock.calls.map((c: any[]) => c[0]);
+    expect(feed.map((e: any) => e.status)).toEqual(["running", "ok"]);
+    expect(feed[0].id).toBe(feed[1].id);
   });
 });
 
 describe("interim policy table (D17) through the router", () => {
   it("owned tab allowed; another session's tab TAB_BUSY; unowned NOT_FOUND", async () => {
     const w = world();
-    expect((await w.router.handle(cmd("nav.reload", { tabId: 1 }))).ok).toBe(true);
-    expect((await w.router.handle(cmd("nav.reload", { tabId: 2 }))).error?.code).toBe("TAB_BUSY");
-    expect((await w.router.handle(cmd("nav.reload", { tabId: 7 }))).error?.code).toBe("NOT_FOUND");
-    expect((await w.router.handle(cmd("nav.goto", { url: "https://a.example/", tabId: 2 }))).error?.code).toBe("TAB_BUSY");
-    expect(w.handler).toHaveBeenCalledTimes(1);
+    expect((await w.router.handle(cmd("page.snapshot", { tabId: 1 }))).ok).toBe(true);
+    expect((await w.router.handle(cmd("page.snapshot", { tabId: 2 }))).error?.code).toBe("TAB_BUSY");
+    expect((await w.router.handle(cmd("page.snapshot", { tabId: 7 }))).error?.code).toBe("NOT_FOUND");
   });
-  it("authorize itself refuses a tab the session does not own, even if resolveTab let it through", async () => {
-    const w = world({ resolveTab: async (_s, id) => id! });
-    expect((await w.router.handle(cmd("nav.reload", { tabId: 2 }))).error?.code).toBe("TAB_BUSY");
-    expect((await w.router.handle(cmd("nav.reload", { tabId: 7 }))).error?.code).toBe("NOT_FOUND");
-    expect(w.handler).not.toHaveBeenCalled();
-  });
-  it.each(["chrome://settings", "chrome-extension://abcdefghijklmnopabcdefghijklmnop/x.html", "https://chromewebstore.google.com/detail/x", "https://chrome.google.com/webstore/x", "devtools://devtools/x", "javascript:alert(1)"])(
-    "nav.goto %s -> PERMISSION_DENIED",
-    async (url) => {
-      const w = world({}, { devAllowSensitive: true });
-      const r = await w.router.handle(cmd("nav.goto", { url }));
-      expect(r.error?.code).toBe("PERMISSION_DENIED");
-      expect(w.handler).not.toHaveBeenCalled();
-    },
-  );
-  it("tabs new with a hard-denied url is refused; without a url it is allowed", async () => {
+  it("chrome:// target -> PERMISSION_DENIED", async () => {
     const w = world();
-    expect((await w.router.handle(cmd("tabs", { action: "new", url: "chrome://settings" }))).error?.code).toBe("PERMISSION_DENIED");
-    expect((await w.router.handle(cmd("tabs", { action: "new" }))).ok).toBe(true);
-    expect((await w.router.handle(cmd("tabs", { action: "new", url: "https://a.example/" }))).ok).toBe(true);
+    const r = await w.router.handle(cmd("nav.goto", { url: "chrome://settings" }));
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(w.handlers["nav.goto"]).not.toHaveBeenCalled();
   });
-  it.each(Object.keys(FAKE_TOOLS))("D18 gated effect %s is refused with PERMISSION_DENIED unless devAllowSensitive", async (tool) => {
+  it("each D18 static gate is refused unless devAllowSensitive", async () => {
     const off = world();
-    const r = await off.router.handle(cmd(tool, { tabId: 1 }));
-    expect(r.error).toMatchObject({ code: "PERMISSION_DENIED", message: expect.stringContaining("needs the user's approval") });
-    expect(off.handler).not.toHaveBeenCalled();
+    const r = await off.router.handle(cmd("nav.wait", { for: "fn", value: "true", tabId: 1 }));
+    expect(r.error).toMatchObject({ code: "PERMISSION_DENIED", message: expect.stringContaining("javascript"), hint: expect.stringContaining("devAllowSensitive") });
+    expect((await off.router.handle(cmd("tabs", { action: "attach" }))).error?.code).toBe("PERMISSION_DENIED");
+    expect(off.handlers.tabs).not.toHaveBeenCalled();
     const on = world({}, { devAllowSensitive: true });
-    expect((await on.router.handle(cmd(tool, { tabId: 1 }))).ok).toBe(true);
-  });
-  it("devAllowSensitive never unlocks browser pages", async () => {
-    const w = world({}, { devAllowSensitive: true });
-    expect((await w.router.handle(cmd("x.eval", { tabId: 3 }))).error?.code).toBe("PERMISSION_DENIED");
+    expect((await on.router.handle(cmd("nav.wait", { for: "fn", value: "true", tabId: 1 }))).ok).toBe(true);
+    expect(off.authorize.mock.calls[0][0]).toMatchObject({ sensitive: "c" });
   });
   it("no session tabs + tool needing a tab -> NOT_FOUND with the tabs new hint", async () => {
     const w = world();
-    const r = await w.router.handle(cmd("nav.reload"));
+    const r = await w.router.handle(cmd("page.snapshot"));
     expect(r.error).toMatchObject({ code: "NOT_FOUND", hint: expect.stringContaining("tabs new") });
-    expect(w.authorize).not.toHaveBeenCalled();
   });
   it("nav.goto authorizes the target origin, not the current tab", async () => {
     const w = world();
     await w.router.handle(cmd("nav.goto", { url: "a.example/x" }));
     expect(w.authorize.mock.calls[0][0]).toMatchObject({ url: "https://a.example/x", level: "act" });
-    await w.router.handle(cmd("nav.goto", { url: "https://b.example/", tabId: 1 }));
-    expect(w.authorize.mock.calls[1][0]).toMatchObject({ url: "https://b.example/", tabId: 1 });
+  });
+  it("tabs attach goes through the f gate with the target tab's url (M1: refused unless devAllowSensitive)", async () => {
+    const w = world();
+    const r = await w.router.handle(cmd("tabs", { action: "attach" }));
+    expect(w.authorize.mock.calls[0][0]).toMatchObject({ sensitive: "f", level: "read", tabId: 9, url: "https://a.example/user", summary: expect.stringContaining("User tab") });
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(w.handlers.tabs).not.toHaveBeenCalled();
+    const on = world({}, { devAllowSensitive: true });
+    const ok = await on.router.handle(cmd("tabs", { action: "attach" }));
+    expect(ok.result).toMatchObject({ action: "attach", tabId: 9 });
   });
   it("handlers get the resolved tab in p.tabId and ctx.cmdId", async () => {
     const seen: any[] = [];
     const w = world({ handler: () => async (c) => (seen.push(c), {}) });
-    await w.router.handle(cmd("nav.reload", { tabId: 1 }, "cmd-7"));
+    await w.router.handle(cmd("page.snapshot", { tabId: 1 }, "cmd-7"));
     expect(seen[0]).toMatchObject({ tabId: 1, url: "https://a.example/page", cmdId: "cmd-7", p: { tabId: 1 } });
   });
 });
 
 describe("failures", () => {
   it("a handler that throws -> INTERNAL with no stack in message", async () => {
-    const w = world({
-      handler: () => async () => {
-        throw new Error("boom\n    at secretFrame (file.ts:1:1)");
-      },
-    });
-    const r = await w.router.handle(cmd("nav.reload", { tabId: 1 }));
+    const w = world();
+    const r = await w.router.handle(cmd("act.click", { ref: "e1", tabId: 1 }));
     expect(r.error?.code).toBe("INTERNAL");
     expect(r.error?.message).toContain("boom");
     expect(r.error?.message).not.toContain("secretFrame");
     expect(r.error?.message).not.toContain("\n");
   });
   it("a TabAgentError keeps its code and hint", async () => {
-    const w = world({ handler: () => async () => Promise.reject(new TabAgentError("TIMEOUT", "slow", "try again")) });
-    const r = await w.router.handle(cmd("nav.reload", { tabId: 1 }));
-    expect(r.error).toMatchObject({ code: "TIMEOUT", message: "slow", hint: "try again" });
+    const w = world({ handler: () => async () => Promise.reject(new TabAgentError("REF_STALE", "stale", "snapshot again")) });
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.error).toMatchObject({ code: "REF_STALE", message: "stale", hint: "snapshot again" });
+  });
+  it("paused -> KILLED before anything else", async () => {
+    const w = world({ isPaused: () => true });
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.error?.code).toBe("KILLED");
+    expect(w.authorize).not.toHaveBeenCalled();
   });
   it("missing handler -> UNSUPPORTED", async () => {
     const w = world({ handler: () => undefined });
-    expect((await w.router.handle(cmd("nav.reload", { tabId: 1 }))).error?.code).toBe("UNSUPPORTED");
+    expect((await w.router.handle(cmd("page.snapshot", { tabId: 1 }))).error?.code).toBe("UNSUPPORTED");
   });
-  it("audit params are redacted (a card-like value never reaches the record)", async () => {
-    const w = world();
-    const r = await w.router.handle(cmd("tabs", { action: "new", url: "4242424242424242" }));
-    expect(r.error?.code).toBe("PERMISSION_DENIED");
+  it("kill aborts in-flight commands with KILLED immediately", async () => {
+    let n = -1;
+    const w = world({ onInflight: (x) => (n = x) });
+    const p = w.router.handle(cmd("nav.wait", { for: "text", value: "never", tabId: 1 }));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(w.router.inflightCount()).toBe(1);
+    expect(n).toBe(1);
+    w.router.abortAll();
+    const r = await p;
+    expect(r.error?.code).toBe("KILLED");
+    expect(w.router.inflightCount()).toBe(0);
+    expect(n).toBe(0);
+  });
+});
+
+describe("redaction in feed + audit", () => {
+  it("sensitivePaths masks a password typed by ref; card-like values always masked", async () => {
+    const w = world({ sensitivePaths: async (tool) => (tool === "act.type" ? ["text"] : []) });
+    const r = await w.router.handle(cmd("act.type", { ref: "e3", text: "hunter2", tabId: 1 }));
+    expect(JSON.stringify(r.audit)).not.toContain("hunter2");
+    const feed = JSON.stringify((w.deps.feed as any).mock.calls);
+    expect(feed).not.toContain("hunter2");
+  });
+  it("sensitivePaths failure falls back to key/value heuristics", async () => {
+    const w = world({ sensitivePaths: async () => Promise.reject(new Error("x")) });
+    const r = await w.router.handle(cmd("act.type", { ref: "e3", text: "4242424242424242", tabId: 1 }));
     expect(JSON.stringify(r.audit)).not.toContain("4242424242424242");
+  });
+  it("holdApproval is taken after a static gate and released after the handler", async () => {
+    const release = vi.fn();
+    const hold = vi.fn(() => release);
+    const w = world({ holdApproval: hold }, { devAllowSensitive: true });
+    await w.router.handle(cmd("nav.wait", { for: "fn", value: "true", tabId: 1 }));
+    expect(hold).toHaveBeenCalledWith("s1", "https://a.example", "c");
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

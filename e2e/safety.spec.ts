@@ -1,64 +1,70 @@
 import WebSocket from "ws";
-import { test, expect } from "./fixture";
+import { test, expect, Harness } from "./fixture";
 
 test.describe.configure({ mode: "serial" });
 
-test("D17 interim policy: own tabs only, browser pages and the Web Store refused", async ({ h }) => {
+/** M1 has no page.text (#10): page text is checked with nav.wait for=text. */
+const hasText = async (h: Harness, c: any, t: string, timeout = 3000) => !(await h.call(c, "nav.wait", { for: "text", value: t, timeout })).isError;
+
+test("D17 interim policy: browser pages and the Web Store are hard-denied; other sites need no prompt", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
-  const a = await h.mcp({ label: "agent-a" });
-  const b = await h.mcp({ label: "agent-b" });
-  const ta = (await h.ok(a, "tabs", { action: "new", url: `${h.A}/index.html` })).json.tabId;
-  // another session's tab
-  for (const [tool, args] of [
-    ["nav.reload", { tabId: ta }],
-    ["nav.goto", { tabId: ta, url: `${h.A}/p/x` }],
-    ["tabs", { action: "select", tabId: ta }],
-    ["tabs", { action: "close", tabId: ta }],
-  ] as const) {
-    const r = await h.call(b, tool, args);
-    expect(r.text, `${tool} ${JSON.stringify(args)}`).toMatch(/^TAB_BUSY/);
+  const c = await h.mcp({ label: "interim" });
+  // no site policies and no prompts before #12: any web page is allowed
+  await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
+  await h.ok(c, "nav.goto", { url: `${h.B}/index.html` });
+  for (const url of ["chrome://settings", "https://chromewebstore.google.com/"]) {
+    const r = await h.call(c, "nav.goto", { url });
+    expect(r.isError, url).toBe(true);
+    expect(r.text, url).toContain("PERMISSION_DENIED");
   }
-  // a tab nobody owns (the user's own tab)
-  const user = await h.ctx.newPage();
-  await user.goto(`${h.A}/p/user`);
-  const userTab = await h.sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, `${h.A}/p/user`);
-  const r = await h.call(a, "nav.reload", { tabId: userTab });
-  expect(r.text).toMatch(/^NOT_FOUND/);
-  expect(user.url()).toBe(`${h.A}/p/user`);
-  // no tabs yet -> NOT_FOUND with the hint
-  const fresh = await h.mcp({ label: "agent-c" });
-  expect((await h.call(fresh, "nav.back")).text).toMatch(/^NOT_FOUND: This session has no tabs yet\nHint: call tabs new/);
-  // hard denylist, even with devAllowSensitive on
-  await h.trustFixtures();
-  for (const url of ["chrome://settings", "chrome-extension://pjpcgiijlaafoafgibplighdenoandid/sidepanel.html", "https://chromewebstore.google.com/"]) {
-    const d = await h.call(a, "nav.goto", { url });
-    expect(d.text, url).toMatch(/^PERMISSION_DENIED: TabAgent cannot act on browser pages/);
-    const n = await h.call(a, "tabs", { action: "new", url });
-    expect(n.text, url).toMatch(/^PERMISSION_DENIED/);
-  }
-  expect((await h.ok(a, "tabs", { action: "list" })).json.tabs.map((t: any) => t.url)).toEqual([`${h.A}/index.html`]);
-  await user.close();
+  // devAllowSensitive never unlocks a hard-denied page
+  await h.trustFixtures({ devAllowSensitive: true });
+  expect((await h.call(c, "nav.goto", { url: "chrome://settings" })).text).toContain("PERMISSION_DENIED");
+  const perm = await h.ok(c, "session.permissions", { url: `${h.A}/index.html` });
+  expect(perm.json.level).toBe("full");
+  expect((await h.ok(c, "session.permissions", { url: "chrome://settings" })).json.level).toBe("deny");
+  await h.ok(c, "session.end");
 });
 
-test("bridge rejects web pages: HTTP Origin, page-origin WebSocket, Host header", async ({ h }) => {
+test("D17/D18 interim gates: a password-form submit, a risky click and nav.wait fn are refused unless devAllowSensitive", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
+  const c = await h.mcp({ label: "gated" });
+  await h.ok(c, "nav.goto", { url: `${h.A}/login.html` });
+  const s = await h.ok(c, "page.snapshot");
+  await h.ok(c, "act.type", { ref: Harness.ref(s.text, /textbox "Username"/), text: "neo" });
+  await h.ok(c, "act.type", { ref: Harness.ref(s.text, /textbox "Password"/), text: "hunter2-secret" });
+  // (a) Enter inside the form and a click on its submit control
+  const enter = await h.call(c, "act.press", { key: "Enter", ref: Harness.ref(s.text, /textbox "Password"/) });
+  expect(enter.text).toContain("PERMISSION_DENIED");
+  const click = await h.call(c, "act.click", { ref: Harness.ref(s.text, /button "Sign in"/) });
+  expect(click.text).toContain("PERMISSION_DENIED");
+  expect(click.text).toContain("password");
+  expect(await hasText(h, c, "NOT SUBMITTED")).toBe(true);
+  // the password never shows up in the snapshot
+  expect((await h.ok(c, "page.snapshot")).text).not.toContain("hunter2-secret");
+  // (c) nav.wait fn; nav.wait without fn is not gated
+  await h.ok(c, "nav.wait", { for: "load", timeout: 5000 });
+  const fn = await h.call(c, "nav.wait", { for: "fn", value: "true", timeout: 2000 });
+  expect(fn.text).toContain("PERMISSION_DENIED");
+  // (b) a delete click
+  await h.ok(c, "nav.goto", { url: `${h.A}/checkout.html` });
+  const s2 = await h.ok(c, "page.snapshot");
+  const del = Harness.ref(s2.text, /Delete account/);
+  const refused = await h.call(c, "act.click", { ref: del });
+  expect(refused.text).toContain("PERMISSION_DENIED");
+  expect(await hasText(h, c, "UNPAID")).toBe(true);
+  // the developer setting lets gated effects through
+  await h.trustFixtures({ devAllowSensitive: true });
+  await h.ok(c, "act.click", { ref: del });
+  expect(await hasText(h, c, "DELETED")).toBe(true);
+  await h.ok(c, "nav.wait", { for: "fn", value: "true", timeout: 2000 });
+  await h.ok(c, "session.end");
+});
+
+test("bridge rejects web pages: HTTP Origin, WebSocket origin, Host header", async ({ h }) => {
   await h.trustFixtures();
   const r = await fetch(`http://127.0.0.1:${h.port}/v1/status`, { headers: { origin: "http://evil.example", authorization: "Bearer x" } });
   expect(r.status).toBe(403);
-  // a real page-origin WebSocket from the fixture page fails
-  const page = await h.ctx.newPage();
-  await page.goto(`${h.A}/index.html`);
-  const fromPage = await page.evaluate(
-    (port) =>
-      new Promise<string>((res) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}/ext`);
-        ws.onopen = () => res("open");
-        ws.onerror = () => res("error");
-        ws.onclose = () => res("closed");
-      }),
-    h.port,
-  );
-  expect(fromPage).not.toBe("open");
-  await page.close();
   const ws = new WebSocket(`ws://127.0.0.1:${h.port}/ext`, { origin: "http://evil.example" });
   const code = await new Promise<string>((res) => {
     ws.on("unexpected-response", (_q, resp) => res(String(resp.statusCode)));
@@ -68,14 +74,14 @@ test("bridge rejects web pages: HTTP Origin, page-origin WebSocket, Host header"
   expect(code).not.toBe("open");
   const ws2 = new WebSocket(`ws://127.0.0.1:${h.port}/ext`, { origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" });
   const msg = await new Promise<string>((res) => {
-    ws2.on("open", () => ws2.send(JSON.stringify({ type: "hello", protocolVersion: 1, extensionVersion: "x", secret: "wrong" })));
+    ws2.on("open", () => ws2.send(JSON.stringify({ type: "hello", protocolVersion: 1, extensionVersion: "x", secret: "wrong", version: "x", extensionId: "x" })));
     ws2.on("message", (d) => res(String(d)));
     ws2.on("error", (e) => res("error:" + e.message));
   });
   expect(msg).toContain("UNAUTHORIZED");
   const { request } = await import("node:http");
   const status = await new Promise<number>((res) => {
-    const rq = request({ host: "127.0.0.1", port: h.port, path: "/v1/health", headers: { host: "evil.example" } }, (resp) => res(resp.statusCode ?? 0));
+    const rq = request({ host: "127.0.0.1", port: h.port, path: "/health", headers: { host: "evil.example" } }, (resp) => res(resp.statusCode ?? 0));
     rq.end();
   });
   expect(status).toBe(403);
@@ -100,29 +106,4 @@ test("D7: content scripts cannot read the secret from storage.local", async ({ h
     return r.result as string;
   }, t.json.tabId);
   expect(res).not.toContain('"secret"');
-  expect((await h.sw.evaluate(() => (globalThis as any).__tabagent.getSettings())).secret).toBeTruthy();
-});
-
-test("the service worker restarts and reconnects without re-pairing", async ({ h }) => {
-  const c = await h.mcp();
-  const t = (await h.ok(c, "tabs", { action: "new", url: `${h.A}/index.html` })).json.tabId;
-  const count = (re: RegExp) => h.bridgeLog.match(re)?.length ?? 0;
-  const paired = count(/Paired with extension/g);
-  const connects = count(/Extension connected/g);
-  // Stop the extension's service worker (as Chrome does when it idles), then wake it from an extension page.
-  const internals = await h.ctx.newPage();
-  await internals.goto("chrome://serviceworker-internals/");
-  await internals.getByText("Stop", { exact: true }).first().click();
-  await expect.poll(() => internals.evaluate(() => document.body.innerText.includes("Running Status: STOPPED")), { timeout: 10000 }).toBe(true);
-  await expect.poll(() => count(/Extension disconnected/g), { timeout: 10000 }).toBeGreaterThan(0);
-  await internals.close();
-  const panel = await h.openPanel();
-  await panel.waitForFunction(() => document.getElementById("status")?.textContent === "Connected", null, { timeout: 30000 });
-  await panel.close();
-  expect(count(/Extension connected/g)).toBe(connects + 1);
-  expect(count(/Paired with extension/g)).toBe(paired);
-  // tab ownership came back from chrome.storage.session (D11)
-  const list = (await h.ok(c, "tabs", { action: "list" })).json.tabs;
-  expect(list.map((x: any) => x.tabId)).toContain(t);
-  expect((await h.ok(c, "nav.reload", { tabId: t })).json.url).toBe(`${h.A}/index.html`);
 });

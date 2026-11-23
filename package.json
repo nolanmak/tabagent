@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "test": "vitest run --project unit",
     "test:coverage": "vitest run --project unit --coverage",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "tool-budget": "node scripts/tool-budget.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

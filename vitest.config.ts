@@ -1,9 +1,10 @@
 // Root Vitest config (#25).
 //
-// unit - pure modules, no build needed. `npm test` / `npm run test:coverage`.
+// One project:
+//   unit  - pure modules, no build needed. `npm test` / `npm run test:coverage`.
 //
 // Coverage floors are the TDD rules in roadmap #28: protocol 90% lines,
-// bridge 80%, extension *pure modules* 80%. Adapters (chrome.*, sockets)
+// bridge 80%, extension *pure modules* 80%. Adapters (chrome.*, CDP, sockets)
 // are covered by e2e and are not counted.
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
@@ -11,8 +12,16 @@ import { defineConfig } from "vitest/config";
 const root = fileURLToPath(new URL(".", import.meta.url));
 const alias = { "@tabagent/protocol": `${root}packages/protocol/src/index.ts` };
 
-/** Extension modules that take plain data in and return plain data. */
-export const EXTENSION_PURE = ["packages/extension/src/background/{router,policy,authorize,audit,bridgeClient,settingsModel}.ts"];
+/**
+ * Extension modules that take plain data in and return plain data. Anything
+ * placed under a `pure/` directory is counted automatically.
+ */
+export const EXTENSION_PURE = [
+  "packages/extension/src/**/pure/**/*.ts",
+  // DOM gate inputs unit-tested under happy-dom
+  "packages/extension/src/pagelib/forms.ts",
+  "packages/extension/src/background/{snapshot,keys,refs,autowait,router,diff,frames,screenshot-plan,policy,wait}.ts",
+];
 
 export default defineConfig({
   resolve: { alias },
@@ -32,7 +41,7 @@ export default defineConfig({
       reporter: ["text-summary", "text", "json-summary"],
       include: ["packages/protocol/src/**/*.ts", "packages/bridge/src/**/*.ts", ...EXTENSION_PURE],
       // cli.ts is the process entry point; it is exercised by spawning the built
-      // binary (cli.test.ts, e2e), which v8 coverage in this process cannot see.
+      // binary (cli.test, e2e), which v8 coverage in this process cannot see.
       exclude: ["packages/bridge/src/cli.ts", "**/*.d.ts", "**/test/**"],
       thresholds: {
         "packages/protocol/src/**/*.ts": { lines: 90 },

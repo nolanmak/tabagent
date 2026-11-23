@@ -1,0 +1,7 @@
+- main
+  - heading "Behind the modal" level=1
+  - button "Target" [ref=e1]
+  - paragraph
+- dialog "Cookies" [ref=e2]
+  - text "We use cookies"
+  - button "Accept cookies" [ref=e3]

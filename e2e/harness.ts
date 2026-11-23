@@ -1,5 +1,5 @@
-// E2E harness (#22): fixture servers + real bridge process + Chromium with the
-// unpacked extension + real pairing through the pairing screen + MCP stdio client.
+// E2E harness: fixture servers + real bridge process + Chromium with the
+// unpacked extension + real pairing through the side panel + MCP stdio client.
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type BrowserContext, type Page, type Worker } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { DEV_EXTENSION_ID, toMcpName } from "../packages/protocol/src/index";
+import { DEV_EXTENSION_ID, toMcpName, unwrapDeep } from "../packages/protocol/src/index";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -20,6 +20,11 @@ const EXT = join(ROOT, "packages/extension/dist");
 function fixtureServer(host: string): Promise<{ server: Server; origin: string }> {
   const server = createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://x");
+    if (u.pathname === "/api/data.json") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ items: ["alpha", "beta", "gamma"] }));
+      return;
+    }
     if (u.pathname.startsWith("/p/")) {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(`<title>${u.pathname}</title><h1>${u.pathname}</h1>`);
@@ -74,7 +79,6 @@ export class Harness {
     this.B = b.origin;
     this.home = mkdtempSync(join(tmpdir(), "tabagent-e2e-"));
     this.port = await freePort();
-    // Write config up-front so the bridge listens on our free port.
     writeFileSync(join(this.home, "config.json"), JSON.stringify({ port: this.port }));
     this.bridge = spawn(process.execPath, [CLI, "serve"], { env: { ...process.env, TABAGENT_HOME: this.home }, stdio: ["ignore", "pipe", "pipe"] });
     this.pairCode = await new Promise<string>((resolve, reject) => {
@@ -107,7 +111,7 @@ export class Harness {
     if (!this.sw.url().includes(DEV_EXTENSION_ID)) throw new Error(`Unexpected extension id: ${this.sw.url()}`);
     await this.sw.evaluate(async (port) => (globalThis as any).__tabagent.updateSettings({ port }), this.port);
 
-    // Real pairing through the pairing screen.
+    // Real pairing through the side panel UI.
     const panel = await this.openPanel();
     await panel.fill("#pairCode", this.pairCode);
     await panel.click("#pairBtn");
@@ -122,11 +126,25 @@ export class Harness {
   }
 
   /**
-   * D17: the harness turns `devAllowSensitive` on so D18-gated effects run in tests; `extra`
-   * is any other settings patch (tests of the refusal pass devAllowSensitive: false).
+   * Fixture origins need no grant under the D17 interim policy; the D18 gated effects are
+   * let through with `devAllowSensitive` unless `extra` says otherwise.
    */
   async trustFixtures(extra: Record<string, unknown> = {}) {
     await this.sw.evaluate(async (e) => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: true, ...e }), extra);
+  }
+
+  /**
+   * Run `trigger` with devAllowSensitive off, so D18 gated effects are refused (D17 interim),
+   * then restore the previous value.
+   */
+  async withGatesOn<T>(trigger: () => Promise<T>): Promise<T> {
+    const prevDev = await this.sw.evaluate(async () => (await (globalThis as any).__tabagent.getSettings()).devAllowSensitive);
+    await this.sw.evaluate(async () => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: false }));
+    try {
+      return await trigger();
+    } finally {
+      await this.sw.evaluate(async (v) => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: v }), prevDev);
+    }
   }
 
   async mcp(opts: { profile?: string; label?: string } = {}): Promise<Client> {
@@ -146,7 +164,7 @@ export class Harness {
     let json: any = null;
     const first = text.split("\n")[0];
     try {
-      json = JSON.parse(first);
+      json = unwrapDeep(JSON.parse(first));
     } catch {
       /* not json */
     }
@@ -158,6 +176,14 @@ export class Harness {
     const r = await this.call(client, tool, args);
     if (r.isError) throw new Error(`${tool} failed: ${r.text}`);
     return r;
+  }
+
+  /** Find a ref in snapshot text by a line regex. */
+  static ref(snapshot: string, re: RegExp): string {
+    const line = snapshot.split("\n").find((l) => re.test(l));
+    const m = line?.match(/\[ref=([a-z]\d+)\]/);
+    if (!m) throw new Error(`No ref matching ${re} in:\n${snapshot}`);
+    return m[1];
   }
 
   async stop() {

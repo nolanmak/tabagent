@@ -1,0 +1,12 @@
+- banner
+  - navigation
+    - link "Form" [ref=e1]
+    - link "Table" [ref=e2]
+    - link "Modal" [ref=e3]
+- main
+  - heading "TabAgent fixtures" level=1
+  - paragraph "Welcome to the fixture site used by the end-to-end tests."
+  - button "Click me" [ref=e4]
+  - searchbox "Search" [ref=e5] value=""
+- contentinfo
+  - text "Footer text"

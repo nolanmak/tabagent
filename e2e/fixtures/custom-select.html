@@ -1,0 +1,13 @@
+<!doctype html><html><head><title>Custom select</title>
+<style>[role=listbox]{border:1px solid #999;margin:0;padding:0;list-style:none} [role=option]{padding:4px}</style></head><body><main>
+<label id="lbl">Fruit</label>
+<div id="cb" role="combobox" aria-labelledby="lbl" aria-expanded="false" aria-controls="lb" tabindex="0" style="border:1px solid #333;padding:4px;width:200px">Pick one</div>
+<ul id="lb" role="listbox" hidden>
+  <li role="option" id="o1">Mango</li><li role="option" id="o2">Papaya</li><li role="option" id="o3">Guava</li>
+</ul>
+<p id="out"></p>
+<script>
+const cb = document.getElementById('cb'), lb = document.getElementById('lb');
+cb.onclick = () => { lb.hidden = !lb.hidden; cb.setAttribute('aria-expanded', String(!lb.hidden)); };
+lb.onclick = e => { const o = e.target.closest('[role=option]'); if(!o) return; cb.textContent = o.textContent; lb.hidden = true; cb.setAttribute('aria-expanded','false'); document.getElementById('out').textContent = 'chose ' + o.textContent; };
+</script></main></body></html>
