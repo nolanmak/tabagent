@@ -85,6 +85,7 @@ test("M2b: https, page in front, prefill cleared; trusted click + ArrowDown + En
 });
 
 test("M3: two saved accounts; typing the second username via insertText then leaving the field fills that account's password", async () => {
+  test.fail(!process.env.SPIKE_PROBE, "Chrome keeps the account it pre-filled on load (the first one); typing another username does not swap the password");
   sp = await launchSpike();
   await seedPassword(sp.ctx, sp.site, "alice@example.com", PW_A);
   await seedPassword(sp.ctx, sp.site, "bob@example.com", PW_B);
@@ -136,4 +137,21 @@ test("M5: http (not a secure context) page: no fill on load and a trusted click 
   await cdpClick(cdp, page, "#username");
   await page.waitForTimeout(800);
   expect(await pageValues(page)).toEqual({ username: "", password: "" });
+});
+
+test("M6: background tab (another page in front): Chrome still fills on load and a CDP click on submit sends the password", async () => {
+  sp = await launchSpike();
+  await seedPassword(sp.ctx, sp.site, "alice@example.com", PW_A);
+  const front = await sp.ctx.newPage();
+  await front.goto("about:blank");
+  const page = await sp.ctx.newPage();
+  const cdp = await sp.ctx.newCDPSession(page);
+  await front.bringToFront();
+  await page.goto(sp.site + "/login.html");
+  await expect.poll(() => pageValues(page).then((v) => v.username), { timeout: 5000 }).toBe("alice@example.com");
+  expect(await page.evaluate(() => document.visibilityState)).toBe("hidden");
+  expect(await page.evaluate(() => document.getElementById("password")!.matches(":autofill"))).toBe(true);
+  await cdpClick(cdp, page, "#submit");
+  const r = await waitReceived(sp.srv);
+  expect(r?.fields).toEqual({ username: "alice@example.com", password: PW_A });
 });
