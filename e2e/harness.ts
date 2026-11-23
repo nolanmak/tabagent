@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type BrowserContext, type Page, type Worker } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { DEV_EXTENSION_ID, toMcpName } from "../packages/protocol/src/index";
+import { DEV_EXTENSION_ID, toMcpName, unwrapDeep } from "../packages/protocol/src/index";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -175,7 +175,7 @@ export class Harness {
     let json: any = null;
     const first = text.split("\n")[0];
     try {
-      json = JSON.parse(first);
+      json = unwrapDeep(JSON.parse(first));
     } catch {
       /* not json */
     }
