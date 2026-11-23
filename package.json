@@ -2,7 +2,11 @@
   "name": "tabagent-monorepo",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/protocol", "packages/bridge", "packages/extension"],
+  "workspaces": [
+    "packages/protocol",
+    "packages/bridge",
+    "packages/extension"
+  ],
   "scripts": {
     "build": "npm run build -w @tabagent/extension && npm run build -w tabagent",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -11,12 +15,18 @@
     "tool-budget": "node scripts/tool-budget.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.65.1",
     "@types/chrome": "^0.1.0",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.0",
+    "@vitest/coverage-v8": "3.2",
     "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
+    "happy-dom": "^21.0.4",
     "typescript": "^5.9.0",
+    "typescript-eslint": "^8.73.0",
     "vitest": "^3.2.0"
   }
 }
