@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type BrowserContext, type Page, type Worker } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { DEV_EXTENSION_ID, toMcpName } from "../packages/protocol/src/index";
+import { DEV_EXTENSION_ID, toMcpName, unwrapDeep } from "../packages/protocol/src/index";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -132,13 +132,29 @@ export class Harness {
     return p;
   }
 
+  /**
+   * Set site policies. `policies` maps origin -> "read"|"act"|"full"|"deny" (written to the
+   * `sites` settings shape, contract §7); `extra` is any other settings patch.
+   * Legacy `extra.liteSites` (host globs) marks matching fixture origins lite.
+   */
   async setPolicies(policies: Record<string, string>, extra: Record<string, unknown> = {}) {
-    await this.sw.evaluate(async ([p, e]) => (globalThis as any).__tabagent.updateSettings({ policies: p, ...e }), [policies, extra] as const);
+    const { liteSites, sensitiveAllowed: _legacy, sites: extraSites, ...rest } = extra as { liteSites?: string[]; sensitiveAllowed?: unknown; sites?: Record<string, unknown> };
+    const sites: Record<string, Record<string, unknown>> = {};
+    for (const [o, p] of Object.entries(policies)) if (p !== "ask") sites[o] = { policy: p };
+    for (const g of liteSites ?? []) {
+      for (const o of [this.A, this.B]) if (new URL(o).hostname === g) sites[o] = { ...sites[o], lite: true };
+    }
+    for (const [o, e] of Object.entries(extraSites ?? {})) sites[o] = { ...sites[o], ...(e as object) };
+    await this.sw.evaluate(async ([s, e]) => (globalThis as any).__tabagent.updateSettings({ sites: s, liteSites: [], ...e }), [sites, rest] as const);
   }
 
-  /** Grant full access to both fixture origins (most tests). */
+  /**
+   * Grant full access to both fixture origins (most tests). Sensitive gates are bypassed
+   * with `devAllowSensitive` (D17) unless `extra` says otherwise; answerPrompt() re-enables
+   * them for the duration of its trigger.
+   */
   async trustFixtures(extra: Record<string, unknown> = {}) {
-    await this.setPolicies({ [this.A]: "full", [this.B]: "full" }, { sensitiveAllowed: {}, paused: false, ...extra });
+    await this.setPolicies({ [this.A]: "full", [this.B]: "full" }, { paused: false, devAllowSensitive: true, ...extra });
   }
 
   async mcp(opts: { profile?: string; label?: string; token?: string } = {}): Promise<Client> {
@@ -159,7 +175,7 @@ export class Harness {
     let json: any = null;
     const first = text.split("\n")[0];
     try {
-      json = JSON.parse(first);
+      json = unwrapDeep(JSON.parse(first));
     } catch {
       /* not json */
     }
@@ -181,16 +197,48 @@ export class Harness {
     return m[1];
   }
 
-  /** Wait for a permission prompt window and answer it. */
+  /** Pending prompts in the service worker (FIFO). */
+  async pendingPrompts(): Promise<any[]> {
+    return this.sw.evaluate(() => (globalThis as any).__tabagent.pendingPrompts());
+  }
+
+  /**
+   * Run `trigger`, wait for the permission prompt it raises, and answer it through the real
+   * side-panel page buttons (D19: prompts are answered in the side panel, never in the page).
+   * Sensitive gates are switched on (devAllowSensitive=false) while the trigger runs.
+   */
   async answerPrompt(answer: "once" | "always" | "deny", trigger: () => Promise<unknown>) {
-    const pageP = this.ctx.waitForEvent("page", { predicate: (p) => p.url().includes("prompt.html"), timeout: 15000 });
-    const resP = trigger();
-    const page = await pageP;
-    await page.waitForSelector(`#${answer}`);
-    const title = await page.textContent("#title");
-    const reasons = await page.textContent("#reasons");
-    await page.click(`#${answer}`);
-    return { result: await resP, title, reasons };
+    const prevDev = await this.sw.evaluate(async () => (await (globalThis as any).__tabagent.getSettings()).devAllowSensitive);
+    await this.sw.evaluate(async () => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: false }));
+    const before = new Set((await this.pendingPrompts()).map((p) => p.promptId));
+    try {
+      let settled = false;
+      const resP = trigger().finally(() => (settled = true));
+      resP.catch(() => {});
+      let prompt: any = null;
+      const end = Date.now() + 15000;
+      while (!prompt && Date.now() < end) {
+        prompt = (await this.pendingPrompts()).find((p) => !before.has(p.promptId)) ?? null;
+        if (!prompt) {
+          if (settled) throw new Error(`answerPrompt: the call finished without a prompt: ${JSON.stringify(await resP)}`);
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      if (!prompt) throw new Error("answerPrompt: no prompt appeared within 15s");
+      const panel = await this.openPanel();
+      try {
+        const item = panel.locator(`li[data-prompt-id="${prompt.promptId}"]`);
+        await item.waitFor({ timeout: 10000 });
+        const title = await item.locator(".ptitle").textContent();
+        const reasons = await item.locator(".preasons").textContent();
+        await item.locator(`button[data-a="${answer}"]`).click();
+        return { result: await resP, title, reasons, prompt };
+      } finally {
+        await panel.close().catch(() => {});
+      }
+    } finally {
+      await this.sw.evaluate(async (v) => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: v }), prevDev);
+    }
   }
 
   async stop() {

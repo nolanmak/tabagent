@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Catalog</title>
+<script src="bench.js"></script>
+<h1 id="h">Catalog</h1>
+<ul id="items"></ul>
+<nav aria-label="Pagination"><a id="prev" href="#">Previous</a> <span id="pos"></span> <a id="next" href="#">Next</a></nav>
+<script>
+  // 23 items over 3 pages of 10.
+  const ALL = ["Alpha","Beta","Gamma","Delta","Epsilon","Zeta","Eta","Theta","Iota","Kappa","Lambda","Mu","Nu","Xi","Omicron","Pi","Rho","Sigma","Tau","Upsilon","Phi","Chi","Psi"];
+  const q = new URLSearchParams(location.search);
+  const item = q.get("item");
+  if (item) {
+    document.title = `${item} details`;
+    document.getElementById("h").textContent = `${item} details`;
+    document.querySelector("nav").remove();
+    bench.set({ opened: item });
+  } else {
+    const page = Math.max(1, Math.min(3, Number(q.get("page") || 1)));
+    document.getElementById("items").innerHTML = ALL.slice((page - 1) * 10, page * 10)
+      .map((n) => `<li><a href="list.html?item=${encodeURIComponent(n)}">${n}</a></li>`)
+      .join("");
+    document.getElementById("pos").textContent = `Page ${page} of 3`;
+    const prev = document.getElementById("prev");
+    const next = document.getElementById("next");
+    if (page > 1) prev.href = `list.html?page=${page - 1}`; else prev.removeAttribute("href");
+    if (page < 3) next.href = `list.html?page=${page + 1}`; else next.removeAttribute("href");
+  }
+</script>

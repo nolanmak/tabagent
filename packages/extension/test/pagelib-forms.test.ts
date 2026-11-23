@@ -44,7 +44,7 @@ describe("describeFields", () => {
     ]);
   });
   it("several visible forms and no ref -> error listing the forms", () => {
-    load(fixture("login.html"));
+    load(fixture("login-search.html"));
     const r = describeFields(null).value as any;
     expect(r.error).toBe("several forms");
     expect(r.forms.map((f: any) => f.fields)).toEqual([2, 1]);
@@ -73,7 +73,7 @@ describe("describeFields", () => {
 
 describe("gate inputs", () => {
   it("click on a login form's submit control reaches gate (a)", () => {
-    load(fixture("login.html"));
+    load(fixture("login-search.html"));
     const info = clickGateInfo(document.querySelector("#login button")!);
     expect(info).toMatchObject({ role: "button", name: "Sign in", isSubmit: true });
     expect(submitSensitivity(info)).toEqual([{ category: "a", reason: "submits a form with a password field" }]);
@@ -85,14 +85,14 @@ describe("gate inputs", () => {
     expect(submitSensitivity(pay).map((d) => d.category)).toEqual(["a", "b"]);
   });
   it("Enter in the password field reaches gate (a); Enter in search does not", () => {
-    load(fixture("login.html"));
+    load(fixture("login-search.html"));
     (document.getElementById("p") as HTMLInputElement).focus();
     expect(keySensitivity("Enter", keyGateInfo())).toHaveLength(1);
     (document.getElementById("q") as HTMLInputElement).focus();
     expect(keySensitivity("Enter", keyGateInfo())).toEqual([]);
   });
   it("submitInfo + confirmation masks values", () => {
-    load(fixture("login.html"));
+    load(fixture("login-search.html"));
     (document.getElementById("u") as HTMLInputElement).value = "neo";
     (document.getElementById("p") as HTMLInputElement).value = "hunter2";
     const r = submitInfo(document.getElementById("u")).value as any;
@@ -105,7 +105,7 @@ describe("gate inputs", () => {
     expect(c.reasons.join()).not.toContain("hunter2");
   });
   it("submitInfo without ref and several forms lists them", () => {
-    load(fixture("login.html"));
+    load(fixture("login-search.html"));
     expect((submitInfo(null).value as any).error).toBe("several forms");
   });
 });

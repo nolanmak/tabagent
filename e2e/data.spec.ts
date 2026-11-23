@@ -24,7 +24,7 @@ test("form.describe returns a ref for every field, masked sensitive values", asy
   expect(by("Company name").hidden).toBe(true);
   expect(by("Accept terms")).toMatchObject({ type: "checkbox", checked: false });
 
-  await h.ok(c, "nav.goto", { url: `${h.A}/login.html` });
+  await h.ok(c, "nav.goto", { url: `${h.A}/login-search.html` });
   const several = await h.call(c, "form.describe");
   expect(several.isError).toBe(true);
   expect(several.text).toContain("BAD_REQUEST");
@@ -117,7 +117,7 @@ test("legacy form fixture fills by accessible name", async ({ h }) => {
 test("sensitive submits prompt by every path; denying leaves the page unchanged", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/login.html` });
+  await h.ok(c, "nav.goto", { url: `${h.A}/login-search.html` });
   const snap = (await h.ok(c, "page.snapshot")).text;
   const user = Harness.ref(snap, /textbox "Username"/);
   const pass = Harness.ref(snap, /textbox "Password"/);
