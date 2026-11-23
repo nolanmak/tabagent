@@ -112,7 +112,7 @@ describe("legacy hello + version", () => {
   });
   it("mismatch hint names the side to update", () => {
     expect(versionMismatchHint(PROTOCOL_VERSION - 1)).toMatch(/Update the TabAgent extension/);
-    expect(versionMismatchHint(PROTOCOL_VERSION + 1)).toMatch(/Update the tabagent npm package/);
+    expect(versionMismatchHint(PROTOCOL_VERSION + 1)).toMatch(/Update the @nolmak\/tabagent npm package/);
   });
   it("constants", () => {
     expect(DEFAULT_PORT).toBe(47615);

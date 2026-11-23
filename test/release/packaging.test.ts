@@ -16,18 +16,18 @@ const pkg = readJson(join(ROOT, "packages/bridge/package.json"));
 beforeAll(() => {
   requireBuilt(CLI);
   const packDir = tempHome("tabagent-pack-");
-  execFileSync(npm, ["pack", "-w", "tabagent", "--pack-destination", packDir], { cwd: ROOT, stdio: "pipe" });
+  execFileSync(npm, ["pack", "-w", "@nolmak/tabagent", "--pack-destination", packDir], { cwd: ROOT, stdio: "pipe" });
   const tgz = readdirSync(packDir).find((f) => f.endsWith(".tgz"));
   if (!tgz) throw new Error("npm pack produced no tarball");
   project = tempHome("tabagent-install-");
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: "pack-check", private: true, type: "module" }));
   execFileSync(npm, ["install", "--no-audit", "--no-fund", "--ignore-scripts", join(packDir, tgz)], { cwd: project, stdio: "pipe" });
-  bin = join(project, "node_modules", "tabagent", pkg.bin.tabagent);
+  bin = join(project, "node_modules", "@nolmak", "tabagent", pkg.bin.tabagent);
 }, 300_000);
 
 describe("npm package", () => {
   it("tarball ships the CLI, the skill and the built extension", () => {
-    const installed = join(project, "node_modules", "tabagent");
+    const installed = join(project, "node_modules", "@nolmak", "tabagent");
     expect(existsSync(bin)).toBe(true);
     expect(existsSync(join(installed, "skill", "SKILL.md"))).toBe(true);
     expect(existsSync(join(installed, "dist", "extension", "manifest.json"))).toBe(true);

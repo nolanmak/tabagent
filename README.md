@@ -27,7 +27,7 @@ permissions you control.
 1. **Install the bridge** (Node 20+):
 
    ```bash
-   npm i -g tabagent
+   npm i -g @nolmak/tabagent
    tabagent serve            # prints a pairing code
    ```
 
@@ -41,8 +41,8 @@ permissions you control.
 4. **Connect your agent** (more in [examples/](examples)):
 
    ```bash
-   claude mcp add tabagent -- npx -y tabagent mcp
-   codex  mcp add tabagent -- npx -y tabagent mcp
+   claude mcp add tabagent -- npx -y @nolmak/tabagent mcp
+   codex  mcp add tabagent -- npx -y @nolmak/tabagent mcp
    tabagent skill install --claude --codex     # optional usage skill
    ```
 
@@ -52,7 +52,7 @@ permissions you control.
    touches a site, TabAgent asks you in the side panel.
 
 The default `core` profile keeps the tool list small (13 tools). Add more with
-`npx tabagent mcp --profile forms,data` (`forms`, `data`, `dev`, `full`). Shell-only agents can
+`npx -y @nolmak/tabagent mcp --profile forms,data` (`forms`, `data`, `dev`, `full`). Shell-only agents can
 use `tabagent <tool> --json '{…}'`.
 
 ## Docs

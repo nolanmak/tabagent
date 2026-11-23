@@ -58,5 +58,5 @@ and runs `npm publish --dry-run`. Re-run with `dry_run` off to publish. Publishi
 
 - [ ] Tag the commit `vX.Y.Z` and push the tag
 - [ ] GitHub release notes; call out a `PROTOCOL_VERSION` bump ("update both the extension and
-      `npm i -g tabagent`")
-- [ ] Smoke test: `npx tabagent@X.Y.Z --version`, `tabagent serve`, pair the store extension
+      `npm i -g @nolmak/tabagent`")
+- [ ] Smoke test: `npx @nolmak/tabagent@X.Y.Z --version`, `tabagent serve`, pair the store extension

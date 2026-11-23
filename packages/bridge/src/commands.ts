@@ -154,8 +154,8 @@ Usage:
   tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw] [--out file.png]
 
 Examples:
-  claude mcp add tabagent -- npx tabagent mcp
-  codex mcp add tabagent -- npx tabagent mcp
+  claude mcp add tabagent -- npx -y @nolmak/tabagent mcp
+  codex mcp add tabagent -- npx -y @nolmak/tabagent mcp
   tabagent nav.goto --json '{"url":"https://example.com"}'
   tabagent page.snapshot
   tabagent act.click --ref e7
