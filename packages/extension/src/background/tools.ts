@@ -1,5 +1,6 @@
 // Tool handlers. One per registry entry in @tabagent/protocol. Driver-backed
-// handlers (page.snapshot/screenshot/find, nav.*, act.*) live in ./handlers;
+// handlers (page.snapshot/screenshot/find, nav.*, act.*) live in ./handlers,
+// tabs + session.* in ./sessionTools;
 // shared tab plumbing (onTab, act, afterAction) lives in ./tabctx.
 import { originOf, TabAgentError } from "@tabagent/protocol";
 import { sleep } from "./cdp";
@@ -8,10 +9,9 @@ import { getDownload, sessionDownloads, waitDownload } from "./downloads";
 import { actHandlers, doCheck, doSelect } from "./handlers/act";
 import { navHandlers } from "./handlers/nav";
 import { pageHandlers } from "./handlers/page";
-import { effectivePolicy, requireSensitive, requireSite } from "./permissions";
-import { addTab, endSession, newTab, ownerOf, resolveTab } from "./sessions";
-import { getSettings } from "./settings";
-import { act, onTab, tabUrl, titleOf, type Ctx } from "./tabctx";
+import { requireSensitive, requireSite } from "./permissions";
+import { resolveTab } from "./sessions";
+import { act, onTab, tabUrl, type Ctx } from "./tabctx";
 
 export type { Ctx } from "./tabctx";
 export { act, afterAction, onTab } from "./tabctx";
@@ -47,57 +47,6 @@ export const handlers: Record<string, Handler> = {
   ...pageHandlers,
   ...navHandlers,
   ...actHandlers,
-  async tabs(c) {
-    const { action, tabId, url } = c.p;
-    switch (action) {
-      case "list": {
-        const tabs = [];
-        for (const id of c.s.tabIds) {
-          try {
-            const t = await chrome.tabs.get(id);
-            tabs.push({ tabId: id, url: t.url, title: t.title, active: id === c.s.active });
-          } catch {
-            /* gone */
-          }
-        }
-        return { tabs };
-      }
-      case "new": {
-        if (url) await requireSite(c.meta, url, "read", "tabs", `open ${url}`);
-        const t = await newTab(c.s, "about:blank");
-        if (url) {
-          const drv = await driverFor(t.id!, url);
-          const r = await drv.navigate(url, "load", 30000);
-          return { tabId: t.id, ...r, title: await titleOf(t.id!) };
-        }
-        return { tabId: t.id, url: "about:blank" };
-      }
-      case "select": {
-        const id = await resolveTab(c.s, tabId);
-        // D10: only the session's active tab changes; TabAgent never brings a tab to the front.
-        c.s.active = id;
-        return { tabId: id, url: await tabUrl(id), title: await titleOf(id) };
-      }
-      case "close": {
-        const id = await resolveTab(c.s, tabId);
-        await chrome.tabs.remove(id);
-        return { closed: id };
-      }
-      case "attach": {
-        if (tabId == null) throw new TabAgentError("BAD_REQUEST", "tabs action=attach needs tabId", "Ask the user which tab, or list them with chrome tab ids.");
-        const o = ownerOf(tabId);
-        if (o === c.meta.id) return { tabId, attached: true };
-        if (o) throw new TabAgentError("TAB_BUSY", `Tab ${tabId} belongs to another agent session`);
-        const url = await tabUrl(tabId);
-        const title = await titleOf(tabId);
-        await requireSensitive(c.meta, url, "tabs", `take over your tab "${title.slice(0, 60)}"`, ["Adopting a tab you opened gives the agent your page and its sign-ins"], "attach");
-        await addTab(c.s, tabId);
-        return { tabId, url, title, attached: true };
-      }
-    }
-    throw new TabAgentError("BAD_REQUEST", `Unknown tabs action ${action}`);
-  },
-
   async "page.text"(c) {
     return onTab(c, "read", async (t) => t.drv.call("text", [], c.p.ref ? { ref: c.p.ref } : {}));
   },
@@ -388,32 +337,4 @@ export const handlers: Record<string, Handler> = {
     return { __bridgeRead: { path: d.filename, mime: d.mime, maxBytes: c.p.maxBytes ?? 1_000_000 }, id: d.id, filename: d.filename, mime: d.mime, bytes: d.bytes };
   },
 
-  async "session.info"(c) {
-    const tabs = [];
-    for (const id of c.s.tabIds) {
-      try {
-        const t = await chrome.tabs.get(id);
-        const drv = await driverFor(id, t.url ?? "");
-        tabs.push({ tabId: id, url: t.url, title: t.title, mode: drv.kind, active: id === c.s.active });
-      } catch {
-        /* gone */
-      }
-    }
-    const s = await getSettings();
-    return { id: c.meta.id, label: c.meta.label, cap: c.meta.cap, sites: c.meta.sites, tabs, paused: s.paused, groupId: c.s.groupId };
-  },
-  async "session.permissions"(c) {
-    let url = c.p.url as string | undefined;
-    if (!url) {
-      const id = await resolveTab(c.s, undefined).catch(() => null);
-      url = id != null ? await tabUrl(id) : "about:blank";
-    }
-    const e = await effectivePolicy(url);
-    const s = await getSettings();
-    return { url, origin: e.origin, policy: e.policy, source: e.source, sensitivePreapproved: !!(e.origin && s.sensitiveAllowed[e.origin]), tokenCap: c.meta.cap, tokenSites: c.meta.sites };
-  },
-  async "session.end"(c) {
-    await endSession(c.meta.id);
-    return { ended: true };
-  },
 };

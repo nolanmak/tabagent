@@ -14,7 +14,7 @@
 
 <section id="pairBox" class="card" hidden>
   <h2>Pair with the bridge</h2>
-  <p class="muted">Run <code>tabagent serve</code> (or <code>npx tabagent serve</code>) and enter the pairing code it prints.</p>
+  <p class="muted">Run <code>tabagent serve</code> (or <code>npx tabagent serve</code>) and enter the pairing code it prints (<code>tabagent status</code> shows it again).</p>
   <form id="pairForm">
     <input id="pairCode" placeholder="Pairing code (e.g. 7KQ-4MX)" autocomplete="off" aria-label="Pairing code" />
     <input id="pairPort" type="number" placeholder="Port" aria-label="Bridge port" />
@@ -25,13 +25,26 @@
 
 <section class="card kill">
   <button id="killBtn" class="danger" title="Alt+Shift+K">■ Stop all agents</button>
-  <button id="resumeBtn" hidden>▶ Resume</button>
-  <span class="muted small">Shortcut: Alt+Shift+K</span>
+  <button id="resumeBtn" class="primary" hidden>▶ Resume</button>
+  <span class="muted small" id="killNote">Shortcut: Alt+Shift+K</span>
 </section>
 
-<section id="promptsBox" class="card" hidden>
+<section id="promptsBox" class="card attention" hidden>
   <h2>Waiting for you</h2>
-  <ul id="prompts" class="list"></ul>
+  <ul id="prompts" class="prompts"></ul>
+</section>
+
+<section id="handoffBox" class="card attention" hidden>
+  <h2>Your turn</h2>
+  <p class="muted small">An agent handed these tabs to you. Agents cannot use them until you press Done or Cancel.</p>
+  <ul id="handoffs" class="list"></ul>
+  <div id="authMount"></div>
+</section>
+
+<section id="stoppedBox" class="card" hidden>
+  <h2>Stopped tabs</h2>
+  <p class="muted small">Debugging was cancelled on these tabs. Resume lets agents drive them again.</p>
+  <ul id="stopped" class="list"></ul>
 </section>
 
 <section class="card">
@@ -46,30 +59,32 @@
 
 <details class="card" id="settingsBox">
   <summary><h2>Settings</h2></summary>
-  <label class="row">Unknown sites
-    <select id="defaultPolicy">
-      <option value="ask">Ask</option><option value="read">Read</option><option value="act">Act</option><option value="full">Full</option><option value="deny">Deny</option>
-    </select>
-  </label>
-  <label class="row"><input type="checkbox" id="showOverlay" /> Show on-page activity border</label>
-  <label class="row"><input type="checkbox" id="forceLite" /> Lite mode everywhere (no debugger)</label>
+  <h3>Sites</h3>
+  <p class="muted small">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site.</p>
+  <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th>Lite</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
+  <form id="addSite" class="row">
+    <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
+    <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option></select>
+    <button type="submit">Add</button>
+  </form>
+  <h3>Denylist</h3>
+  <p class="muted small">Host globs, one per line. Browser pages and the Web Store are always blocked.</p>
+  <textarea id="denylist" rows="5"></textarea>
+  <div class="row"><button id="saveDenylist">Save denylist</button></div>
+  <h3>Behaviour</h3>
   <label class="row">When a session ends
     <select id="onSessionEnd"><option value="collapse">Collapse its tab group</option><option value="keep">Keep tabs</option><option value="close">Close its tabs</option></select>
   </label>
-  <h3>Site policies</h3>
-  <table class="policies"><tbody id="policies"></tbody></table>
-  <form id="addPolicy" class="row">
-    <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
-    <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option><option>ask</option></select>
-    <button type="submit">Add</button>
-  </form>
-  <h3>Lite-mode sites</h3>
-  <textarea id="liteSites" rows="2" placeholder="*.example.com, one per line"></textarea>
-  <h3>Denylist</h3>
-  <textarea id="denylist" rows="4"></textarea>
-  <div class="row"><button id="saveLists">Save lists</button> <button id="unpair" class="link">Unpair bridge</button></div>
+  <label class="row">Leave-page dialogs
+    <select id="beforeUnload"><option value="accept">Leave the page</option><option value="dismiss">Stay on the page</option><option value="ask-agent">Let the agent decide</option></select>
+  </label>
+  <label class="row"><input type="checkbox" id="showOverlay" /> Show the on-page activity border</label>
+  <label class="row"><input type="checkbox" id="forceLite" /> Lite mode everywhere (no debugger)</label>
+  <label class="row"><input type="checkbox" id="devAllowSensitive" /> Developer: skip sensitive-action confirmations</label>
+  <div class="row"><button id="unpair" class="link">Unpair bridge</button></div>
   <p class="muted small" id="about"></p>
 </details>
 <script src="sidepanel.js"></script>
+<script src="authpanel.js"></script>
 </body>
 </html>

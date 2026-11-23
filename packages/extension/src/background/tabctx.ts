@@ -111,11 +111,9 @@ export async function onTab<T>(c: Ctx, level: Level | null, fn: (t: TabCtx) => P
   return opts.lock === false ? run() : withTabLock(tabId, run);
 }
 
-/** D18 dynamic gate; adapts to both permission-engine signatures. */
+/** D18 dynamic gate (agent B's permission engine). */
 export async function sensitiveGate(c: Ctx, url: string, category: "a" | "b" | "c" | "d" | "e" | "f", summary: string, reasons: string[]) {
-  const rs = requireSensitive as unknown as (...a: unknown[]) => Promise<void>;
-  if (rs.length >= 6) return rs(c.meta, url, category, c.tool.name, summary, reasons);
-  return rs(c.meta, url, c.tool.name, summary, reasons);
+  return requireSensitive(c.meta, url, category as never, c.tool.name, summary, reasons);
 }
 
 function stripHash(u: string) {

@@ -13,7 +13,7 @@ const fixtures = join(here, "../../../e2e/fixtures");
 const out = join(here, "fixtures/ax");
 mkdirSync(out, { recursive: true });
 
-export const PAGES = ["index", "form", "table", "article", "modal", "checkout", "custom-select", "drag", "login", "delay", "shadow"];
+export const PAGES = ["index", "form", "table", "article", "modal", "checkout", "custom-select", "drag", "masked", "delay", "shadow"];
 
 const server = createServer((req, res) => {
   const p = new URL(req.url, "http://x").pathname;

@@ -27,6 +27,7 @@ type AnyDriver = InstanceType<typeof CdpDriver> | InstanceType<typeof LiteDriver
 // layout stubs for happy-dom (no layout engine)
 // ---------------------------------------------------------------------------
 let coverer: Element | null = null;
+let lastEl: Element | null = null;
 function stubLayout() {
   const rect = (el: Element) => {
     const hidden = (el as HTMLElement).style?.display === "none" || el.closest("[hidden]");
@@ -36,10 +37,12 @@ function stubLayout() {
     return rect(this);
   };
   Element.prototype.getClientRects = function () {
+    lastEl = this;
     const r = rect(this);
     return (r.width ? [r] : []) as unknown as DOMRectList;
   };
-  (document as any).elementFromPoint = () => coverer ?? (globalThis as any).__target ?? document.body;
+  (document as any).elementFromPoint = () => coverer ?? lastEl ?? document.body;
+  Object.defineProperty(HTMLElement.prototype, "innerText", { get() { return this.textContent ?? ""; }, configurable: true });
   (globalThis as any).requestAnimationFrame = (f: () => void) => setTimeout(f, 0);
 }
 
@@ -245,7 +248,7 @@ describe("lite driver specifics", () => {
   });
 
   it("masks password values and fills through the native setter", async () => {
-    loadHtml("login");
+    loadHtml("masked");
     (document.getElementById("pw") as HTMLInputElement).value = "hunter2";
     const drv = new LiteDriver(7, new RefTable(memoryStore()), liteEnv() as any);
     const s = await drv.snapshot({});
@@ -270,7 +273,7 @@ describe("lite DOM walker vs CDP goldens (interactive nodes)", () => {
       .filter((l) => l.includes("[ref="))
       .map((l) => l.trim().replace(/ \[ref=e\d+\].*$/, ""))
       .sort();
-  for (const page of ["index", "login", "checkout", "modal", "drag", "shadow"]) {
+  for (const page of ["index", "masked", "checkout", "modal", "drag", "shadow"]) {
     it(page, async () => {
       loadHtml(page);
       const drv = new LiteDriver(7, new RefTable(memoryStore()), liteEnv() as any);

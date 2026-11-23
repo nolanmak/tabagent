@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8" />
+<script src="bench.js"></script>
+<form id="f">
+  <label>Message <textarea name="message"></textarea></label>
+  <button type="submit">Send message</button>
+</form>
+<p id="msg" role="status"></p>
+<script>
+  document.getElementById("f").addEventListener("submit", (e) => {
+    e.preventDefault();
+    bench.set({ support: bench.formData(e.target) });
+    document.getElementById("msg").textContent = "Sent";
+  });
+</script>

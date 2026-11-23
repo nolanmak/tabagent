@@ -62,10 +62,12 @@ export function isPageField(s: z.ZodType): boolean {
   return (s.meta() as { pageContent?: boolean } | undefined)?.pageContent === true;
 }
 
-const tabId = z.number().int().optional().describe("Tab id; default: the session's active tab");
-const ref = z.string().describe("Element ref from page.snapshot, e.g. e12");
-const actTimeout = z.number().int().positive().max(TIMEOUTS.max).optional().describe(`ms, default ${TIMEOUTS.action}`);
-const navTimeout = z.number().int().positive().max(TIMEOUTS.max).optional().describe(`ms, default ${TIMEOUTS.navigation}`);
+/** Integer without zod's ±2^53 bounds, which bloat the MCP tools/list JSON (#30 budget). */
+const zint = () => z.number().refine(Number.isInteger, { message: "Expected an integer" });
+const tabId = zint().optional().describe("Default: active tab");
+const ref = z.string().describe("Element ref, e.g. e12");
+const actTimeout = zint().positive().max(TIMEOUTS.max).optional().describe(`ms, default ${TIMEOUTS.action}`);
+const navTimeout = zint().positive().max(TIMEOUTS.max).optional().describe(`ms, default ${TIMEOUTS.navigation}`);
 const loose = <T extends z.ZodRawShape>(shape: T) => z.looseObject(shape);
 const empty = loose({});
 const urlTitle = { url: page(z.string()).optional(), title: page(z.string()).optional() };
@@ -187,7 +189,7 @@ export const TOOLS = [
       tabId,
       mode: z.enum(["interactive", "full"]).optional(),
       root: ref.optional(),
-      maxTokens: z.number().int().positive().optional(),
+      maxTokens: zint().positive().optional(),
       diff: z.boolean().optional(),
     }),
     result: loose({
@@ -215,7 +217,7 @@ export const TOOLS = [
       target: z.enum(["viewport", "full", "ref"]).optional().describe("default viewport"),
       ref: ref.optional(),
       format: z.enum(["png", "jpeg"]).optional(),
-      quality: z.number().int().min(1).max(100).optional(),
+      quality: zint().min(1).max(100).optional(),
       marks: z.boolean().optional(),
     }),
     result: loose({ mime: z.string(), dataBase64: z.string(), width: z.number(), height: z.number(), note: z.string().optional() }),
@@ -241,7 +243,7 @@ export const TOOLS = [
     name: "page.markdown",
     group: "page",
     description: "Main readable content as Markdown.",
-    params: z.object({ tabId, maxChars: z.number().int().positive().optional() }),
+    params: z.object({ tabId, maxChars: zint().positive().optional() }),
     result: loose({ markdown: page(z.string()), title: page(z.string()).optional() }),
     level: "read",
     pageContent: ["markdown", "title"],
@@ -277,7 +279,7 @@ export const TOOLS = [
       ref,
       tabId,
       button: z.enum(["left", "right", "middle"]).optional(),
-      clickCount: z.number().int().min(1).max(3).optional(),
+      clickCount: zint().min(1).max(3).optional(),
       modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).optional(),
       timeout: actTimeout,
     }),
@@ -409,7 +411,7 @@ export const TOOLS = [
     group: "act",
     description: "Set files on a file input. Paths must be inside the bridge's upload dirs (default ~/.tabagent/uploads). Asks the user.",
     params: z.object({ ref, paths: z.array(z.string()).min(1), tabId, timeout: actTimeout }),
-    result: loose({ files: z.array(loose({ name: z.string(), size: z.number() })).optional() }),
+    result: loose({ files: z.array(loose({ name: z.string(), size: z.number().optional() })).optional() }),
     level: "act",
     sensitive: "e",
     pageContent: [],
@@ -440,9 +442,9 @@ export const TOOLS = [
       ref: ref.optional().describe("Limit to this form/container"),
       timeout: actTimeout.describe(`ms per field, default ${TIMEOUTS.action}`),
     }),
-    result: loose({ filled: z.unknown().optional(), failed: z.unknown().optional() }),
+    result: loose({ filled: z.unknown().optional(), failed: z.array(loose({ key: z.string(), code: z.string(), message: page(z.string()) })).optional() }),
     level: "act",
-    pageContent: [],
+    pageContent: ["failed[].message"],
     profiles: ["core"],
     lite: "supported",
     handledBy: "extension",
@@ -467,7 +469,7 @@ export const TOOLS = [
     params: z.object({
       tabId,
       ref: ref.optional(),
-      index: z.number().int().min(0).optional(),
+      index: zint().min(0).optional(),
       format: z.enum(["json", "csv"]).optional(),
     }),
     result: loose({ headers: page(z.array(z.string())).optional(), rows: page(z.array(z.unknown())).optional(), csv: page(z.string()).optional() }),
@@ -481,7 +483,7 @@ export const TOOLS = [
     name: "extract.links",
     group: "extract",
     description: "All links (text, href), optionally filtered by substring or /regex/ on text or href.",
-    params: z.object({ tabId, root: ref.optional(), filter: z.string().optional(), limit: z.number().int().positive().optional() }),
+    params: z.object({ tabId, root: ref.optional(), filter: z.string().optional(), limit: zint().positive().optional() }),
     result: loose({ links: page(z.array(z.unknown())), count: z.number().optional() }),
     level: "read",
     pageContent: ["links"],
@@ -499,9 +501,9 @@ export const TOOLS = [
       selectors: z.object({ item: z.string().optional(), fields: z.record(z.string(), z.string()) }).optional(),
       tabId,
     }),
-    result: loose({ data: page(z.unknown()), selectors: z.unknown().optional() }),
+    result: loose({ data: page(z.unknown()), selectors: page(z.unknown()).optional() }),
     level: "read",
-    pageContent: ["data"],
+    pageContent: ["data", "selectors"],
     profiles: ["data"],
     lite: "supported",
     handledBy: "extension",
@@ -513,7 +515,7 @@ export const TOOLS = [
     params: z.object({
       extractor: z.enum(["table", "links", "schema"]),
       next: z.string().optional(),
-      maxPages: z.number().int().min(1).max(50).optional(),
+      maxPages: zint().min(1).max(50).optional(),
       schema: z.record(z.string(), z.any()).optional(),
       selectors: z.object({ item: z.string().optional(), fields: z.record(z.string(), z.string()) }).optional(),
       timeout: actTimeout.describe(`ms per page, default ${TIMEOUTS.action}`),
@@ -525,9 +527,11 @@ export const TOOLS = [
       rows: page(z.array(z.unknown())).optional(),
       links: page(z.array(z.unknown())).optional(),
       data: page(z.unknown()).optional(),
+      urls: page(z.array(z.string())).optional(),
+      error: loose({ code: z.string(), message: page(z.string()) }).optional(),
     }),
     level: "read",
-    pageContent: ["rows", "links", "data", "headers"],
+    pageContent: ["rows", "links", "data", "headers", "urls", "error.message"],
     profiles: ["data"],
     lite: "supported",
     handledBy: "extension",
@@ -563,7 +567,7 @@ export const TOOLS = [
     name: "console.list",
     group: "dev",
     description: "Recent console messages and errors for the tab.",
-    params: z.object({ tabId, level: z.string().optional(), limit: z.number().int().positive().optional() }),
+    params: z.object({ tabId, level: z.string().optional(), limit: zint().positive().optional() }),
     result: loose({ messages: page(z.array(z.unknown())) }),
     level: "read",
     pageContent: ["messages"],
@@ -579,9 +583,9 @@ export const TOOLS = [
       tabId,
       url: z.string().optional(),
       method: z.string().optional(),
-      status: z.number().int().optional(),
+      status: zint().optional(),
       type: z.string().optional(),
-      limit: z.number().int().positive().optional(),
+      limit: zint().positive().optional(),
     }),
     result: loose({ requests: page(z.array(z.unknown())) }),
     level: "read",
@@ -607,7 +611,7 @@ export const TOOLS = [
     name: "network.waitFor",
     group: "dev",
     description: "Wait for a request completing after this call that matches url (substring or /regex/), method, status.",
-    params: z.object({ url: z.string().optional(), method: z.string().optional(), status: z.number().int().optional(), tabId, timeout: actTimeout }),
+    params: z.object({ url: z.string().optional(), method: z.string().optional(), status: zint().optional(), tabId, timeout: actTimeout }),
     result: loose({ request: page(z.unknown()).optional(), url: page(z.string()).optional() }),
     level: "read",
     pageContent: ["request", "url"],
@@ -658,7 +662,7 @@ export const TOOLS = [
     name: "downloads.wait",
     group: "files",
     description: "Wait for the next (or a given) download of this session to complete.",
-    params: z.object({ id: z.number().int().optional(), timeout: navTimeout }),
+    params: z.object({ id: zint().optional(), timeout: navTimeout }),
     result: loose({ id: z.number(), filename: page(z.string()), url: page(z.string()).optional(), state: z.string() }),
     level: "none",
     pageContent: ["filename", "url"],
@@ -670,7 +674,7 @@ export const TOOLS = [
     name: "downloads.read",
     group: "files",
     description: "Read a completed download of this session (UTF-8 text or base64; max 5 MB). Asks the user.",
-    params: z.object({ id: z.number().int() }),
+    params: z.object({ id: zint() }),
     result: loose({
       id: z.number(),
       filename: page(z.string()),

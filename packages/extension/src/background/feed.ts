@@ -1,33 +1,14 @@
-// Live activity feed for the side panel + UI state broadcasts.
+// Live activity feed for the side panel (#14). Entries are audit records (D20),
+// already redacted by the router; nothing else is shown.
+import { feedReducer, type FeedEntry } from "../ui/reducers";
 
-export interface FeedEntry {
-  id: number;
-  ts: number;
-  session: string;
-  label: string;
-  tool: string;
-  summary: string;
-  status: "running" | "ok" | "error" | "denied";
-  ms?: number;
-  error?: string;
-  url?: string;
-}
+export type { FeedEntry };
 
-const MAX = 200;
-const entries: FeedEntry[] = [];
-let n = 0;
+let entries: FeedEntry[] = [];
 
-export function feedStart(e: Omit<FeedEntry, "id" | "ts" | "status">): FeedEntry {
-  const entry: FeedEntry = { ...e, id: ++n, ts: Date.now(), status: "running" };
-  entries.push(entry);
-  if (entries.length > MAX) entries.shift();
-  broadcast({ type: "feed", entry });
-  return entry;
-}
-
-export function feedEnd(entry: FeedEntry, patch: Partial<FeedEntry>) {
-  Object.assign(entry, patch, { ms: Date.now() - entry.ts });
-  broadcast({ type: "feed", entry });
+export function feedPush(e: FeedEntry) {
+  entries = feedReducer(entries, e);
+  broadcast({ type: "feed", entry: e });
 }
 
 export function feedAll(): FeedEntry[] {
@@ -35,20 +16,11 @@ export function feedAll(): FeedEntry[] {
 }
 
 export function broadcast(msg: unknown) {
-  chrome.runtime.sendMessage(msg).catch(() => {
-    /* no UI open */
-  });
-}
-
-export function summarize(params: Record<string, unknown>): string {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined) continue;
-    let s = typeof v === "string" ? v : JSON.stringify(v);
-    if (/pass|secret|token|card|cvv|ssn/i.test(k)) s = "•••";
-    if (k === "fields" && v && typeof v === "object") s = Object.keys(v).join(", ");
-    if (s.length > 60) s = s.slice(0, 57) + "…";
-    parts.push(`${k}=${s}`);
+  try {
+    chrome.runtime.sendMessage(msg).catch(() => {
+      /* no UI open */
+    });
+  } catch {
+    /* no runtime (tests) */
   }
-  return parts.join(" ");
 }

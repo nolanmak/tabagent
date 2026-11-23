@@ -47,7 +47,7 @@ function* walk(root: Node): Generator<El> {
       if (n !== root) yield n;
       if (n.shadowRoot) kids.push(...Array.from(n.shadowRoot.children));
     }
-    if (n instanceof Element || n instanceof Document || n instanceof DocumentFragment) {
+    if (n instanceof Element || n.nodeType === 9 || n instanceof DocumentFragment) {
       kids.push(...Array.from((n as ParentNode).children));
     }
     for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);

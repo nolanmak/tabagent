@@ -116,7 +116,7 @@ test("page.text / page.markdown", async ({ h }) => {
 test("snapshot goldens, masking, budgets, root, REF_STALE after navigation and across tabs", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
-  for (const page of ["index", "form", "login", "modal", "checkout"]) {
+  for (const page of ["index", "form", "masked", "modal", "checkout"]) {
     await h.ok(c, "nav.goto", { url: `${h.A}/${page}.html` });
     const s = view(await h.ok(c, "page.snapshot")).snap;
     const golden = readFileSync(join(GOLDENS, `${page}.interactive.txt`), "utf8").trimEnd();
@@ -124,7 +124,7 @@ test("snapshot goldens, masking, budgets, root, REF_STALE after navigation and a
     expect(tokens(s)).toBeLessThanOrEqual(1500);
   }
   // D18 masking
-  await h.ok(c, "nav.goto", { url: `${h.A}/login.html` });
+  await h.ok(c, "nav.goto", { url: `${h.A}/masked.html` });
   const login = view(await h.ok(c, "page.snapshot")).snap;
   expect(login).toMatch(/textbox "Password" \[ref=e\d+\] value="••••"/);
   expect(login).toMatch(/textbox "Card number" \[ref=e\d+\] value="••••"/);

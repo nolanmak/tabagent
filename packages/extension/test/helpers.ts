@@ -19,7 +19,7 @@ export function loadAx(name: string): AxFixture {
   return JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
 }
 
-export const M1_PAGES = ["index", "form", "table", "article", "modal", "checkout", "custom-select", "drag", "login", "delay", "shadow"];
+export const M1_PAGES = ["index", "form", "table", "article", "modal", "checkout", "custom-select", "drag", "masked", "delay", "shadow"];
 
 /** A RefSource over a fresh RefTable for one tab + document. */
 export function source(table = new RefTable(memoryStore()), tabId = 1, loaderId = "L1"): RefSource & { table: RefTable } {

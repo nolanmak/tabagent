@@ -13,7 +13,7 @@ import { effectivePolicy } from "./permissions";
 import { baselines, refTable } from "./refstore";
 import type { RefTable, RefTarget } from "./refs";
 import { marksInView, planCapture, type Metrics, type Target } from "./screenshot-plan";
-import * as settingsMod from "./settings";
+import { getSettings, liteForUrl } from "./settings";
 import { render, type FrameTree, type RefSource, type RenderResult, type AXNode } from "./snapshot";
 import { capMatches, type FindMatch, type FindSpec } from "./wait";
 
@@ -100,26 +100,6 @@ export interface Driver {
 // driverFor: per-origin mode (D26/D32), never switches automatically
 // ---------------------------------------------------------------------------
 const drivers = new Map<number, { cdp?: CdpDriver; lite?: LiteDriver }>();
-
-async function liteForUrl(url: string): Promise<boolean> {
-  const fn = (settingsMod as unknown as { liteForUrl?: (u: string) => Promise<boolean> }).liteForUrl;
-  if (fn) return fn(url);
-  // compat shim until settings.ts exports liteForUrl
-  const s = (await settingsMod.getSettings()) as unknown as { forceLite?: boolean; liteSites?: string[]; sites?: Record<string, { lite?: boolean }> };
-  let host = "";
-  let origin = "";
-  try {
-    const u = new URL(url);
-    host = u.hostname;
-    origin = u.origin;
-  } catch {
-    /* about:blank etc */
-  }
-  if (s.forceLite) return true;
-  if (origin && s.sites?.[origin]?.lite) return true;
-  const { hostMatches } = await import("@tabagent/protocol");
-  return !!host && (s.liteSites ?? []).some((g) => hostMatches(g, host));
-}
 
 export async function driverFor(tabId: number, url: string): Promise<Driver> {
   const lite = await liteForUrl(url);
@@ -712,7 +692,7 @@ export class CdpDriver implements Driver {
   }
 
   private async overlay(ref: string) {
-    const s = await settingsMod.getSettings();
+    const s = await getSettings();
     if (!s.showOverlay) return;
     await this.call("showActivity", [""], { ref }).catch(() => {});
   }

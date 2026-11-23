@@ -55,7 +55,7 @@ describe("render: D23 interactive mode", () => {
   });
 
   it("password and card values render as ••••", () => {
-    const fx = loadAx("login");
+    const fx = loadAx("masked");
     const t = render([{ key: "|main", nodes: fx.nodes, sensitive: fx.sensitive }], { refs: source() }).text;
     expect(t).toMatch(/textbox "Password" \[ref=e\d+\] value="••••"/);
     expect(t).toMatch(/textbox "Card number" \[ref=e\d+\] value="••••"/);
