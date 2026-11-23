@@ -10,15 +10,10 @@
   "scripts": {
     "build": "npm run build -w @tabagent/extension && npm run build -w tabagent",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint . && node scripts/gen-docs.mjs --check",
+    "lint": "eslint .",
     "test": "vitest run --project unit",
     "test:coverage": "vitest run --project unit --coverage",
-    "test:release": "vitest run --project release",
-    "e2e": "playwright test",
-    "tool-budget": "node scripts/tool-budget.mjs",
-    "docs:gen": "node scripts/gen-docs.mjs",
-    "check-versions": "node scripts/check-versions.mjs",
-    "bench": "node bench/run.mjs"
+    "e2e": "playwright test"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

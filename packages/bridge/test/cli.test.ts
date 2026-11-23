@@ -1,6 +1,6 @@
 // Integration tests against the built CLI (packages/bridge/dist/cli.js; run `npm run build` first).
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,7 +74,7 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     send({ jsonrpc: "2.0", method: "notifications/initialized" });
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     await until(() => out.includes('"id":2'));
-    send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "page_snapshot", arguments: {} } });
+    send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "nav_goto", arguments: { url: "http://x.test" } } });
     await until(() => out.includes('"id":3'));
     const frames = out.trim().split("\n");
     for (const f of frames) expect(JSON.parse(f).jsonrpc).toBe("2.0");
@@ -96,7 +96,7 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     const c = new Client({ name: "second", version: "1" });
     await c.connect(t);
     const { tools } = await c.listTools();
-    expect(tools).toHaveLength(13);
+    expect(tools).toHaveLength(2);
     const r: any = await c.callTool({ name: "tabs", arguments: { action: "list" } });
     expect(r.content[0].text).toMatch(/NO_EXTENSION/);
     await c.close();
@@ -116,60 +116,10 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     expect(unknown.stderr).toMatch(/Unknown command or tool/);
   });
 
-  it("token create (--caps), list, revoke work against the live daemon", async () => {
-    const { stdout: tok } = await run(process.execPath, [CLI, "token", "create", "--name", "ci", "--caps", "read", "--sites", "*.example.com"], { env });
-    const token = tok.trim();
-    expect(token).toMatch(/^tab_/);
-    expect(readFileSync(join(home, "config.json"), "utf8")).not.toContain(token);
-    const st = await fetch(`http://127.0.0.1:${port}/v1/status`, { headers: { authorization: `Bearer ${token}` } });
-    expect(st.status).toBe(200);
-    const { stdout: list } = await run(process.execPath, [CLI, "token", "list"], { env });
-    expect(list).toMatch(/ci\s+caps=read\s+sites=\*\.example\.com/);
-    await run(process.execPath, [CLI, "token", "revoke", "ci"], { env });
-    const st2 = await fetch(`http://127.0.0.1:${port}/v1/status`, { headers: { authorization: `Bearer ${token}` } });
-    expect(st2.status).toBe(401);
-    const bad = await run(process.execPath, [CLI, "token", "create", "--name", "x", "--caps", "read,act"], { env }).catch((e) => e);
-    expect(bad.code).toBe(1);
-  });
-
-  it("skill install/uninstall into a temp HOME; audit tail; tools list", async () => {
-    const h = mkdtempSync(join(tmpdir(), "tabagent-skillhome-"));
-    const e2 = { ...env, HOME: h, CODEX_HOME: join(h, ".codex") };
-    const i = await run(process.execPath, [CLI, "skill", "install"], { env: e2 });
-    expect(i.stdout).toMatch(/Installed \(claude\)/);
-    expect(existsSync(join(h, ".claude/skills/tabagent/SKILL.md"))).toBe(true);
-    expect(existsSync(join(h, ".codex/skills/tabagent/SKILL.md"))).toBe(true);
-    writeFileSync(join(h, ".claude/skills/tabagent/SKILL.md"), "edited");
-    const refused = await run(process.execPath, [CLI, "skill", "install", "--claude"], { env: e2 }).catch((e) => e);
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toMatch(/--force/);
-    await run(process.execPath, [CLI, "skill", "install", "--claude", "--force"], { env: e2 });
-    const u = await run(process.execPath, [CLI, "skill", "uninstall"], { env: e2 });
-    expect(u.stdout).toMatch(/Removed \(codex\)/);
-    const { stdout: tail } = await run(process.execPath, [CLI, "audit", "tail", "-n", "3"], { env });
-    expect(tail).toMatch(/NO_EXTENSION/);
+  it("tools lists the registry by profile", async () => {
     const { stdout: tools } = await run(process.execPath, [CLI, "tools", "--profile", "core"], { env });
-    expect(tools).toMatch(/13 tools/);
-  });
-});
-
-describe.skipIf(!existsSync(CLI))("tool budget script (#30)", { timeout: 30_000 }, () => {
-  const SCRIPT = join(ROOT, "scripts/tool-budget.mjs");
-  it("passes on the real tools/list", async () => {
-    const { stdout } = await run(process.execPath, [SCRIPT]);
-    expect(stdout).toMatch(/ok\s+core\s+13 tools/);
-    expect(stdout).toMatch(/ok\s+full/);
-    expect(stdout).toMatch(/skill \d+ \/ 1500/);
-  });
-  it("an over-budget fixture exits non-zero and names the three largest tools", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "tabagent-budget-"));
-    mkdirSync(dir, { recursive: true });
-    const big = (name: string, n: number) => ({ name, description: "x".repeat(n), inputSchema: { type: "object" } });
-    const fixture = join(dir, "core.json");
-    writeFileSync(fixture, JSON.stringify([big("small", 10), big("huge", 4000), big("large", 3000), big("medium", 1500), big("tiny", 5)]));
-    const r = await run(process.execPath, [SCRIPT, "--fixture", `core=${fixture}`]).catch((e) => e);
-    expect(r.code).toBe(1);
-    expect(r.stdout).toMatch(/FAIL core/);
-    expect(r.stdout).toMatch(/largest: huge \(\d+\), large \(\d+\), medium \(\d+\)/);
+    expect(tools).toMatch(/2 tools/);
+    const { stdout: help } = await run(process.execPath, [CLI, "help"], { env });
+    expect(help).toMatch(/--json/);
   });
 });

@@ -61,19 +61,18 @@ describe("client", () => {
     writeFileSync(broken, "process.exit(1)");
     expect(await ensureDaemon(await deadPort(), broken, 300)).toEqual({ spawned: true, health: null });
   });
-  it("restCall: returns the wrapped bridge response; unreachable -> NO_EXTENSION; non-JSON -> INTERNAL", async () => {
+  it("restCall: returns the bridge response; unreachable -> NO_EXTENSION; non-JSON -> INTERNAL", async () => {
     const r = await startDaemon();
     daemons.push(r.d);
     const e = await pairedExt(r.d);
-    e.onCommand = () => okEnvelope({ text: "hello" }, "page.text");
-    const ok = await restCall({ port: r.d.port, token: r.cfg.secret, headers: { "x-tabagent-session": "c" } }, "page.text", {});
-    expect(ok.ok).toBe(true);
-    expect((ok.result as any).text).toMatch(/^<<<PAGE_DATA/);
-    const down = await restCall({ port: await deadPort(), token: "x" }, "page.text", {});
+    e.onCommand = () => okEnvelope({ tabs: [] }, "tabs");
+    const ok = await restCall({ port: r.d.port, token: r.cfg.secret, headers: { "x-tabagent-session": "c" } }, "tabs", { action: "list" });
+    expect(ok).toEqual({ ok: true, result: { tabs: [] } });
+    const down = await restCall({ port: await deadPort(), token: "x" }, "tabs", {});
     expect(down.error).toMatchObject({ code: "NO_EXTENSION" });
     const junk = createServer((_q, s) => s.end("nope"));
     await new Promise<void>((res) => junk.listen(0, "127.0.0.1", () => res()));
-    expect((await restCall({ port: (junk.address() as any).port, token: "x" }, "page.text", undefined)).error?.code).toBe("INTERNAL");
+    expect((await restCall({ port: (junk.address() as any).port, token: "x" }, "tabs", undefined)).error?.code).toBe("INTERNAL");
     junk.close();
     expect((await api(r.d.port, r.cfg.secret, "/v1/status")).ok).toBe(true);
     expect((await api(r.d.port, r.cfg.secret, "/v1/pair", "POST", {})).pairCode).toBeTruthy();

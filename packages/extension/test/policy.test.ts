@@ -1,220 +1,74 @@
 import { describe, expect, it } from "vitest";
-import { applySensitiveAnswer, applySiteAnswer, clearSessionGrants, effectiveLevel, hostMatches, isHardDenied, resolve, type Level, type PolicyRequest, type PolicyState, type StoredPolicy } from "../src/background/policy";
+import { CATEGORY_TEXT, hostOf, isBlank, isHardDenied, originOf, resolve, type PolicyRequest, type SensitiveCategory } from "../src/background/policy";
 
-const A = "https://a.example";
-const base = (over: Partial<PolicyState> = {}): PolicyState => ({ paused: false, sites: {}, denylist: ["*.bank.example"], grants: {}, ...over });
-const req = (over: Partial<PolicyRequest> = {}): PolicyRequest => ({ sessionId: "s1", cap: "full", sites: [], url: `${A}/page`, level: "read", ...over });
+const req = (over: Partial<PolicyRequest> = {}): PolicyRequest => ({ url: "https://a.example/x", level: "act", tab: "own", ...over });
 
-describe("resolve: stored level x required level", () => {
-  const stored: (StoredPolicy | undefined)[] = [undefined, "deny", "read", "act", "full"];
-  const required: Level[] = ["read", "act", "full"];
-  const rank = { deny: 0, read: 1, act: 2, full: 3 } as const;
-  for (const s of stored) {
-    for (const r of required) {
-      it(`stored ${s ?? "(none)"} / required ${r}`, () => {
-        const st = base({ sites: s ? { [A]: { policy: s } } : {} });
-        const d = resolve(st, req({ level: r }));
-        if (s === undefined) expect(d).toMatchObject({ decision: "ask", kind: "site", origin: A, level: r });
-        else if (s === "deny") expect(d).toMatchObject({ decision: "deny", code: "PERMISSION_DENIED" });
-        else if (rank[s] >= rank[r]) expect(d.decision).toBe("allow");
-        else expect(d).toMatchObject({ decision: "ask", kind: "site", level: r, reason: expect.stringContaining(`"${s}"`) });
-      });
-    }
-  }
-  it("unknown origin asks", () => {
-    expect(resolve(base(), req()).decision).toBe("ask");
+describe("url helpers", () => {
+  it("originOf / hostOf / isBlank", () => {
+    expect(originOf("https://a.example:8443/x?y")).toBe("https://a.example:8443");
+    expect(originOf("file:///tmp/x.html")).toBe("file://");
+    expect(originOf("chrome://settings")).toBeNull();
+    expect(originOf("nope")).toBeNull();
+    expect(hostOf("http://LocalHost:3000/")).toBe("localhost");
+    expect(hostOf("::")).toBe("");
+    expect(isBlank("")).toBe(true);
+    expect(isBlank("about:blank")).toBe(true);
+    expect(isBlank("about:srcdoc")).toBe(true);
+    expect(isBlank("https://a")).toBe(false);
   });
-});
-
-describe("resolve: evaluation order (D16)", () => {
-  it("paused beats everything, including allow", () => {
-    const d = resolve(base({ paused: true, sites: { [A]: { policy: "full" } } }), req());
-    expect(d).toMatchObject({ decision: "deny", code: "KILLED" });
-  });
-  it("paused beats a not-site-scoped call too", () => {
-    expect(resolve(base({ paused: true }), req({ url: "", level: null }))).toMatchObject({ code: "KILLED" });
-  });
-  it("denylist beats an Always", () => {
-    const u = "https://my.bank.example/login";
-    const d = resolve(base({ sites: { "https://my.bank.example": { policy: "full" } } }), req({ url: u }));
-    expect(d).toMatchObject({ decision: "deny", message: expect.stringContaining("denylist") });
-  });
-  it("token cap read beats site policy act", () => {
-    const d = resolve(base({ sites: { [A]: { policy: "act" } } }), req({ cap: "read", level: "act" }));
-    expect(d).toMatchObject({ decision: "deny", message: expect.stringContaining('limited to "read"') });
-  });
-  it("token --sites miss denies without a prompt", () => {
-    const d = resolve(base(), req({ sites: ["*.other.example"] }));
-    expect(d).toMatchObject({ decision: "deny", code: "PERMISSION_DENIED", message: expect.stringContaining("not allowed on a.example") });
-  });
-  it("token --sites hit continues to site policy", () => {
-    expect(resolve(base(), req({ sites: ["a.example"] })).decision).toBe("ask");
-  });
-  it("site policy is checked before the sensitive gate", () => {
-    expect(resolve(base(), req({ sensitive: "c" }))).toMatchObject({ decision: "ask", kind: "site" });
-    expect(resolve(base({ sites: { [A]: { policy: "full" } } }), req({ sensitive: "c" }))).toMatchObject({ decision: "ask", kind: "sensitive", category: "c" });
-  });
-});
-
-describe("hard deny", () => {
-  for (const u of ["chrome://settings", "chrome-extension://abc/page.html", "devtools://devtools/x", "https://chromewebstore.google.com/detail/x", "https://chrome.google.com/webstore/detail/x", "view-source:https://a.example"]) {
-    it(`${u} is denied and cannot be unlocked`, () => {
-      const o = (() => {
-        try {
-          return new URL(u).origin;
-        } catch {
-          return u;
-        }
-      })();
-      const st = base({ denylist: [], sites: { [o]: { policy: "full" } } });
-      expect(isHardDenied(u)).toBe(true);
-      expect(resolve(st, req({ url: u }))).toMatchObject({ decision: "deny", code: "PERMISSION_DENIED" });
-    });
-  }
-  it("about:blank is allowed and not hard denied", () => {
-    expect(isHardDenied("about:blank")).toBe(false);
-    expect(resolve(base(), req({ url: "about:blank" })).decision).toBe("allow");
-  });
-  it("unsupported schemes are denied", () => {
-    expect(resolve(base(), req({ url: "ftp://x.example/" }))).toMatchObject({ decision: "deny" });
-  });
-});
-
-describe("hostMatches", () => {
   it.each([
-    ["*.github.com", "github.com", true],
-    ["*.github.com", "gist.github.com", true],
-    ["*.github.com", "github.com.evil.example", false],
-    ["*.github.com", "evilgithub.com", false],
-    ["github.com", "github.com", true],
-    ["github.com", "gist.github.com", false],
-    ["*", "anything.example", true],
-    ["", "a", false],
-  ])("%s vs %s -> %s", (g, h, want) => expect(hostMatches(g, h)).toBe(want));
+    ["chrome://settings", true],
+    ["chrome-extension://abc/popup.html", true],
+    ["chrome-untrusted://x", true],
+    ["devtools://devtools/bundled/x", true],
+    ["view-source:https://a", true],
+    ["about:config", true],
+    ["https://chromewebstore.google.com/detail/x", true],
+    ["https://chrome.google.com/webstore/detail/x", true],
+    ["https://chrome.google.com/other", false],
+    ["about:blank", false],
+    ["https://a.example/", false],
+    ["file:///tmp/a.html", false],
+  ])("isHardDenied(%s) = %s", (url, want) => expect(isHardDenied(url)).toBe(want));
 });
 
-describe("answers", () => {
-  it("once = same session + origin only; covers lower levels", () => {
-    const st = applySiteAnswer(base(), "s1", A, "act", "once");
-    expect(resolve(st, req({ level: "act" })).decision).toBe("allow");
-    expect(resolve(st, req({ level: "read" })).decision).toBe("allow");
-    expect(resolve(st, req({ sessionId: "s2", level: "read" })).decision).toBe("ask");
-    expect(resolve(st, req({ url: "https://b.example/", level: "read" })).decision).toBe("ask");
+// D17 interim policy: every row is a test (roadmap TDD rule 5).
+describe("D17 interim policy table", () => {
+  it.each([
+    // [description, request, state, decision, code]
+    ["owned tab on a normal site", req(), {}, "allow", undefined],
+    ["no tab (tabs list), no url", req({ tab: "none", url: "", level: null }), {}, "allow", undefined],
+    ["owned blank tab", req({ url: "about:blank" }), {}, "allow", undefined],
+    ["file page", req({ url: "file:///tmp/a.html" }), {}, "allow", undefined],
+    ["full level is not limited before #12", req({ level: "full" }), {}, "allow", undefined],
+    ["tab owned by another session", req({ tab: "other" }), {}, "deny", "TAB_BUSY"],
+    ["tab owned by nobody", req({ tab: "nobody" }), {}, "deny", "NOT_FOUND"],
+    ["chrome:// target", req({ url: "chrome://settings" }), {}, "deny", "PERMISSION_DENIED"],
+    ["extension page", req({ url: "chrome-extension://abc/x.html" }), {}, "deny", "PERMISSION_DENIED"],
+    ["Web Store", req({ url: "https://chromewebstore.google.com/" }), {}, "deny", "PERMISSION_DENIED"],
+    ["hard deny is not unlocked by devAllowSensitive", req({ url: "chrome://settings" }), { devAllowSensitive: true }, "deny", "PERMISSION_DENIED"],
+    ["non-web scheme", req({ url: "javascript:alert(1)" }), {}, "deny", "PERMISSION_DENIED"],
+    ["data url", req({ url: "data:text/html,x" }), {}, "deny", "PERMISSION_DENIED"],
+    ["ownership is checked before the denylist", req({ tab: "other", url: "chrome://settings" }), {}, "deny", "TAB_BUSY"],
+  ] as const)("%s", (_d, r, st, decision, code) => {
+    const d = resolve(st, r);
+    expect(d.decision).toBe(decision);
+    if (code) expect(d).toMatchObject({ code });
   });
-  it("a higher request asks again", () => {
-    const st = applySiteAnswer(base(), "s1", A, "read", "once");
-    expect(resolve(st, req({ level: "act" }))).toMatchObject({ decision: "ask", level: "act" });
-  });
-  it("once does not downgrade an earlier higher once", () => {
-    let st = applySiteAnswer(base(), "s1", A, "full", "once");
-    st = applySiteAnswer(st, "s1", A, "read", "once");
-    expect(resolve(st, req({ level: "full" })).decision).toBe("allow");
-  });
-  it("once is gone at session end and after kill", () => {
-    const st = applySiteAnswer(base(), "s1", A, "act", "once");
-    expect(resolve(clearSessionGrants(st, "s1"), req()).decision).toBe("ask");
-    expect(resolve(clearSessionGrants(st), req()).decision).toBe("ask");
-    const two = applySiteAnswer(st, "s2", A, "act", "once");
-    expect(resolve(clearSessionGrants(two, "s1"), req({ sessionId: "s2" })).decision).toBe("allow");
-  });
-  it("always stores exactly the requested level", () => {
-    const st = applySiteAnswer(base(), "s1", A, "act", "always");
-    expect(st.sites[A].policy).toBe("act");
-    expect(resolve(st, req({ sessionId: "other", level: "act" })).decision).toBe("allow");
-    expect(resolve(st, req({ level: "full" })).decision).toBe("ask");
-  });
-  it("deny sticks for the session at and above the denied level", () => {
-    const st = applySiteAnswer(base(), "s1", A, "act", "deny");
-    expect(resolve(st, req({ level: "act" }))).toMatchObject({ decision: "deny" });
-    expect(resolve(st, req({ level: "full" }))).toMatchObject({ decision: "deny" });
-    expect(resolve(st, req({ level: "read" })).decision).toBe("ask");
-    expect(resolve(st, req({ sessionId: "s2", level: "act" })).decision).toBe("ask");
-    const lower = applySiteAnswer(st, "s1", A, "read", "deny");
-    expect(resolve(lower, req({ level: "read" })).decision).toBe("deny");
-  });
-});
 
-describe("frames and navigation", () => {
-  it("cross-origin frame uses the frame's own origin", () => {
-    const st = base({ sites: { [A]: { policy: "full" }, "https://frame.example": { policy: "deny" } } });
-    expect(resolve(st, req({ url: "https://frame.example/embed" })).decision).toBe("deny");
+  const CATS = Object.keys(CATEGORY_TEXT) as SensitiveCategory[];
+  it("covers every D18 category a-f", () => expect(CATS).toEqual(["a", "b", "c", "d", "e", "f"]));
+  it.each(CATS)("gated effect %s is refused unless devAllowSensitive", (c) => {
+    const off = resolve({}, req({ sensitive: c }));
+    expect(off).toMatchObject({ decision: "deny", code: "PERMISSION_DENIED", origin: "https://a.example" });
+    if (off.decision === "deny") {
+      expect(off.message).toContain(CATEGORY_TEXT[c].toLowerCase());
+      expect(off.hint).toBeTruthy();
+    }
+    expect(resolve({ devAllowSensitive: false }, req({ sensitive: c })).decision).toBe("deny");
+    expect(resolve({ devAllowSensitive: true }, req({ sensitive: c }))).toEqual({ decision: "allow", origin: "https://a.example" });
   });
-  it("a tab that navigated to a denied origin is denied on the next command", () => {
-    const st = base({ sites: { [A]: { policy: "full" } } });
-    expect(resolve(st, req({ url: `${A}/x` })).decision).toBe("allow");
-    expect(resolve(st, req({ url: "https://x.bank.example/" })).decision).toBe("deny");
-  });
-});
-
-describe("sensitive gate (D18)", () => {
-  const full = (over: Partial<PolicyState> = {}) => base({ sites: { [A]: { policy: "full" } }, ...over });
-  for (const c of ["a", "b", "c", "d", "e"] as const) {
-    it(`category ${c} asks, and pre-approval on the origin passes`, () => {
-      expect(resolve(full(), req({ sensitive: c }))).toMatchObject({ decision: "ask", kind: "sensitive", category: c });
-      const st = applySensitiveAnswer(full(), A, c, "always");
-      expect(resolve(st, req({ sensitive: c })).decision).toBe("allow");
-    });
-  }
-  it("pre-approval for a on X does not cover c on X nor a on Y", () => {
-    const st = applySensitiveAnswer(base({ sites: { [A]: { policy: "full" }, "https://y.example": { policy: "full" } } }), A, "a", "always");
-    expect(resolve(st, req({ sensitive: "c" })).decision).toBe("ask");
-    expect(resolve(st, req({ url: "https://y.example/", sensitive: "a" })).decision).toBe("ask");
-  });
-  it("tabs attach (f) can't be pre-approved and devAllowSensitive does not skip it", () => {
-    const st = applySensitiveAnswer(full({ devAllowSensitive: true }), A, "f", "always");
-    expect(st.sites[A].preapproved).toBeUndefined();
-    expect(resolve(st, req({ sensitive: "f" }))).toMatchObject({ decision: "ask", category: "f" });
-  });
-  it("devAllowSensitive passes a-e without prompting", () => {
-    for (const c of ["a", "b", "c", "d", "e"] as const) expect(resolve(full({ devAllowSensitive: true }), req({ sensitive: c })).decision).toBe("allow");
-  });
-  it("once / deny on a sensitive prompt change nothing", () => {
-    const st = full();
-    expect(applySensitiveAnswer(st, A, "c", "once")).toBe(st);
-    expect(applySensitiveAnswer(st, A, "c", "deny")).toBe(st);
-  });
-  it("blank page sensitive asks keyed to about:blank", () => {
-    expect(resolve(base(), req({ url: "about:blank", level: null, sensitive: "c" }))).toMatchObject({ decision: "ask", origin: "about:blank" });
-  });
-});
-
-describe("auth category g (M6)", () => {
-  const on = (extra = {}) => base({ sites: { [A]: { policy: "full", auth: true, ...extra } } });
-  it("is denied unless sign-in is enabled for the origin", () => {
-    expect(resolve(base({ sites: { [A]: { policy: "full" } } }), req({ sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("not enabled") });
-  });
-  it("asks when enabled, and Always remembers that account only", () => {
-    expect(resolve(on(), req({ sensitive: "g", accountId: "acct1" }))).toMatchObject({ decision: "ask", category: "g" });
-    const st = applySensitiveAnswer(on(), A, "g", "always", "acct1");
-    expect(st.sites[A].authAlways).toEqual(["acct1"]);
-    expect(resolve(st, req({ sensitive: "g", accountId: "acct1" })).decision).toBe("allow");
-    expect(resolve(st, req({ sensitive: "g", accountId: "acct2" })).decision).toBe("ask");
-    expect(applySensitiveAnswer(st, A, "g", "always", "acct1")).toBe(st);
-    expect(applySensitiveAnswer(st, A, "g", "always")).toBe(st);
-  });
-  it("pre-approving a does not cover g, devAllowSensitive does not skip it", () => {
-    const st = applySensitiveAnswer(on(), A, "a", "always");
-    expect(resolve({ ...st, devAllowSensitive: true }, req({ sensitive: "g", accountId: "x" })).decision).toBe("ask");
-  });
-  it("banking hosts stay denied for auth even when enabled and removed from the denylist", () => {
-    const o = "https://www.chase.com";
-    const st = base({ denylist: [], sites: { [o]: { policy: "full", auth: true } } });
-    expect(resolve(st, req({ url: `${o}/login`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("never signs in") });
-  });
-  it("needs an http(s) page", () => {
-    expect(resolve(base(), req({ url: "about:blank", level: null, sensitive: "g" }))).toMatchObject({ decision: "deny" });
-  });
-});
-
-describe("effectiveLevel (session.permissions)", () => {
-  it("reports stored, once, denylist, token cap", () => {
-    expect(effectiveLevel(base(), { sessionId: "s1", cap: "full", sites: [], url: `${A}/` })).toMatchObject({ level: "ask" });
-    expect(effectiveLevel(base({ sites: { [A]: { policy: "full" } } }), { sessionId: "s1", cap: "read", sites: [], url: `${A}/` })).toMatchObject({ level: "read", source: expect.stringContaining("token cap") });
-    const once = applySiteAnswer(base(), "s1", A, "act", "once");
-    expect(effectiveLevel(once, { sessionId: "s1", cap: "full", sites: [], url: `${A}/` })).toMatchObject({ level: "act", source: expect.stringContaining("once") });
-    expect(effectiveLevel(base(), { sessionId: "s1", cap: "full", sites: [], url: "https://x.bank.example/" })).toMatchObject({ level: "deny" });
-    expect(effectiveLevel(base(), { sessionId: "s1", cap: "full", sites: ["b.example"], url: `${A}/` })).toMatchObject({ level: "deny" });
-    expect(effectiveLevel(base(), { sessionId: "s1", cap: "act", sites: [], url: "about:blank" })).toMatchObject({ level: "act" });
-    expect(effectiveLevel(base(), { sessionId: "s1", cap: "act", sites: [], url: "chrome://x" })).toMatchObject({ level: "deny" });
+  it("a gated effect on a page with no origin (blank tab) is still refused", () => {
+    expect(resolve({}, req({ url: "about:blank", sensitive: "c" }))).toMatchObject({ decision: "deny", code: "PERMISSION_DENIED", origin: null });
   });
 });

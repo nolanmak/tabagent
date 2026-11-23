@@ -1,6 +1,0 @@
-- navigation
-  - link "Home" [ref=e1]
-- main
-  - heading "The Tab Agent Story" level=1
-  - link "forms" [ref=e2]
-  - heading "Details" level=2

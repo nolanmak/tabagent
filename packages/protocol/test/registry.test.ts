@@ -34,7 +34,6 @@ describe("registry invariants", () => {
     expect(["none", "read", "act", "full"]).toContain(t.level);
     expect(Array.isArray(t.profiles)).toBe(true);
     expect(["extension", "bridge", "both"]).toContain(t.handledBy);
-    expect(["supported", "degraded", "unsupported"]).toContain(t.lite);
     expect(Array.isArray(t.pageContent)).toBe(true);
     expect(t.params).toBeInstanceOf(z.ZodObject);
     expect(t.result).toBeInstanceOf(z.ZodType);
@@ -60,48 +59,6 @@ const LEVELS: Record<string, string> = {
   "nav.back": "act",
   "nav.forward": "act",
   "nav.reload": "act",
-  "nav.wait": "read",
-  "page.snapshot": "read",
-  "page.screenshot": "read",
-  "page.text": "read",
-  "page.markdown": "read",
-  "page.find": "read",
-  "act.click": "act",
-  "act.dblclick": "act",
-  "act.hover": "act",
-  "act.type": "act",
-  "act.fill": "act",
-  "act.press": "act",
-  "act.select": "act",
-  "act.check": "act",
-  "act.scroll": "read",
-  "act.drag": "act",
-  "act.upload": "act",
-  "form.describe": "read",
-  "form.fill": "act",
-  "form.submit": "act",
-  "extract.table": "read",
-  "extract.links": "read",
-  "extract.schema": "read",
-  "extract.paginate": "read",
-  "dialog.handle": "act",
-  "js.eval": "full",
-  "console.list": "read",
-  "network.list": "read",
-  "network.get": "full",
-  "network.waitFor": "read",
-  "cookies.get": "full",
-  "storage.get": "full",
-  "downloads.list": "none",
-  "downloads.wait": "none",
-  "downloads.read": "none",
-  "session.info": "none",
-  "session.permissions": "none",
-  "session.end": "none",
-  "auth.status": "read",
-  "auth.login": "act",
-  "auth.code": "act",
-  "auth.handoff": "read",
 };
 
 describe("D16 level table", () => {
@@ -116,54 +73,42 @@ describe("D16 level table", () => {
     ["new", "act"],
     ["select", "none"],
     ["close", "none"],
-    ["attach", "read"],
   ])("tabs %s requires %s", (action, level) => {
     expect(levelFor(getTool("tabs")!, { action })).toBe(level);
   });
   it("levelFor falls back to the tool level", () => {
-    expect(levelFor(getTool("act.click")!)).toBe("act");
+    expect(levelFor(getTool("nav.goto")!)).toBe("act");
     expect(levelFor(getTool("tabs")!, { action: "bogus" })).toBe("none");
   });
 });
 
 describe("D18 static sensitivity", () => {
-  it.each([
-    ["js.eval", {}, "c"],
-    ["nav.wait", { for: "fn" }, "c"],
-    ["nav.wait", { for: "text" }, undefined],
-    ["cookies.get", {}, "d"],
-    ["storage.get", {}, "d"],
-    ["network.get", {}, "d"],
-    ["act.upload", {}, "e"],
-    ["downloads.read", {}, "e"],
-    ["tabs", { action: "attach" }, "f"],
-    ["tabs", { action: "new" }, undefined],
-    ["act.click", {}, undefined],
-    ["network.list", {}, undefined],
-  ] as const)("%s %j -> %s", (name, params, cat) => {
-    expect(sensitiveFor(getTool(name)!, params as Record<string, unknown>)).toBe(cat);
+  it("no M0 tool is statically sensitive", () => {
+    for (const t of tools) expect(sensitiveFor(t, {}), t.name).toBeUndefined();
+    for (const action of ["list", "new", "select", "close"]) expect(sensitiveFor(getTool("tabs")!, { action })).toBeUndefined();
   });
-  it("no other tool is statically sensitive", () => {
-    const statics = tools.filter((t) => t.sensitive || Object.values(t.actions ?? {}).some((a) => a.sensitive)).map((t) => t.name);
-    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "storage.get", "tabs"].sort());
+  it("sensitiveFor reads the static category, per action and with sensitiveWhen", () => {
+    const base = getTool("nav.goto")!;
+    expect(sensitiveFor({ ...base, sensitive: "c", sensitiveWhen: { param: "for", values: ["fn"] } }, { for: "fn" })).toBe("c");
+    expect(sensitiveFor({ ...base, sensitive: "c", sensitiveWhen: { param: "for", values: ["fn"] } }, { for: "text" })).toBeUndefined();
+    expect(sensitiveFor({ ...base, sensitive: "d" }, {})).toBe("d");
+    expect(sensitiveFor({ ...base, actions: { x: { level: "read", sensitive: "f" } } }, { action: "x" })).toBe("f");
   });
 });
 
-const CORE = ["tabs", "nav.goto", "nav.wait", "page.snapshot", "page.screenshot", "act.click", "act.type", "act.press", "act.select", "form.fill", "extract.table", "page.markdown", "dialog.handle"];
+// D29 lists only registered tools: at the end of M0 core is tabs + nav.goto.
+const CORE = ["tabs", "nav.goto"];
 const D29: Record<string, string[]> = {
   core: CORE,
-  forms: [...CORE, "form.describe", "form.submit", "act.fill", "act.check", "act.upload"],
-  data: [...CORE, "page.text", "page.find", "extract.links", "extract.schema", "extract.paginate", "downloads.list", "downloads.wait", "downloads.read"],
-  dev: [...CORE, "js.eval", "console.list", "network.list", "network.get", "network.waitFor", "cookies.get", "storage.get"],
-  // DA10: full is everything except the opt-in auth group.
-  full: tools.filter((t) => t.group !== "auth").map((t) => t.name),
-  auth: [...CORE, "auth.status", "auth.login", "auth.code", "auth.handoff"],
+  forms: CORE,
+  data: CORE,
+  dev: CORE,
+  full: tools.map((t) => t.name),
 };
 
 describe("D29 profiles", () => {
-  it("core has 13 tools and excludes form.describe", () => {
-    expect(toolsForProfiles("core")).toHaveLength(13);
-    expect(names(toolsForProfiles("core"))).not.toContain("form.describe");
+  it("core has only the registered core tools", () => {
+    expect(toolsForProfiles("core")).toHaveLength(2);
   });
   it.each(Object.entries(D29))("%s lists exactly the D29 tools", (p, want) => {
     expect(names(toolsForProfiles(p))).toEqual([...want].sort());
@@ -172,19 +117,18 @@ describe("D29 profiles", () => {
     expect(names(toolsForProfiles(undefined))).toEqual([...CORE].sort());
   });
   it("profiles combine as a union (string or array)", () => {
-    const union = [...new Set([...D29.forms, ...D29.data])].sort();
-    expect(names(toolsForProfiles("forms,data"))).toEqual(union);
-    expect(names(toolsForProfiles(["forms", " data "]))).toEqual(union);
+    expect(names(toolsForProfiles("forms,data"))).toEqual([...CORE].sort());
+    expect(names(toolsForProfiles(["forms", " data "]))).toEqual([...CORE].sort());
     expect(names(toolsForProfiles("dev,full"))).toEqual([...D29.full].sort());
   });
   it("unknown profile throws with the valid list", () => {
     expect(() => toolsForProfiles("core,bogus")).toThrow(/bogus.*core, forms, data, dev, full/);
-    expect(PROFILES).toEqual(["core", "forms", "data", "dev", "full", "auth"]);
+    expect(PROFILES).toEqual(["core", "forms", "data", "dev", "full"]);
   });
   it("lists only registered tools (works on a smaller registry)", () => {
-    const small = tools.filter((t) => ["tabs", "nav.goto", "js.eval"].includes(t.name));
-    expect(names(toolsForProfiles("core", small))).toEqual(["nav.goto", "tabs"]);
-    expect(names(toolsForProfiles("dev", small))).toEqual(["js.eval", "nav.goto", "tabs"]);
+    const small = tools.filter((t) => ["tabs", "nav.back"].includes(t.name));
+    expect(names(toolsForProfiles("core", small))).toEqual(["tabs"]);
+    expect(names(toolsForProfiles("full", small))).toEqual(["nav.back", "tabs"]);
   });
 });
 
@@ -209,7 +153,7 @@ describe("D21 pageContent sweep", () => {
     expect(markedPaths(bad)).toEqual(["text"]);
   });
   it("tools with free-text page results are covered", () => {
-    for (const n of ["page.snapshot", "page.text", "page.markdown", "extract.table", "console.list", "tabs", "downloads.list", "dialog.handle"]) {
+    for (const n of ["tabs", "nav.goto", "nav.back", "nav.forward", "nav.reload"]) {
       expect(getTool(n)!.pageContent.length, n).toBeGreaterThan(0);
     }
   });
@@ -221,10 +165,9 @@ describe("D15 timeouts", () => {
     expect(TIMEOUTS.navigation).toBe(30000);
     expect(TIMEOUTS.max).toBe(120000);
     expect(TIMEOUTS.prompt).toBe(120000);
-    expect(defaultTimeout("act.click")).toBe(5000);
-    expect(defaultTimeout("page.find")).toBe(5000);
+    expect(defaultTimeout("tabs")).toBe(5000);
     expect(defaultTimeout("nav.goto")).toBe(30000);
-    expect(defaultTimeout("nav.wait")).toBe(30000);
+    expect(defaultTimeout("nav.reload")).toBe(30000);
   });
   it("every waiting tool caps timeout at 120000", () => {
     for (const t of tools) {
@@ -238,37 +181,26 @@ describe("D15 timeouts", () => {
 function minimal(t: ToolDef): Record<string, unknown> {
   const m: Record<string, Record<string, unknown>> = {
     "nav.goto": { url: "https://x" },
-    "nav.wait": { for: "load" },
-    "page.find": { by: "text", value: "x" },
-    "act.type": { text: "x" },
-    "act.fill": { ref: "e1", value: "x" },
-    "act.press": { key: "Enter" },
-    "act.select": { ref: "e1", values: ["a"] },
-    "act.drag": { from: "e1", to: "e2" },
-    "act.upload": { ref: "e1", paths: ["/x"] },
-    "form.fill": { fields: {} },
-    "extract.paginate": { extractor: "table" },
-    "js.eval": { expression: "1" },
   };
-  return m[t.name] ?? (t.params.shape.ref ? { ref: "e1" } : {});
+  return m[t.name] ?? {};
 }
 
 describe("validateParams", () => {
   it("returns parsed params", () => {
     expect(validateParams(getTool("nav.goto")!, { url: "https://a" })).toEqual({ url: "https://a" });
-    expect(validateParams(getTool("session.end")!, undefined)).toEqual({});
+    expect(validateParams(getTool("nav.reload")!, undefined)).toEqual({});
   });
   it("throws BAD_REQUEST naming the field", () => {
     try {
-      validateParams(getTool("act.click")!, {});
+      validateParams(getTool("nav.goto")!, {});
       throw new Error("no throw");
     } catch (e) {
       expect(e).toBeInstanceOf(TabAgentError);
       expect((e as TabAgentError).code).toBe("BAD_REQUEST");
-      expect((e as TabAgentError).message).toContain("ref");
+      expect((e as TabAgentError).message).toContain("url");
     }
   });
   it("root-level errors are labelled", () => {
-    expect(() => validateParams(getTool("act.click")!, 5)).toThrow(/\(root\)/);
+    expect(() => validateParams(getTool("nav.goto")!, 5)).toThrow(/\(root\)/);
   });
 });

@@ -1,6 +1,0 @@
-- main
-  - heading "Shadow DOM" level=1
-  - text "Shadow input"
-  - textbox "Shadow input" [ref=e1] value=""
-  - button "Shadow button" [ref=e2]
-  - paragraph

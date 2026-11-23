@@ -7,7 +7,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "coverage/**", "test-results/**", "playwright-report/**", "bench/results/**"],
+    ignores: ["**/node_modules/**", "**/dist/**", "coverage/**", "test-results/**", "playwright-report/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -15,7 +15,7 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "module",
-      globals: { ...globals.node, ...globals.browser, ...globals.webextensions, PAGELIB_SRC: "readonly" },
+      globals: { ...globals.node, ...globals.browser, ...globals.webextensions },
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
@@ -36,7 +36,7 @@ export default tseslint.config(
   },
   {
     // Playwright fixtures must destructure `{}` for "no dependencies".
-    files: ["e2e/**/*.ts", "bench/**/*.{ts,mjs}"],
+    files: ["e2e/**/*.ts"],
     rules: { "no-empty-pattern": "off" },
   },
 );

@@ -1,5 +1,0 @@
-- main
-  - heading "Behind the modal" level=1
-  - button "Target" [ref=e1]
-- dialog "Cookies"
-  - button "Accept cookies" [ref=e2]

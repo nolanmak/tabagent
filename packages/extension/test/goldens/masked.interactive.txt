@@ -1,7 +1,0 @@
-- main
-  - heading "Log in" level=1
-  - form
-    - textbox "Username" [ref=e1] value="neo"
-    - textbox "Password" [ref=e2] value="••••"
-    - textbox "Card number" [ref=e3] value="••••"
-    - button "Log in" [ref=e4]

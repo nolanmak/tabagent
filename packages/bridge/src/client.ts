@@ -58,7 +58,7 @@ export interface RestOpts {
   headers?: Record<string, string>;
 }
 
-/** POST /v1/<tool>; returns the bridge's (already wrapped) response. Network failure -> NO_EXTENSION-style error. */
+/** POST /v1/<tool>; returns the bridge's response. Network failure -> NO_EXTENSION-style error. */
 export async function restCall(o: RestOpts, tool: string, params: unknown): Promise<OutputResponse> {
   let r: Response;
   try {

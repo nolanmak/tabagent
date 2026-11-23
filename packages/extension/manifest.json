@@ -28,27 +28,13 @@
     "128": "icons/128.png"
   },
   "permissions": [
-    "debugger",
     "tabs",
-    "tabGroups",
     "sidePanel",
     "storage",
-    "downloads",
-    "cookies",
     "alarms",
-    "notifications",
-    "scripting",
-    "webNavigation"
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
-  ],
-  "commands": {
-    "kill-switch": {
-      "suggested_key": {
-        "default": "Alt+Shift+K"
-      },
-      "description": "Stop all agents (kill switch)"
-    }
-  }
+  ]
 }

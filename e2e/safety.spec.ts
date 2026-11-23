@@ -1,256 +1,64 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import WebSocket from "ws";
-import { test, expect, Harness } from "./fixture";
+import { test, expect } from "./fixture";
 
 test.describe.configure({ mode: "serial" });
 
-const settings = (h: Harness) => h.sw.evaluate(async () => (globalThis as any).__tabagent.getSettings());
-
-test("#12 unknown site asks: deny sticks for the session, once, always", async ({ h }) => {
-  await h.setPolicies({}, { paused: false, devAllowSensitive: false });
-  const c = await h.mcp({ label: "asker" });
-  const d = await h.answerPrompt("deny", () => h.call(c, "nav.goto", { url: `${h.A}/index.html` }));
-  expect(d.title).toContain(`asker wants to act on ${h.A}`);
-  expect((d.result as any).text).toContain("PERMISSION_DENIED");
-  // Deny = this session + origin: no second prompt
-  const again = await h.call(c, "nav.goto", { url: `${h.A}/index.html` });
-  expect(again.text).toContain("PERMISSION_DENIED");
-  expect(await h.pendingPrompts()).toHaveLength(0);
-
-  const c2 = await h.mcp({ label: "onceer" });
-  const o = await h.answerPrompt("once", () => h.ok(c2, "nav.goto", { url: `${h.A}/index.html` }));
-  expect((o.result as any).json.title).toBe("Fixtures home");
-  // once covers lower levels for this session: no prompt for read
-  await h.ok(c2, "page.snapshot");
-  expect((await settings(h)).sites[h.A]).toBeUndefined();
-  // a higher level asks again; Always stores exactly the requested level
-  await h.setPolicies({}, { sites: { [h.A]: { preapproved: { c: true } } }, devAllowSensitive: false });
-  const a = await h.answerPrompt("always", () => h.ok(c2, "js.eval", { expression: "1+1" }));
-  expect(a.title).toContain(`full access to ${h.A}`);
-  expect((await settings(h)).sites[h.A].policy).toBe("full");
-  // another session now needs no prompt on A
-  const c3 = await h.mcp({ label: "third" });
-  await h.ok(c3, "nav.goto", { url: `${h.A}/index.html` });
-  // ...but still has no grant for B
-  const d3 = await h.answerPrompt("deny", () => h.call(c3, "nav.goto", { url: `${h.B}/index.html` }));
-  expect((d3.result as any).text).toContain("PERMISSION_DENIED");
-});
-
-test("#12 identical pending requests share one prompt (FIFO)", async ({ h }) => {
-  await h.setPolicies({}, { paused: false, devAllowSensitive: false });
-  const c = await h.mcp({ label: "dup" });
-  await h.answerPrompt("once", () => h.ok(c, "tabs", { action: "new" }).then(() => h.ok(c, "nav.goto", { url: `${h.B}/index.html` })));
-  // two snapshots on the same origin + level from one session while nothing is granted for A
-  const t = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
-  const p1 = h.call(c, "nav.goto", { url: `${h.A}/index.html`, tabId: t });
-  const p2 = h.call(c, "nav.goto", { url: `${h.A}/article.html` });
-  await expect.poll(async () => (await h.pendingPrompts()).length, { timeout: 10000 }).toBe(1);
-  const [p] = await h.pendingPrompts();
-  expect(p.origin).toBe(h.A);
-  await h.sw.evaluate((id) => (globalThis as any).__tabagent.answerPrompt(id, "once"), p.promptId);
-  const [r1, r2] = await Promise.all([p1, p2]);
-  expect(r1.isError).toBe(false);
-  expect(r2.isError).toBe(false);
-  // a late answer for a settled prompt does nothing
-  expect(await h.sw.evaluate((id) => (globalThis as any).__tabagent.answerPrompt(id, "always"), p.promptId)).toBe(false);
-  expect((await settings(h)).sites[h.A]).toBeUndefined();
-});
-
-test("#12/#14 prompt sets the badge to ! and an informational banner without buttons", async ({ h }) => {
-  await h.setPolicies({ [h.A]: "read" }, { paused: false, devAllowSensitive: false });
-  const c = await h.mcp({ label: "badger" });
-  await h.ok(c, "tabs", { action: "new" });
-  const pend = h.call(c, "nav.goto", { url: `${h.A}/index.html` });
-  await expect.poll(async () => (await h.pendingPrompts()).length, { timeout: 10000 }).toBe(1);
-  await expect.poll(async () => (await h.sw.evaluate(() => (globalThis as any).__tabagent.badge())).text).toBe("!");
-  const [p] = await h.pendingPrompts();
-  expect(p.reasons.join(" ")).toContain('Site is set to "read"');
-  await h.sw.evaluate((id) => (globalThis as any).__tabagent.answerPrompt(id, "deny"), p.promptId);
-  expect((await pend).text).toContain("PERMISSION_DENIED");
-  await expect.poll(async () => (await h.sw.evaluate(() => (globalThis as any).__tabagent.badge())).text).not.toBe("!");
-});
-
-test("#12 denylist (editable) and hard-denied pages (not unlockable)", async ({ h }) => {
+test("D17 interim policy: own tabs only, browser pages and the Web Store refused", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
+  const a = await h.mcp({ label: "agent-a" });
+  const b = await h.mcp({ label: "agent-b" });
+  const ta = (await h.ok(a, "tabs", { action: "new", url: `${h.A}/index.html` })).json.tabId;
+  // another session's tab
+  for (const [tool, args] of [
+    ["nav.reload", { tabId: ta }],
+    ["nav.goto", { tabId: ta, url: `${h.A}/p/x` }],
+    ["tabs", { action: "select", tabId: ta }],
+    ["tabs", { action: "close", tabId: ta }],
+  ] as const) {
+    const r = await h.call(b, tool, args);
+    expect(r.text, `${tool} ${JSON.stringify(args)}`).toMatch(/^TAB_BUSY/);
+  }
+  // a tab nobody owns (the user's own tab)
+  const user = await h.ctx.newPage();
+  await user.goto(`${h.A}/p/user`);
+  const userTab = await h.sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, `${h.A}/p/user`);
+  const r = await h.call(a, "nav.reload", { tabId: userTab });
+  expect(r.text).toMatch(/^NOT_FOUND/);
+  expect(user.url()).toBe(`${h.A}/p/user`);
+  // no tabs yet -> NOT_FOUND with the hint
+  const fresh = await h.mcp({ label: "agent-c" });
+  expect((await h.call(fresh, "nav.back")).text).toMatch(/^NOT_FOUND: This session has no tabs yet\nHint: call tabs new/);
+  // hard denylist, even with devAllowSensitive on
   await h.trustFixtures();
-  const c = await h.mcp();
-  const r = await h.call(c, "nav.goto", { url: "https://accounts.google.com/" });
-  expect(r.text).toContain("PERMISSION_DENIED");
-  expect(r.text).toContain("denylist");
-  const ch = await h.call(c, "nav.goto", { url: "chrome://settings" });
-  expect(ch.text).toContain("PERMISSION_DENIED");
-  // Always on a hard-denied origin never unlocks it
-  await h.setPolicies({ [h.A]: "full", "https://chromewebstore.google.com": "full" }, { devAllowSensitive: true });
-  const ws = await h.call(c, "nav.goto", { url: "https://chromewebstore.google.com/" });
-  expect(ws.text).toContain("PERMISSION_DENIED");
-  // removing a denylist entry returns the origin to ask
-  const perm = await h.ok(c, "session.permissions", { url: "https://accounts.google.com/" });
-  expect(perm.json.level).toBe("deny");
-  const s = await settings(h);
-  await h.sw.evaluate((list) => (globalThis as any).__tabagent.updateSettings({ denylist: list }), s.denylist.filter((g: string) => g !== "accounts.google.com"));
-  const perm2 = await h.ok(c, "session.permissions", { url: "https://accounts.google.com/" });
-  expect(perm2.json.level).toBe("ask");
-  await h.sw.evaluate((list) => (globalThis as any).__tabagent.updateSettings({ denylist: list }), s.denylist);
+  for (const url of ["chrome://settings", "chrome-extension://pjpcgiijlaafoafgibplighdenoandid/sidepanel.html", "https://chromewebstore.google.com/"]) {
+    const d = await h.call(a, "nav.goto", { url });
+    expect(d.text, url).toMatch(/^PERMISSION_DENIED: TabAgent cannot act on browser pages/);
+    const n = await h.call(a, "tabs", { action: "new", url });
+    expect(n.text, url).toMatch(/^PERMISSION_DENIED/);
+  }
+  expect((await h.ok(a, "tabs", { action: "list" })).json.tabs.map((t: any) => t.url)).toEqual([`${h.A}/index.html`]);
+  await user.close();
 });
 
-test("#13 login form: submit with a password prompts; deny leaves the page unchanged; feed masks the password", async ({ h }) => {
-  await h.trustFixtures({ devAllowSensitive: false });
-  const c = await h.mcp({ label: "login" });
-  await h.ok(c, "nav.goto", { url: `${h.A}/login.html` });
-  const s = await h.ok(c, "page.snapshot");
-  await h.ok(c, "act.type", { ref: Harness.ref(s.text, /textbox "Username"/), text: "neo" });
-  await h.ok(c, "act.type", { ref: Harness.ref(s.text, /textbox "Password"/), text: "hunter2-secret" });
-  const sub = await h.answerPrompt("deny", () => h.call(c, "form.submit", {}));
-  expect((sub.result as any).text).toContain("PERMISSION_DENIED");
-  expect(sub.reasons).toContain("password");
-  expect((await h.ok(c, "page.text", {})).text).toContain("NOT SUBMITTED");
-  // Enter inside the form is the same gate
-  const enter = await h.answerPrompt("deny", () => h.call(c, "act.press", { key: "Enter", ref: Harness.ref(s.text, /textbox "Password"/) }));
-  expect((enter.result as any).text).toContain("PERMISSION_DENIED");
-  // clicking the submit control is the same gate
-  const click = await h.answerPrompt("deny", () => h.call(c, "act.click", { ref: Harness.ref(s.text, /button "Sign in"/) }));
-  expect((click.result as any).text).toContain("PERMISSION_DENIED");
-  expect((await h.ok(c, "page.text", {})).text).toContain("NOT SUBMITTED");
-  // live feed shows the action but never the password
-  const feed = JSON.stringify(await h.sw.evaluate(() => (globalThis as any).__tabagent.feed()));
-  expect(feed).toContain("act.type");
-  expect(feed).not.toContain("hunter2-secret");
-  expect(feed).toContain("••••");
-  const panel = await h.openPanel();
-  await panel.waitForSelector("#feed li[data-feed-id]");
-  expect(await panel.textContent("#feed")).not.toContain("hunter2-secret");
-  await panel.close();
-});
-
-test("#13 card form + delete button prompt; pre-approval is per origin per category", async ({ h }) => {
-  await h.trustFixtures({ devAllowSensitive: false });
-  const c = await h.mcp({ label: "shopper" });
-  await h.ok(c, "nav.goto", { url: `${h.A}/checkout.html` });
-  await h.ok(c, "form.fill", { fields: { "Card number": "4242 4242 4242 4242", "Name on card": "Neo" } });
-  const s = await h.ok(c, "page.snapshot");
-  const pay = Harness.ref(s.text, /button "Pay \$42\.00"/);
-  const denied = await h.answerPrompt("deny", () => h.call(c, "act.click", { ref: pay }));
-  expect(denied.title).toContain('click "Pay $42.00"');
-  expect(denied.reasons).toContain("payment card");
-  expect((denied.result as any).text).toContain("PERMISSION_DENIED");
-  expect((await h.ok(c, "page.text", {})).text).toContain("UNPAID");
-  await h.answerPrompt("once", () => h.ok(c, "act.click", { ref: pay }));
-  expect((await h.ok(c, "page.text", {})).text).toContain("PAID");
-  const del = Harness.ref(s.text, /Delete account/);
-  const alw = await h.answerPrompt("always", () => h.ok(c, "act.click", { ref: del }));
-  expect(alw.title).toContain("Delete account");
-  const pre = (await settings(h)).sites[h.A].preapproved;
-  expect(pre.b).toBe(true);
-  expect(pre.c).toBeUndefined();
-  // pre-approved now for b on A: no prompt
-  await h.ok(c, "act.click", { ref: del });
-  // ...but not for c on A
-  const js = await h.answerPrompt("deny", () => h.call(c, "js.eval", { expression: "1" }));
-  expect((js.result as any).text).toContain("PERMISSION_DENIED");
-  // ...and not for b on B
-  await h.ok(c, "nav.goto", { url: `${h.B}/checkout.html` });
-  const s2 = await h.ok(c, "page.snapshot");
-  const delB = await h.answerPrompt("deny", () => h.call(c, "act.click", { ref: Harness.ref(s2.text, /Delete account/) }));
-  expect((delB.result as any).text).toContain("PERMISSION_DENIED");
-  expect((await h.ok(c, "page.text", {})).text).toContain("UNPAID");
-});
-
-test("#13 static categories are gated in the router: nav.wait fn, cookies, storage", async ({ h }) => {
-  await h.trustFixtures({ devAllowSensitive: false });
-  const c = await h.mcp({ label: "static" });
-  await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
-  // nav.wait without fn is not sensitive
-  await h.ok(c, "nav.wait", { for: "load", timeout: 5000 });
-  const fn = await h.answerPrompt("deny", () => h.call(c, "nav.wait", { for: "fn", value: "true", timeout: 2000 }));
-  expect((fn.result as any).text).toContain("PERMISSION_DENIED");
-  expect(fn.prompt.sensitive.category).toBe("c");
-  const ck = await h.answerPrompt("deny", () => h.call(c, "cookies.get"));
-  expect(ck.prompt.sensitive.category).toBe("d");
-  const st = await h.answerPrompt("once", () => h.ok(c, "storage.get", { kind: "local" }));
-  expect(st.prompt.sensitive.category).toBe("d");
-  // devAllowSensitive passes a-e without prompting
-  await h.trustFixtures({ devAllowSensitive: true });
-  await h.ok(c, "cookies.get");
-});
-
-test("#14 kill switch: in-flight nav.wait returns KILLED, every call is KILLED until Resume, grants cleared", async ({ h }) => {
-  await h.setPolicies({}, { paused: false, devAllowSensitive: true });
-  const c = await h.mcp({ label: "killme" });
-  await h.answerPrompt("once", () => h.ok(c, "nav.goto", { url: `${h.A}/index.html` }));
-  const panel = await h.openPanel();
-  const long = h.call(c, "nav.wait", { for: "text", value: "never appears on this page", timeout: 60000 });
-  await expect.poll(() => h.sw.evaluate(() => (globalThis as any).__tabagent.inflight()), { timeout: 10000 }).toBeGreaterThan(0);
-  const started = Date.now();
-  await panel.click("#killBtn");
-  const r = await long;
-  expect(r.text).toContain("KILLED");
-  expect(Date.now() - started).toBeLessThan(10000);
-  await panel.waitForSelector("#resumeBtn:not([hidden])");
-  expect((await h.sw.evaluate(() => (globalThis as any).__tabagent.badge())).text).toBe("⏸");
-  expect((await h.call(c, "page.snapshot")).text).toContain("KILLED");
-  // a brand-new session is refused too
-  const fresh = await h.mcp({ label: "fresh" });
-  expect((await h.call(fresh, "tabs", { action: "list" })).text).toContain("KILLED");
-  // debuggers detached
-  expect(await h.sw.evaluate(() => (globalThis as any).__tabagent.attachedTabs())).toEqual([]);
-  await panel.click("#resumeBtn");
-  await panel.waitForSelector("#killBtn:not([hidden])");
-  // allow-once grant is gone: the same session is asked again
-  const again = await h.answerPrompt("once", () => h.ok(c, "page.snapshot"));
-  expect(again.title).toContain(h.A);
-  // feed shows the calls
-  await panel.reload();
-  await panel.waitForSelector("#feed li[data-feed-id]");
-  expect(await panel.textContent("#feed")).toContain("nav.wait");
-  await panel.close();
-});
-
-test("#14 settings: revoke a site policy from the side panel", async ({ h }) => {
-  await h.setPolicies({ [h.A]: "full" }, { devAllowSensitive: true });
-  const panel = await h.openPanel();
-  await panel.click("#settingsBox summary");
-  await panel.waitForSelector(`button[data-del="${h.A}"]`);
-  await panel.click(`button[data-del="${h.A}"]`);
-  await expect.poll(async () => (await settings(h)).sites[h.A]).toBeUndefined();
-  await panel.fill("#newOrigin", h.B);
-  await panel.selectOption("#newLevel", "read");
-  await panel.click("#addSite button[type=submit]");
-  await expect.poll(async () => (await settings(h)).sites[h.B]?.policy).toBe("read");
-  await panel.close();
-});
-
-test("#15 scoped tokens: cap and site limits; audit log never has raw card numbers", async ({ h }) => {
-  await h.trustFixtures();
-  const { execFileSync } = await import("node:child_process");
-  const cli = join(process.cwd(), "packages/bridge/dist/cli.js");
-  const env = { ...process.env, TABAGENT_HOME: h.home };
-  const readTok = execFileSync(process.execPath, [cli, "token", "create", "--name", "reader", "--cap", "read"], { env }).toString().trim();
-  const siteTok = execFileSync(process.execPath, [cli, "token", "create", "--name", "bonly", "--cap", "act", "--sites", "127.0.0.1"], { env }).toString().trim();
-  const call = (tok: string, tool: string, params: unknown) =>
-    fetch(`http://127.0.0.1:${h.port}/v1/call/${tool}`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ params }) }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
-  // D16: navigation is act, so a read token cannot navigate
-  let r = await call(readTok, "nav.goto", { url: `${h.A}/index.html` });
-  expect(r.status).toBe(403);
-  expect(r.body.error.message).toContain('limited to "read"');
-  r = await call(siteTok, "nav.goto", { url: `${h.A}/index.html` });
-  expect(r.status).toBe(403);
-  expect(r.body.error.message).toContain("not allowed on localhost");
-  r = await call(siteTok, "nav.goto", { url: `${h.B}/index.html` });
-  expect(r.status).toBe(200);
-  r = await call("bogus", "nav.goto", { url: `${h.B}/index.html` });
-  expect(r.status).toBe(401);
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/checkout.html` });
-  await h.ok(c, "form.fill", { fields: { "Card number": "4242424242424242" } });
-  const log = readFileSync(join(h.home, "audit.jsonl"), "utf8");
-  expect(log).toContain('"tool":"form.fill"');
-  expect(log).not.toContain("4242424242424242");
-});
-
-test("bridge rejects web pages: HTTP Origin, WebSocket origin, Host header", async ({ h }) => {
+test("bridge rejects web pages: HTTP Origin, page-origin WebSocket, Host header", async ({ h }) => {
   await h.trustFixtures();
   const r = await fetch(`http://127.0.0.1:${h.port}/v1/status`, { headers: { origin: "http://evil.example", authorization: "Bearer x" } });
   expect(r.status).toBe(403);
+  // a real page-origin WebSocket from the fixture page fails
+  const page = await h.ctx.newPage();
+  await page.goto(`${h.A}/index.html`);
+  const fromPage = await page.evaluate(
+    (port) =>
+      new Promise<string>((res) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ext`);
+        ws.onopen = () => res("open");
+        ws.onerror = () => res("error");
+        ws.onclose = () => res("closed");
+      }),
+    h.port,
+  );
+  expect(fromPage).not.toBe("open");
+  await page.close();
   const ws = new WebSocket(`ws://127.0.0.1:${h.port}/ext`, { origin: "http://evil.example" });
   const code = await new Promise<string>((res) => {
     ws.on("unexpected-response", (_q, resp) => res(String(resp.statusCode)));
@@ -260,14 +68,14 @@ test("bridge rejects web pages: HTTP Origin, WebSocket origin, Host header", asy
   expect(code).not.toBe("open");
   const ws2 = new WebSocket(`ws://127.0.0.1:${h.port}/ext`, { origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" });
   const msg = await new Promise<string>((res) => {
-    ws2.on("open", () => ws2.send(JSON.stringify({ type: "hello", protocolVersion: 1, extensionVersion: "x", secret: "wrong", version: "x", extensionId: "x" })));
+    ws2.on("open", () => ws2.send(JSON.stringify({ type: "hello", protocolVersion: 1, extensionVersion: "x", secret: "wrong" })));
     ws2.on("message", (d) => res(String(d)));
     ws2.on("error", (e) => res("error:" + e.message));
   });
   expect(msg).toContain("UNAUTHORIZED");
   const { request } = await import("node:http");
   const status = await new Promise<number>((res) => {
-    const rq = request({ host: "127.0.0.1", port: h.port, path: "/health", headers: { host: "evil.example" } }, (resp) => res(resp.statusCode ?? 0));
+    const rq = request({ host: "127.0.0.1", port: h.port, path: "/v1/health", headers: { host: "evil.example" } }, (resp) => res(resp.statusCode ?? 0));
     rq.end();
   });
   expect(status).toBe(403);
@@ -292,4 +100,29 @@ test("D7: content scripts cannot read the secret from storage.local", async ({ h
     return r.result as string;
   }, t.json.tabId);
   expect(res).not.toContain('"secret"');
+  expect((await h.sw.evaluate(() => (globalThis as any).__tabagent.getSettings())).secret).toBeTruthy();
+});
+
+test("the service worker restarts and reconnects without re-pairing", async ({ h }) => {
+  const c = await h.mcp();
+  const t = (await h.ok(c, "tabs", { action: "new", url: `${h.A}/index.html` })).json.tabId;
+  const count = (re: RegExp) => h.bridgeLog.match(re)?.length ?? 0;
+  const paired = count(/Paired with extension/g);
+  const connects = count(/Extension connected/g);
+  // Stop the extension's service worker (as Chrome does when it idles), then wake it from an extension page.
+  const internals = await h.ctx.newPage();
+  await internals.goto("chrome://serviceworker-internals/");
+  await internals.getByText("Stop", { exact: true }).first().click();
+  await expect.poll(() => internals.evaluate(() => document.body.innerText.includes("Running Status: STOPPED")), { timeout: 10000 }).toBe(true);
+  await expect.poll(() => count(/Extension disconnected/g), { timeout: 10000 }).toBeGreaterThan(0);
+  await internals.close();
+  const panel = await h.openPanel();
+  await panel.waitForFunction(() => document.getElementById("status")?.textContent === "Connected", null, { timeout: 30000 });
+  await panel.close();
+  expect(count(/Extension connected/g)).toBe(connects + 1);
+  expect(count(/Paired with extension/g)).toBe(paired);
+  // tab ownership came back from chrome.storage.session (D11)
+  const list = (await h.ok(c, "tabs", { action: "list" })).json.tabs;
+  expect(list.map((x: any) => x.tabId)).toContain(t);
+  expect((await h.ok(c, "nav.reload", { tabId: t })).json.url).toBe(`${h.A}/index.html`);
 });
