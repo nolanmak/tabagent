@@ -1229,7 +1229,7 @@ function isSensitiveInput(el: El): boolean {
   if (!(el instanceof HTMLInputElement)) return false;
   if (el.type === "password") return true;
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
-  if (/^cc-(number|csc|exp)/.test(ac)) return true;
+  if (/^cc-(number|csc|exp)/.test(ac) || /\bone-time-code\b/.test(ac)) return true;
   return SENSITIVE_INPUT.test(el.name || "") || SENSITIVE_INPUT.test(el.id || "");
 }
 

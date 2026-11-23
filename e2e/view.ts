@@ -24,7 +24,31 @@ export interface View {
   all: string;
 }
 
+/** Parse a JSON-looking string (wrapped page data may hold arrays/objects as JSON text). */
+function maybeJson(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const t = v.trim();
+  if (!/^[[{]/.test(t)) return v;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return v;
+  }
+}
+
+/** "key:\n<<<PAGE_DATA n ... PAGE_DATA n>>>" blocks hoisted after the first line (D21 bridge layout). */
+function hoisted(text: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const re = /^([A-Za-z_][\w.]*):\n<<<PAGE_DATA ([0-9a-zA-Z]+)\n([\s\S]*?)\nPAGE_DATA \2>>>/gm;
+  for (const m of text.matchAll(re)) out[m[1]] = maybeJson(m[3]);
+  // unwrapped blocks (TabAgent text such as "(no changes)")
+  const re2 = /^(snapshotDiff|snapshot):\n(?!<<<PAGE_DATA)([^\n]*)$/gm;
+  for (const m of text.matchAll(re2)) if (!(m[1] in out)) out[m[1]] = m[2];
+  return out;
+}
+
 export function view(r: CallResult): View {
+  const blocks = hoisted(r.text);
   const raw = strip(r.text);
   let json: any = null;
   try {
@@ -32,7 +56,10 @@ export function view(r: CallResult): View {
   } catch {
     json = r.json ? unwrapDeep(r.json) : null;
   }
+  if (!json && Object.keys(blocks).length) json = {};
   if (json && typeof json === "object") {
+    for (const [k, v] of Object.entries(json)) json[k] = maybeJson(v);
+    json = { ...json, ...blocks };
     const res = json.result && typeof json.result === "object" && !Array.isArray(json.result) ? json.result : null;
     json = { ...(res ?? {}), ...json, ...(json.__side ?? {}), ...(res?.__side ?? {}) };
   }
