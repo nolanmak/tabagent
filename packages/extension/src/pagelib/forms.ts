@@ -176,7 +176,7 @@ export function submitInfo(self: El | null): Ret {
   const submit = Array.from(form.querySelectorAll("button,input[type=submit],input[type=image]")).find((b) => isSubmitControl(b) && !isDisabled(b) && !hiddenDeep(b)) ?? null;
   const elements: El[] = [form];
   if (submit) elements.push(submit);
-  return { value: { form: 0, submit: submit ? 1 : null, control: submit ? nameOf(submit) : formLabel(form), fields: fieldsWithValues(form) }, elements };
+  return { value: { el: 0, submit: submit ? 1 : null, control: submit ? nameOf(submit) : formLabel(form), fields: fieldsWithValues(form) }, elements };
 }
 
 export function requestSubmit(form: El, submitter?: El) {

@@ -513,8 +513,10 @@ function microFields(paths: Record<string, string>): Record<string, string> {
 const NEXT_TEXT = /^(next( page)?|next ›|next »|more results|›|»|→|>)$/i;
 
 export function nextControl(_self: unknown, selector?: string): Ret<{ el: number; disabled: boolean; href: string | null } | null> {
-  let el: El | null = null;
-  if (selector) el = deepQueryAll(document, selector)[0] ?? null;
+  let el: El | null = _self instanceof Element ? _self : null;
+  if (el) {
+    /* the caller passed the next control's ref */
+  } else if (selector) el = deepQueryAll(document, selector)[0] ?? null;
   else {
     el = deepQueryAll(document, "a[rel~=next],button[rel~=next]").find((e) => !hiddenDeep(e)) ?? null;
     el ??=

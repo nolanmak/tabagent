@@ -97,6 +97,7 @@ describe("gate inputs", () => {
     (document.getElementById("p") as HTMLInputElement).value = "hunter2";
     const r = submitInfo(document.getElementById("u")).value as any;
     expect(r.submit).toBe(1);
+    expect(r.el).toBe(0);
     expect(r.control).toBe("Sign in");
     const c = submitConfirmation({ control: r.control, fields: r.fields });
     expect(c.reasons.join()).toContain("Username: neo");
