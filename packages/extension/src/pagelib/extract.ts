@@ -15,7 +15,7 @@ function hiddenSelf(el: El): boolean {
   return !!st && (st.display === "none" || st.visibility === "hidden");
 }
 
-function hiddenDeep(el: El): boolean {
+export function hiddenDeep(el: El): boolean {
   for (let cur: El | null = el; cur; cur = cur.parentElement) if (hiddenSelf(cur)) return true;
   return false;
 }
