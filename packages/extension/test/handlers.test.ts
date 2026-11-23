@@ -1,7 +1,7 @@
 // Handler plumbing with a fake Driver: D14 side effects via __side, D24 diffs,
-// D28 DIALOG_OPEN, D18(a)(b) gates, #21 lite UNSUPPORTED sweep.
+// D28 DIALOG_OPEN, D18(a)(b) gates.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { TOOLS, TabAgentError } from "@tabagent/protocol";
+import { TOOLS } from "@tabagent/protocol";
 
 const state = vi.hoisted(() => ({ dialog: null as any, drv: null as any, sensitive: [] as any[], url: "http://x.test/a" }));
 
@@ -26,7 +26,7 @@ vi.mock("../src/background/refstore", async () => {
 const { actHandlers } = await import("../src/background/handlers/act");
 const { pageHandlers } = await import("../src/background/handlers/page");
 const { navHandlers } = await import("../src/background/handlers/nav");
-const { assertLiteSupport, assertNoDialog, levelOf } = await import("../src/background/tabctx");
+const { assertNoDialog, levelOf } = await import("../src/background/tabctx");
 const { baselines } = await import("../src/background/refstore");
 
 function fakeDriver(kind: "cdp" | "lite" = "cdp") {
@@ -40,7 +40,7 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     url: "http://x.test/a",
     dlg: null,
     setSnap: (l: string[]) => (snap = l),
-    snapshot: async () => ({ text: snap.join("\n"), lines: snap, refs: ["e1"], shown: [], truncated: false, collapsed: 0, omitted: 0, tokens: 1 }),
+    snapshot: async () => ({ text: snap.join("\n"), lines: snap, refs: ["e1"], shown: [], truncated: false, omitted: 0, tokens: 1 }),
     find: async () => ({ matches: [], truncated: false }),
     call: async (fn: string) => {
       log.push(`call:${fn}`);
@@ -162,39 +162,7 @@ describe("D18(a)(b) gates", () => {
   });
 });
 
-describe("#21 lite support matrix", () => {
-  it("every tool has a lite value; unsupported tools return UNSUPPORTED in lite mode without touching the page", () => {
-    const lite = fakeDriver("lite");
-    for (const t of TOOLS as unknown as any[]) {
-      expect(["supported", "degraded", "unsupported"], t.name).toContain(t.lite);
-      if (t.lite === "unsupported") {
-        let err: unknown;
-        try {
-          assertLiteSupport(lite, t);
-        } catch (e) {
-          err = e;
-        }
-        expect((err as TabAgentError)?.code, t.name).toBe("UNSUPPORTED");
-      } else expect(() => assertLiteSupport(lite, t)).not.toThrow();
-      expect(() => assertLiteSupport(fakeDriver("cdp"), t)).not.toThrow();
-    }
-    expect(lite.log).toEqual([]);
-  });
-});
-
 describe("page / nav handlers", () => {
-  it("page.snapshot diff:true without a baseline returns the full snapshot and says so", async () => {
-    const r: any = await pageHandlers["page.snapshot"](ctx("page.snapshot", { diff: true }));
-    expect(r.full).toBe(true);
-    expect(r.snapshot).toContain('button "Go"');
-    const r2: any = await pageHandlers["page.snapshot"](ctx("page.snapshot", { diff: true }));
-    expect(r2).toMatchObject({ diff: true, snapshot: "(no changes)" });
-    // root and full-mode snapshots don't move the baseline
-    state.drv.setSnap(["- x"]);
-    await pageHandlers["page.snapshot"](ctx("page.snapshot", { mode: "full" }));
-    expect(baselines.get("S", 1)).toEqual(["- main", '  - button "Go" [ref=e1]']);
-  });
-
   it("page.screenshot maps the spike's fullPage to target=full; page.find validates", async () => {
     const r: any = await pageHandlers["page.screenshot"](ctx("page.screenshot", { fullPage: true }));
     expect(r.o.target).toBe("full");
@@ -214,8 +182,6 @@ describe("page / nav handlers", () => {
     await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "url", value: "/(/" }))).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(await navHandlers["nav.wait"](ctx("nav.wait", { for: "url", value: "/zz+$/", timeout: 500 }))).toMatchObject({ ok: true });
     expect(await navHandlers["nav.wait"](ctx("nav.wait", { for: "load" }))).toMatchObject({ ok: true });
-    state.drv.kind = "lite";
-    await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "true" }))).rejects.toMatchObject({ code: "UNSUPPORTED" });
   });
 
   it("levelOf follows the registry (nav tools are act, D16)", () => {

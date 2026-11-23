@@ -5,7 +5,6 @@ import { TabAgentError, type SessionMeta } from "@tabagent/protocol";
 import { detachTab } from "./cdp";
 import { disposeDrivers } from "./driver";
 import { broadcast } from "./feed";
-import { clearGrants, prompts } from "./permissions";
 import { getSettings } from "./settings";
 
 type GroupColor = "grey" | "blue" | "red" | "yellow" | "green" | "pink" | "purple" | "cyan" | "orange";
@@ -67,8 +66,6 @@ export function __resetForTests() {
   owner.clear();
   grouping.clear();
   locks.clear();
-  privateTabs.clear();
-  handoffs.clear();
   nextIndex = 0;
   restored = null;
 }
@@ -144,7 +141,6 @@ async function groupTab(s: Session, tabId: number) {
 }
 
 export async function addTab(s: Session, tabId: number, opts: { attached?: boolean; makeActive?: boolean } = {}) {
-  if (privateTabs.has(tabId)) throw new TabAgentError("PERMISSION_DENIED", `Tab ${tabId} is a private sign-in tab`);
   const o = owner.get(tabId);
   if (o && o !== s.meta.id) throw new TabAgentError("TAB_BUSY", `Tab ${tabId} belongs to another agent session (${sessions.get(o)?.meta.label ?? o})`);
   if (!s.tabIds.includes(tabId)) s.tabIds.push(tabId);
@@ -176,97 +172,20 @@ export async function newTab(s: Session, url = "about:blank"): Promise<chrome.ta
   return tab;
 }
 
-// ---------------------------------------------------------------------------
-// M6 auth hooks: private sign-in tabs and user handoff.
-// ---------------------------------------------------------------------------
-const privateTabs = new Set<number>();
-export interface HandoffInfo {
-  tabId: number;
-  sessionId: string;
-  sessionLabel: string;
-  origin: string;
-  reason: string;
-  created: number;
-}
-const handoffs = new Map<number, { info: HandoffInfo; resolve: (r: "done" | "cancel") => void }>();
-
-/** A private auth tab belongs to no session, is never listed, and every agent command naming it is refused. */
-export async function markPrivateTab(tabId: number) {
-  privateTabs.add(tabId);
-  // never owned: drop it from any session without detaching (the auth flow may be driving it)
-  const sid = owner.get(tabId);
-  if (sid) {
-    owner.delete(tabId);
-    const s = sessions.get(sid);
-    if (s) {
-      s.tabIds = s.tabIds.filter((t) => t !== tabId);
-      s.attached = s.attached.filter((t) => t !== tabId);
-      if (s.active === tabId) s.active = s.tabIds[s.tabIds.length - 1];
-      await persist();
-    }
-  }
-}
-export function unmarkPrivateTab(tabId: number) {
-  privateTabs.delete(tabId);
-}
-export function isPrivateTab(tabId: number) {
-  return privateTabs.has(tabId);
-}
-
-/**
- * Hand a tab to the user (e.g. to finish a sign-in by hand). While in handoff, agent commands on it
- * return TAB_BUSY. Resolves when the user presses Done or Cancel in the side panel.
- */
-export function startHandoff(info: Omit<HandoffInfo, "created">): Promise<"done" | "cancel"> {
-  endHandoff(info.tabId, "cancel");
-  return new Promise((resolve) => {
-    handoffs.set(info.tabId, { info: { ...info, created: Date.now() }, resolve });
-    broadcast({ type: "handoffs", handoffs: listHandoffs() });
-  });
-}
-export function endHandoff(tabId: number, result: "done" | "cancel"): boolean {
-  const h = handoffs.get(tabId);
-  if (!h) return false;
-  handoffs.delete(tabId);
-  h.resolve(result);
-  broadcast({ type: "handoffs", handoffs: listHandoffs() });
-  return true;
-}
-/** Kill switch: every open handoff ends as "cancel". */
-export function endAllHandoffs() {
-  for (const tabId of [...handoffs.keys()]) endHandoff(tabId, "cancel");
-}
-export function listHandoffs(): HandoffInfo[] {
-  return [...handoffs.values()].map((h) => h.info);
-}
-export function inHandoff(tabId: number) {
-  return handoffs.has(tabId);
-}
-
-function refusePrivateOrHandoff(tabId: number) {
-  if (privateTabs.has(tabId)) throw new TabAgentError("PERMISSION_DENIED", `Tab ${tabId} is a private sign-in tab`, "Agents cannot use private sign-in tabs.");
-  if (handoffs.has(tabId)) throw new TabAgentError("TAB_BUSY", `Tab ${tabId} is handed to the user`, "Wait until the user presses Done in the TabAgent side panel, then retry.");
-}
-
 export const NO_TABS_HINT = "call tabs new (tabs action=new), or nav.goto with a url";
 
 /** Resolve the tab a command should act on (D9, D10). */
 export async function resolveTab(s: Session, tabId?: number, create = false): Promise<number> {
   await restoreSessions();
   if (tabId != null) {
-    refusePrivateOrHandoff(tabId);
     const o = owner.get(tabId);
     if (o === s.meta.id) return tabId;
     if (o) throw new TabAgentError("TAB_BUSY", `Tab ${tabId} belongs to another agent session (${sessions.get(o)?.meta.label ?? o})`);
     throw new TabAgentError("NOT_FOUND", `Tab ${tabId} is not in this session`, "Use tabs action=attach to adopt a user tab (asks the user), or tabs action=new.");
   }
-  if (s.active != null && s.tabIds.includes(s.active)) {
-    refusePrivateOrHandoff(s.active);
-    return s.active;
-  }
+  if (s.active != null && s.tabIds.includes(s.active)) return s.active;
   if (s.tabIds.length) {
     s.active = s.tabIds[s.tabIds.length - 1];
-    refusePrivateOrHandoff(s.active);
     return s.active;
   }
   if (create) return (await newTab(s)).id!;
@@ -307,8 +226,6 @@ export async function endSession(id: string, how?: "collapse" | "close" | "keep"
   if (!s) return false;
   const mode = how ?? (await getSettings()).onSessionEnd;
   sessions.delete(id);
-  await clearGrants(id);
-  prompts.dropSession(id);
   for (const t of s.tabIds) {
     owner.delete(t);
     disposeDrivers(t);
@@ -361,7 +278,7 @@ export async function adoptOpened(openerTabId: number | undefined, tabId: number
   if (openerTabId == null || tabId == null) return;
   await restoreSessions();
   const sid = owner.get(openerTabId);
-  if (!sid || owner.has(tabId) || privateTabs.has(tabId) || privateTabs.has(openerTabId)) return;
+  if (!sid || owner.has(tabId)) return;
   const s = sessions.get(sid);
   if (!s) return;
   await addTab(s, tabId, { makeActive: false });
@@ -378,8 +295,6 @@ export async function onGroupChanged(tabId: number, groupId: number) {
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  privateTabs.delete(tabId);
-  endHandoff(tabId, "cancel");
   if (owner.has(tabId)) removeTab(tabId).catch(() => {});
   else {
     disposeDrivers(tabId);

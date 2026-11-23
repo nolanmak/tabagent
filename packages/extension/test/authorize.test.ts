@@ -6,11 +6,7 @@ const reg = (n: string) => getTool(n) as unknown as ToolLike;
 
 describe("requirementsFor: every D18 static path reaches the gate", () => {
   it.each([
-    ["js.eval", { expression: "1" }, "c"],
     ["nav.wait", { for: "fn", value: "true" }, "c"],
-    ["cookies.get", {}, "d"],
-    ["storage.get", { kind: "local" }, "d"],
-    ["network.get", { requestId: "1" }, "d"],
     ["act.upload", { ref: "e1", paths: ["/x"] }, "e"],
     ["downloads.read", { id: 1 }, "e"],
     ["tabs", { action: "attach" }, "f"],
@@ -21,13 +17,10 @@ describe("requirementsFor: every D18 static path reaches the gate", () => {
     for (const f of ["load", "networkidle", "selector", "text", "url"]) expect(requirementsFor(reg("nav.wait"), { for: f }).sensitive).toBeUndefined();
   });
   it("registry fallback map applies when the registry carries no category", () => {
-    expect(requirementsFor({ name: "js.eval", level: "full" }, {}).sensitive).toBe("c");
+    expect(requirementsFor({ name: "nav.wait", level: "read" }, { for: "fn" }).sensitive).toBe("c");
     expect(requirementsFor({ name: "nav.wait", level: "read" }, { for: "load" }).sensitive).toBeUndefined();
     expect(requirementsFor({ name: "nav.wait", level: "read", sensitive: true }, { for: "fn" }).sensitive).toBe("c");
     expect(requirementsFor({ name: "tabs", level: "none" }, { action: "attach" })).toMatchObject({ level: "read", sensitive: "f" });
-  });
-  it("category g is left to the auth handler", () => {
-    expect(requirementsFor({ name: "auth.login", level: "act", sensitive: "g" }, {}).sensitive).toBeUndefined();
   });
 });
 
@@ -48,12 +41,9 @@ describe("requirementsFor: levels and tab resolution", () => {
     for (const n of ["downloads.list", "downloads.wait", "session.info", "session.permissions", "session.end"]) expect(requirementsFor(reg(n) ?? { name: n, level: "none" }, {})).toMatchObject({ needsTab: false, level: null });
     expect(requirementsFor(reg("downloads.read"), { id: 1 })).toMatchObject({ urlSource: "download" });
   });
-  it("cookies.get may target a url param", () => {
-    expect(requirementsFor(reg("cookies.get"), {})).toMatchObject({ level: "full", urlSource: "tab-or-param", needsTab: true });
-  });
   it("every other site-scoped registry tool needs a tab and its registry level", () => {
     for (const t of TOOLS as unknown as ToolLike[]) {
-      if (["tabs", "nav.goto", "downloads.read", "cookies.get"].includes(t.name) || t.name.startsWith("downloads.") || t.name.startsWith("session.")) continue;
+      if (["tabs", "nav.goto", "downloads.read"].includes(t.name) || t.name.startsWith("downloads.") || t.name.startsWith("session.")) continue;
       const r = requirementsFor(t, {});
       expect(r.needsTab).toBe(true);
       expect(r.level).toBe(t.level === "none" ? null : t.level);

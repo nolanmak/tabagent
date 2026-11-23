@@ -1,18 +1,17 @@
-// tabagent CLI: serve | mcp | pair | status | tools | token | audit | skill | config | <tool>
+// tabagent CLI: serve | mcp | pair | status | tools | skill | config | <tool>
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, statSync, watchFile } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getTool, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
 import { parseFlags, toolParamsFromArgs, type Flags } from "./args";
 import { api, ensureDaemon, health, restCall } from "./client";
-import { auditPath, configPath, loadConfig } from "./config";
+import { configPath, loadConfig } from "./config";
 import { Daemon } from "./daemon";
 import { buildMcpServer } from "./mcp";
-import { auditTail, configCommand, formatAuditLine, helpText, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out } from "./commands";
+import { configCommand, helpText, skillCommand, toolOutput, toolsCommand, type Out } from "./commands";
 import { BRIDGE_VERSION } from "./version";
-import { authCli } from "./auth/cli-entry";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = fileURLToPath(import.meta.url);
@@ -60,7 +59,7 @@ async function cmdMcp(f: Flags) {
   } catch (e) {
     die((e as Error).message);
   }
-  const token = process.env.TABAGENT_TOKEN ?? cfg.secret;
+  const token = cfg.secret;
   const sessionId = `${process.pid}-${randomBytes(3).toString("hex")}`;
   let client = typeof f.label === "string" ? f.label : "";
 
@@ -151,22 +150,6 @@ function print(o: Out): void {
   if (o.code) process.exit(o.code);
 }
 
-function cmdAudit(rest: string[], f: Flags) {
-  if (rest[0] !== "tail") die("Usage: tabagent audit tail [-n 50] [--follow]");
-  print(auditTail(Number(f.n ?? 30)));
-  const p = auditPath();
-  if ((f.follow || f.f) && existsSync(p)) {
-    let size = statSync(p).size;
-    watchFile(p, { interval: 500 }, () => {
-      const buf = readFileSync(p);
-      if (buf.length < size) size = 0; // rotated
-      const fresh = buf.subarray(size).toString("utf8");
-      size = buf.length;
-      for (const l of fresh.split("\n").filter(Boolean)) console.log(formatAuditLine(l));
-    });
-  }
-}
-
 export function skillSource(): string {
   for (const p of [join(HERE, "../skill/SKILL.md"), join(HERE, "../../skill/SKILL.md")]) if (existsSync(p)) return p;
   die("SKILL.md not found in the package");
@@ -185,7 +168,7 @@ async function cmdTool(name: string, args: string[]) {
   const cfg = portOf(f);
   if (!(await health(cfg.port))) die("NO_EXTENSION: Bridge is not running. Start it with `tabagent serve`.");
   const resp = await restCall(
-    { port: cfg.port, token: process.env.TABAGENT_TOKEN ?? cfg.secret, headers: typeof f.session === "string" ? { "x-tabagent-session": f.session } : {} },
+    { port: cfg.port, token: cfg.secret, headers: typeof f.session === "string" ? { "x-tabagent-session": f.session } : {} },
     tool.name,
     params,
   );
@@ -210,21 +193,11 @@ switch (cmd) {
   case "tools":
     await cmdTools(f);
     break;
-  case "token":
-    print(tokenCommand(pos, f));
-    break;
-  case "audit":
-    cmdAudit(pos, f);
-    break;
   case "skill":
     print(skillCommand(pos, f, skillSource()));
     break;
   case "config":
-    print(pos[0]?.startsWith("auth") ? await authCli.config(pos) : configCommand(pos));
-    break;
-  case "doctor":
-  case "bitwarden":
-    print(await authCli[cmd](pos, f, CLI_PATH));
+    print(configCommand(pos));
     break;
   case undefined:
   case "help":

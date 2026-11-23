@@ -133,33 +133,29 @@ export class Harness {
   }
 
   /**
-   * Set site policies. `policies` maps origin -> "read"|"act"|"full"|"deny" (written to the
-   * `sites` settings shape, contract §7); `extra` is any other settings patch.
-   * Legacy `extra.liteSites` (host globs) marks matching fixture origins lite.
+   * Fixture origins need no grant under the D17 interim policy; the D18 gated effects are
+   * let through with `devAllowSensitive` unless `extra` says otherwise.
    */
-  async setPolicies(policies: Record<string, string>, extra: Record<string, unknown> = {}) {
-    const { liteSites, sensitiveAllowed: _legacy, sites: extraSites, ...rest } = extra as { liteSites?: string[]; sensitiveAllowed?: unknown; sites?: Record<string, unknown> };
-    const sites: Record<string, Record<string, unknown>> = {};
-    for (const [o, p] of Object.entries(policies)) if (p !== "ask") sites[o] = { policy: p };
-    for (const g of liteSites ?? []) {
-      for (const o of [this.A, this.B]) if (new URL(o).hostname === g) sites[o] = { ...sites[o], lite: true };
-    }
-    for (const [o, e] of Object.entries(extraSites ?? {})) sites[o] = { ...sites[o], ...(e as object) };
-    await this.sw.evaluate(async ([s, e]) => (globalThis as any).__tabagent.updateSettings({ sites: s, liteSites: [], ...e }), [sites, rest] as const);
+  async trustFixtures(extra: Record<string, unknown> = {}) {
+    await this.sw.evaluate(async (e) => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: true, ...e }), extra);
   }
 
   /**
-   * Grant full access to both fixture origins (most tests). Sensitive gates are bypassed
-   * with `devAllowSensitive` (D17) unless `extra` says otherwise; answerPrompt() re-enables
-   * them for the duration of its trigger.
+   * Run `trigger` with devAllowSensitive off, so D18 gated effects are refused (D17 interim),
+   * then restore the previous value.
    */
-  async trustFixtures(extra: Record<string, unknown> = {}) {
-    await this.setPolicies({ [this.A]: "full", [this.B]: "full" }, { paused: false, devAllowSensitive: true, ...extra });
+  async withGatesOn<T>(trigger: () => Promise<T>): Promise<T> {
+    const prevDev = await this.sw.evaluate(async () => (await (globalThis as any).__tabagent.getSettings()).devAllowSensitive);
+    await this.sw.evaluate(async () => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: false }));
+    try {
+      return await trigger();
+    } finally {
+      await this.sw.evaluate(async (v) => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: v }), prevDev);
+    }
   }
 
-  async mcp(opts: { profile?: string; label?: string; token?: string } = {}): Promise<Client> {
+  async mcp(opts: { profile?: string; label?: string } = {}): Promise<Client> {
     const env: Record<string, string> = { ...(process.env as Record<string, string>), TABAGENT_HOME: this.home };
-    if (opts.token) env.TABAGENT_TOKEN = opts.token;
     const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp", "--profile", opts.profile ?? "full", ...(opts.label ? ["--label", opts.label] : [])], env, stderr: "pipe" });
     const client = new Client({ name: opts.label ?? "e2e-agent", version: "1.0.0" });
     await client.connect(transport);
@@ -195,50 +191,6 @@ export class Harness {
     const m = line?.match(/\[ref=([a-z]\d+)\]/);
     if (!m) throw new Error(`No ref matching ${re} in:\n${snapshot}`);
     return m[1];
-  }
-
-  /** Pending prompts in the service worker (FIFO). */
-  async pendingPrompts(): Promise<any[]> {
-    return this.sw.evaluate(() => (globalThis as any).__tabagent.pendingPrompts());
-  }
-
-  /**
-   * Run `trigger`, wait for the permission prompt it raises, and answer it through the real
-   * side-panel page buttons (D19: prompts are answered in the side panel, never in the page).
-   * Sensitive gates are switched on (devAllowSensitive=false) while the trigger runs.
-   */
-  async answerPrompt(answer: "once" | "always" | "deny", trigger: () => Promise<unknown>) {
-    const prevDev = await this.sw.evaluate(async () => (await (globalThis as any).__tabagent.getSettings()).devAllowSensitive);
-    await this.sw.evaluate(async () => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: false }));
-    const before = new Set((await this.pendingPrompts()).map((p) => p.promptId));
-    try {
-      let settled = false;
-      const resP = trigger().finally(() => (settled = true));
-      resP.catch(() => {});
-      let prompt: any = null;
-      const end = Date.now() + 15000;
-      while (!prompt && Date.now() < end) {
-        prompt = (await this.pendingPrompts()).find((p) => !before.has(p.promptId)) ?? null;
-        if (!prompt) {
-          if (settled) throw new Error(`answerPrompt: the call finished without a prompt: ${JSON.stringify(await resP)}`);
-          await new Promise((r) => setTimeout(r, 100));
-        }
-      }
-      if (!prompt) throw new Error("answerPrompt: no prompt appeared within 15s");
-      const panel = await this.openPanel();
-      try {
-        const item = panel.locator(`li[data-prompt-id="${prompt.promptId}"]`);
-        await item.waitFor({ timeout: 10000 });
-        const title = await item.locator(".ptitle").textContent();
-        const reasons = await item.locator(".preasons").textContent();
-        await item.locator(`button[data-a="${answer}"]`).click();
-        return { result: await resP, title, reasons, prompt };
-      } finally {
-        await panel.close().catch(() => {});
-      }
-    } finally {
-      await this.sw.evaluate(async (v) => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: v }), prevDev);
-    }
   }
 
   async stop() {

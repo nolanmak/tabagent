@@ -1,24 +1,14 @@
 // Bridge config (D32): ~/.tabagent (or TABAGENT_HOME), dir 0700, config.json 0600.
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_PORT, type Cap } from "@tabagent/protocol";
-
-export interface TokenRec {
-  name: string;
-  /** SHA-256 hex of the token; the plaintext is never stored. */
-  hash: string;
-  cap: Cap;
-  sites: string[];
-  created: string;
-}
+import { DEFAULT_PORT } from "@tabagent/protocol";
 
 export interface Config {
   port: number;
   secret: string;
   extensionIds: string[];
-  tokens: TokenRec[];
   uploadDirs: string[];
   /** Max bytes downloads.read may return (D31: 5 MB). */
   maxReadBytes: number;
@@ -31,9 +21,6 @@ export function home(): string {
 }
 export function configPath() {
   return join(home(), "config.json");
-}
-export function auditPath() {
-  return join(home(), "audit.jsonl");
 }
 export function defaultUploadDir() {
   return join(home(), "uploads");
@@ -61,18 +48,17 @@ function readRaw(): Partial<Config> | null {
 export function loadConfig(): Config {
   ensureDir(home());
   const raw = readRaw() ?? {};
-  // Unknown top-level keys (e.g. `auth`, owned by the auth bridge) are kept as they are.
+  // Unknown top-level keys are kept as they are.
   const full: Config = {
     ...(raw as object),
     port: raw.port ?? DEFAULT_PORT,
     secret: raw.secret ?? randomBytes(24).toString("base64url"),
     extensionIds: raw.extensionIds ?? [],
-    tokens: raw.tokens ?? [],
     uploadDirs: raw.uploadDirs ?? [defaultUploadDir()],
     maxReadBytes: Math.min(raw.maxReadBytes ?? MAX_READ_BYTES, MAX_READ_BYTES),
   };
   if (!raw.uploadDirs) ensureDir(defaultUploadDir());
-  const missing = (["port", "secret", "extensionIds", "tokens", "uploadDirs", "maxReadBytes"] as const).some((k) => !(k in raw));
+  const missing = (["port", "secret", "extensionIds", "uploadDirs", "maxReadBytes"] as const).some((k) => !(k in raw));
   if (missing) saveConfig(full);
   if (process.env.TABAGENT_PORT) full.port = Number(process.env.TABAGENT_PORT);
   return full;
@@ -94,14 +80,6 @@ export function saveConfig(cfg: Config) {
   } catch {
     /* windows */
   }
-}
-
-export function hashToken(t: string) {
-  return createHash("sha256").update(t).digest("hex");
-}
-
-export function newToken(): string {
-  return "tab_" + randomBytes(24).toString("base64url");
 }
 
 const PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

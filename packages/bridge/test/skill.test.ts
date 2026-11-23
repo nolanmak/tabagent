@@ -75,9 +75,9 @@ describe("SKILL.md lint (#29)", () => {
     expect(kv.description.length).toBeGreaterThan(40);
     expect(kv.description.length).toBeLessThanOrEqual(1024);
   });
-  it("covers the troubleshooting codes and D19 guidance", () => {
-    for (const c of ["NO_EXTENSION", "TAB_BUSY", "PERMISSION_DENIED", "PROMPT_TIMEOUT", "KILLED", "DIALOG_OPEN", "REF_STALE"]) expect(text).toContain("`" + c + "`");
-    expect(text).toMatch(/side panel/);
+  it("covers the troubleshooting codes and the D17 interim refusal", () => {
+    for (const c of ["NO_EXTENSION", "TAB_BUSY", "PERMISSION_DENIED", "DIALOG_OPEN", "REF_STALE"]) expect(text).toContain("`" + c + "`");
+    expect(text).toMatch(/pairing screen/);
     expect(text).toMatch(/--json/);
   });
 });

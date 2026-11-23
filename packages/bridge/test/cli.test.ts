@@ -1,6 +1,6 @@
 // Integration tests against the built CLI (packages/bridge/dist/cli.js; run `npm run build` first).
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -116,23 +116,7 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     expect(unknown.stderr).toMatch(/Unknown command or tool/);
   });
 
-  it("token create (--caps), list, revoke work against the live daemon", async () => {
-    const { stdout: tok } = await run(process.execPath, [CLI, "token", "create", "--name", "ci", "--caps", "read", "--sites", "*.example.com"], { env });
-    const token = tok.trim();
-    expect(token).toMatch(/^tab_/);
-    expect(readFileSync(join(home, "config.json"), "utf8")).not.toContain(token);
-    const st = await fetch(`http://127.0.0.1:${port}/v1/status`, { headers: { authorization: `Bearer ${token}` } });
-    expect(st.status).toBe(200);
-    const { stdout: list } = await run(process.execPath, [CLI, "token", "list"], { env });
-    expect(list).toMatch(/ci\s+caps=read\s+sites=\*\.example\.com/);
-    await run(process.execPath, [CLI, "token", "revoke", "ci"], { env });
-    const st2 = await fetch(`http://127.0.0.1:${port}/v1/status`, { headers: { authorization: `Bearer ${token}` } });
-    expect(st2.status).toBe(401);
-    const bad = await run(process.execPath, [CLI, "token", "create", "--name", "x", "--caps", "read,act"], { env }).catch((e) => e);
-    expect(bad.code).toBe(1);
-  });
-
-  it("skill install/uninstall into a temp HOME; audit tail; tools list", async () => {
+  it("skill install/uninstall into a temp HOME; tools list", async () => {
     const h = mkdtempSync(join(tmpdir(), "tabagent-skillhome-"));
     const e2 = { ...env, HOME: h, CODEX_HOME: join(h, ".codex") };
     const i = await run(process.execPath, [CLI, "skill", "install"], { env: e2 });
@@ -146,8 +130,6 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     await run(process.execPath, [CLI, "skill", "install", "--claude", "--force"], { env: e2 });
     const u = await run(process.execPath, [CLI, "skill", "uninstall"], { env: e2 });
     expect(u.stdout).toMatch(/Removed \(codex\)/);
-    const { stdout: tail } = await run(process.execPath, [CLI, "audit", "tail", "-n", "3"], { env });
-    expect(tail).toMatch(/NO_EXTENSION/);
     const { stdout: tools } = await run(process.execPath, [CLI, "tools", "--profile", "core"], { env });
     expect(tools).toMatch(/13 tools/);
   });

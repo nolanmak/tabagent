@@ -120,16 +120,8 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
   switch (tool) {
     case "nav.goto":
       return `open ${p.url}`;
-    case "js.eval":
-      return `run JavaScript: ${String(p.expression ?? "").slice(0, 120)}`;
     case "nav.wait":
       return `wait for a JavaScript condition: ${String(p.value ?? "").slice(0, 120)}`;
-    case "cookies.get":
-      return "read cookies";
-    case "storage.get":
-      return `read ${p.kind ?? "web"}Storage`;
-    case "network.get":
-      return "read a network request body and headers";
     case "act.upload":
       return `upload ${Array.isArray(p.paths) ? p.paths.length : 0} local file(s)`;
     case "downloads.read":
@@ -144,7 +136,6 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
 
 const REASONS: Record<string, string> = {
   c: "Runs code in the page with access to its data",
-  d: "Can include session credentials",
   e: "Moves a local file between your computer and the page",
   f: "Adopting a tab you opened gives the agent your page and its sign-ins",
 };

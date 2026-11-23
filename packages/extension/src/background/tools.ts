@@ -1,10 +1,9 @@
 // Tool handlers, one per registry entry in @tabagent/protocol. This file only
 // aggregates: driver-backed handlers (page.snapshot/screenshot/find, nav.*,
-// act.*) live in ./handlers/{page,nav,act}, form/extract/dev/files/dialog in
+// act.*) live in ./handlers/{page,nav,act}, form/extract/files/dialog in
 // ./handlers/*, tabs + session.* in ./sessionTools. Shared tab plumbing
 // (onTab, act, afterAction) lives in ./tabctx.
 import { actHandlers } from "./handlers/act";
-import { devHandlers } from "./handlers/dev";
 import { dialogHandlers } from "./handlers/dialog";
 import { extractHandlers } from "./handlers/extract";
 import { fileHandlers } from "./handlers/files";
@@ -24,7 +23,6 @@ export const handlers: Record<string, Handler> = {
   ...actHandlers,
   ...formHandlers,
   ...extractHandlers,
-  ...devHandlers,
   ...fileHandlers,
   ...dialogHandlers,
 };

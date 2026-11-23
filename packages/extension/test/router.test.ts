@@ -6,7 +6,7 @@ import { resolve, type PolicyState } from "../src/background/policy";
 const meta = { id: "s1", label: "agent", cap: "full" as const, sites: [] as string[] };
 const cmd = (tool: string, params: unknown = {}, id = "c1"): CommandLike => ({ type: "command", id, session: meta, tool, params });
 
-/** Fake session/tab world + an authorize() that applies the pure policy (D17 interim when sites are empty). */
+/** Fake session/tab world + an authorize() that applies the pure D17 interim policy. */
 function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partial<PolicyState> = {}) {
   const owners = new Map<number, string>([
     [1, "s1"],
@@ -20,10 +20,9 @@ function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partia
   const calls: string[] = [];
   const authorize = vi.fn(async (r: AuthorizeRequest) => {
     calls.push(`authorize:${r.tool}`);
-    const st: PolicyState = { paused: false, sites: { "https://a.example": { policy: "full" } }, denylist: [], grants: {}, ...state };
-    const d = resolve(st, { sessionId: r.meta.id, cap: r.meta.cap, sites: r.meta.sites, url: r.url, level: r.level, sensitive: r.sensitive });
-    if (d.decision === "deny") throw new RouterError(d.code, d.message);
-    if (d.decision === "ask") throw new RouterError("PERMISSION_DENIED", `would ask (${d.kind})`);
+    const st: PolicyState = { devAllowSensitive: false, ...state };
+    const d = resolve(st, { url: r.url, level: r.level, sensitive: r.sensitive });
+    if (d.decision === "deny") throw new RouterError(d.code, d.message, d.hint);
   });
   const handlers: Record<string, any> = {
     "page.snapshot": vi.fn(async (c) => {
@@ -31,7 +30,7 @@ function world(over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partia
       return { snapshot: "x", tab: c.p.tabId, __side: { snapshotDiff: "+ a" } };
     }),
     "nav.goto": vi.fn(async () => ({ url: "u" })),
-    "js.eval": vi.fn(async () => ({ value: 2 })),
+    "act.upload": vi.fn(async () => ({ files: [] })),
     "act.type": vi.fn(async () => ({ ok: true })),
     "act.click": vi.fn(async () => {
       throw new Error("boom\n    at secretFrame (file.ts:1:1)");
@@ -83,10 +82,10 @@ describe("router order and envelope", () => {
     expect(w.authorize).toHaveBeenCalledTimes(2);
   });
   it("a deny short-circuits with PERMISSION_DENIED and the handler is not reached", async () => {
-    const w = world({}, { sites: {} });
-    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    const w = world();
+    const r = await w.router.handle(cmd("act.upload", { ref: "e1", paths: ["/x"], tabId: 1 }));
     expect(r).toMatchObject({ ok: false, error: { code: "PERMISSION_DENIED" }, audit: { outcome: "denied", errorCode: "PERMISSION_DENIED", origin: "https://a.example" } });
-    expect(w.handlers["page.snapshot"]).not.toHaveBeenCalled();
+    expect(w.handlers["act.upload"]).not.toHaveBeenCalled();
   });
   it("lifts __side to top-level envelope fields and builds the audit record", async () => {
     const w = world();
@@ -119,10 +118,18 @@ describe("interim policy table (D17) through the router", () => {
     expect(w.handlers["nav.goto"]).not.toHaveBeenCalled();
   });
   it("each D18 static gate is refused unless devAllowSensitive", async () => {
+    const gated: [string, Record<string, unknown>][] = [
+      ["nav.wait", { for: "fn", value: "true", tabId: 1 }],
+      ["act.upload", { ref: "e1", paths: ["/x"], tabId: 1 }],
+      ["downloads.read", { id: 1 }],
+      ["tabs", { action: "attach" }],
+    ];
     const off = world();
-    expect((await off.router.handle(cmd("js.eval", { expression: "1", tabId: 1 }))).error?.message).toContain("would ask (sensitive)");
+    for (const [tool, p] of gated) expect((await off.router.handle(cmd(tool, p))).error, tool).toMatchObject({ code: "PERMISSION_DENIED", hint: expect.stringContaining("devAllowSensitive") });
+    expect(off.handlers["act.upload"]).not.toHaveBeenCalled();
+    expect(off.handlers.tabs).not.toHaveBeenCalled();
     const on = world({}, { devAllowSensitive: true });
-    expect((await on.router.handle(cmd("js.eval", { expression: "1", tabId: 1 }))).ok).toBe(true);
+    expect((await on.router.handle(cmd("act.upload", { ref: "e1", paths: ["/x"], tabId: 1 }))).ok).toBe(true);
   });
   it("no session tabs + tool needing a tab -> NOT_FOUND with the tabs new hint", async () => {
     const w = world();
@@ -135,11 +142,14 @@ describe("interim policy table (D17) through the router", () => {
     expect(w.authorize.mock.calls[0][0]).toMatchObject({ url: "https://a.example/x", level: "act" });
   });
   it("tabs attach goes through the f gate with the target tab's url", async () => {
-    const w = world({}, { devAllowSensitive: true });
+    const w = world();
     const r = await w.router.handle(cmd("tabs", { action: "attach" }));
     expect(w.authorize.mock.calls[0][0]).toMatchObject({ sensitive: "f", level: "read", tabId: 9, summary: expect.stringContaining("User tab") });
-    expect(r.error?.message).toContain("would ask (sensitive)");
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
     expect(w.handlers.tabs).not.toHaveBeenCalled();
+    const on = world({}, { devAllowSensitive: true });
+    expect((await on.router.handle(cmd("tabs", { action: "attach" }))).ok).toBe(true);
+    expect(on.handlers.tabs).toHaveBeenCalledTimes(1);
   });
   it("downloads.read authorizes the download's origin for category e", async () => {
     const w = world({ handler: () => async () => ({}) }, { devAllowSensitive: true });
@@ -211,8 +221,8 @@ describe("redaction in feed + audit", () => {
     const release = vi.fn();
     const hold = vi.fn(() => release);
     const w = world({ holdApproval: hold }, { devAllowSensitive: true });
-    await w.router.handle(cmd("js.eval", { expression: "1", tabId: 1 }));
-    expect(hold).toHaveBeenCalledWith("s1", "https://a.example", "c");
+    await w.router.handle(cmd("act.upload", { ref: "e1", paths: ["/x"], tabId: 1 }));
+    expect(hold).toHaveBeenCalledWith("s1", "https://a.example", "e");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

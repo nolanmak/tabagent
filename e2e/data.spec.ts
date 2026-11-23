@@ -1,4 +1,4 @@
-// #9 forms, #10 extraction, #11 files, #13 sensitive gates — through a real MCP client.
+// #9 forms, #10 extraction, #11 files, D17 interim gates — through a real MCP client.
 import { writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, Harness } from "./fixture";
@@ -6,8 +6,8 @@ import { isWrapped, payload } from "./payload";
 
 test.describe.configure({ mode: "default" });
 
-/** Sensitive gates pass without prompting (pre-#13 setting name and the D17 dev flag). */
-const passGates = (h: Harness) => h.trustFixtures({ devAllowSensitive: true, sensitiveAllowed: { [h.A]: true, [h.B]: true } });
+/** D17: gated effects pass only with the devAllowSensitive setting on. */
+const passGates = (h: Harness) => h.trustFixtures({ devAllowSensitive: true });
 
 test("form.describe returns a ref for every field, masked sensitive values", async ({ h }) => {
   await h.trustFixtures();
@@ -114,7 +114,8 @@ test("legacy form fixture fills by accessible name", async ({ h }) => {
   for (const s of ['"email":"neo@matrix.io"', '"country":"ca"', '"plan":"pro"', '"subscribe":true', '"start":"2026-01-15"', '"nickname":"Neo"']) expect(txt).toContain(s);
 });
 
-test("sensitive submits prompt by every path; denying leaves the page unchanged", async ({ h }) => {
+
+test("sensitive submits are refused by every path (D17); the page is unchanged", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
   await h.ok(c, "nav.goto", { url: `${h.A}/login-search.html` });
@@ -124,40 +125,37 @@ test("sensitive submits prompt by every path; denying leaves the page unchanged"
   await h.ok(c, "form.fill", { fields: { [user]: "neo", [pass]: "hunter2" } });
   const status = async () => payload(await h.ok(c, "page.text")).text;
 
-  // form.submit
-  const sub = await h.answerPrompt("deny", () => h.call(c, "form.submit", { ref: user }));
-  expect((sub.result as any).text).toContain("PERMISSION_DENIED");
-  expect(`${sub.title} ${sub.reasons}`).toContain("Sign in");
-  expect(sub.reasons).toContain("password field");
-  expect(sub.reasons).toContain("Username: neo");
-  expect(sub.reasons).not.toContain("hunter2");
-  expect(await status()).toContain("IDLE");
-  // Enter inside the form
-  const ent = await h.answerPrompt("deny", () => h.call(c, "act.press", { key: "Enter", ref: pass }));
-  expect((ent.result as any).text).toContain("PERMISSION_DENIED");
-  expect(await status()).toContain("IDLE");
-  // click on its submit control
-  const clk = await h.answerPrompt("deny", () => h.call(c, "act.click", { ref: Harness.ref(snap, /button "Sign in"/) }));
-  expect((clk.result as any).text).toContain("PERMISSION_DENIED");
-  expect(await status()).toContain("IDLE");
-  // a search form's Enter is not gated
-  await h.ok(c, "act.type", { ref: Harness.ref(snap, /searchbox "Search"/), text: "tabs", submit: true });
-  expect(await status()).toContain("SEARCHED");
-  // allowing once submits
-  const allow = await h.answerPrompt("once", () => h.ok(c, "form.submit", { ref: user }));
-  expect(allow.result).toBeTruthy();
+  await h.withGatesOn(async () => {
+    // form.submit
+    const sub = await h.call(c, "form.submit", { ref: user });
+    expect(sub.text).toContain("PERMISSION_DENIED");
+    expect(sub.text).toContain("devAllowSensitive");
+    expect(sub.text).not.toContain("hunter2");
+    expect(await status()).toContain("IDLE");
+    // Enter inside the form
+    expect((await h.call(c, "act.press", { key: "Enter", ref: pass })).text).toContain("PERMISSION_DENIED");
+    expect(await status()).toContain("IDLE");
+    // click on its submit control
+    expect((await h.call(c, "act.click", { ref: Harness.ref(snap, /button "Sign in"/) })).text).toContain("PERMISSION_DENIED");
+    expect(await status()).toContain("IDLE");
+    // a search form's Enter is not gated
+    await h.ok(c, "act.type", { ref: Harness.ref(snap, /searchbox "Search"/), text: "tabs", submit: true });
+    expect(await status()).toContain("SEARCHED");
+  });
+  // with devAllowSensitive on, the submit goes through
+  await h.ok(c, "form.submit", { ref: user });
   expect(await status()).toContain("SUBMITTED neo");
 
   // card form and a Delete account button
   await h.ok(c, "nav.goto", { url: `${h.A}/checkout.html` });
   const s2 = (await h.ok(c, "page.snapshot")).text;
   await h.ok(c, "form.fill", { fields: { "Card number": "4242 4242 4242 4242", "Name on card": "Neo" } });
-  const card = await h.answerPrompt("deny", () => h.call(c, "form.submit"));
-  expect((card.result as any).text).toContain("PERMISSION_DENIED");
-  expect(card.reasons).toContain("payment card field");
-  expect(card.reasons).not.toContain("4242");
-  const del = await h.answerPrompt("deny", () => h.call(c, "act.click", { ref: Harness.ref(s2, /button "Delete account"/) }));
-  expect((del.result as any).text).toContain("PERMISSION_DENIED");
+  await h.withGatesOn(async () => {
+    const card = await h.call(c, "form.submit");
+    expect(card.text).toContain("PERMISSION_DENIED");
+    expect(card.text).not.toContain("4242");
+    expect((await h.call(c, "act.click", { ref: Harness.ref(s2, /button "Delete account"/) })).text).toContain("PERMISSION_DENIED");
+  });
   expect(await status()).toContain("UNPAID");
 });
 
@@ -230,18 +228,6 @@ test("extract.paginate over a 4-page listing stops on the disabled next control"
   expect(payload(await h.ok(c, "page.text")).text).toContain("page 4 of 4");
 });
 
-test("extract.paginate: a hop to a denied origin stops with the pages so far", async ({ h }) => {
-  await h.setPolicies({ [h.A]: "full", [h.B]: "deny" }, { devAllowSensitive: true, paused: false });
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/table.html` });
-  // point the page's Next link at the denied origin
-  await h.ok(c, "js.eval", { expression: `document.getElementById("next").setAttribute("href", ${JSON.stringify(h.B)} + "/table.html?page=2")` });
-  const r = payload(await h.ok(c, "extract.paginate", { extractor: "table" }));
-  expect(r.pages).toBe(1);
-  expect(r.error.code).toBe("PERMISSION_DENIED");
-  expect(r.rows).toHaveLength(3);
-});
-
 test("act.upload: file input, a button that opens a chooser, refusals", async ({ h }) => {
   await passGates(h);
   const c = await h.mcp();
@@ -302,14 +288,23 @@ test("downloads: click reports it, wait/list/read text and binary, other ids ref
   expect(payload(await h.ok(c, "downloads.list")).downloads).toHaveLength(2);
 });
 
-test("downloads.read asks the user", async ({ h }) => {
+test("downloads.read and act.upload are refused unless devAllowSensitive (D17, D18e)", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
   await h.ok(c, "nav.goto", { url: `${h.A}/downloads.html` });
   const s = (await h.ok(c, "page.snapshot")).text;
   await h.ok(c, "act.click", { ref: Harness.ref(s, /link "Download CSV"/) });
   const dl = payload(await h.ok(c, "downloads.wait", { timeout: 15000 }));
-  const read = await h.answerPrompt("once", () => h.ok(c, "downloads.read", { id: dl.id }));
-  expect(`${read.title} ${read.reasons}`).toContain("downloaded file");
-  expect(JSON.stringify(payload(read.result as any))).toContain("widget,3");
+  const file = join(h.home, "uploads", "gated.txt");
+  writeFileSync(file, "gated");
+  await h.withGatesOn(async () => {
+    const read = await h.call(c, "downloads.read", { id: dl.id });
+    expect(read.text).toContain("PERMISSION_DENIED");
+    expect(read.text).not.toContain("widget,3");
+    await h.ok(c, "nav.goto", { url: `${h.A}/upload.html` });
+    const u = (await h.ok(c, "page.snapshot")).text;
+    expect((await h.call(c, "act.upload", { ref: Harness.ref(u, /button "Attachment"/), paths: [file] })).text).toContain("PERMISSION_DENIED");
+    expect(payload(await h.ok(c, "page.text")).text).not.toContain("gated.txt");
+  });
+  expect(JSON.stringify(payload(await h.ok(c, "downloads.read", { id: dl.id })))).toContain("widget,3");
 });

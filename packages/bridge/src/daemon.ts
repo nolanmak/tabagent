@@ -6,14 +6,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
-  authExtraTimeout,
   defaultTimeout,
   FilesResolveSchema,
   getTool,
   HelloSchema,
   normalizeHello,
   PROTOCOL_VERSION,
-  ResultEnvelopeSchema,
   TabAgentError,
   TIMEOUTS,
   toolsForProfiles,
@@ -26,9 +24,7 @@ import {
   type OutputResponse,
   type SessionMeta,
 } from "@tabagent/protocol";
-import { AuditWriter } from "./audit";
-import { createAuth, type Auth } from "./auth";
-import { auditPath, configPath, saveConfig, type Config } from "./config";
+import { configPath, saveConfig, type Config } from "./config";
 import { readDownload, resolveUploads, SessionDownloads } from "./files";
 import { buildMcpServer } from "./mcp";
 import { Pairing } from "./pairing";
@@ -74,9 +70,6 @@ export interface DaemonOpts {
   extWaitMs?: number;
   /** Heartbeat check interval (the 45s rule itself is TIMEOUTS.silentSocket). */
   heartbeatCheckMs?: number;
-  audit?: AuditWriter;
-  /** M6 auth (tests inject a fake). */
-  auth?: Auth;
 }
 
 const STATUS: Partial<Record<ErrorCode, number>> = {
@@ -96,8 +89,6 @@ export class Daemon {
   server: Server | null = null;
   port: number;
   readonly pairing: Pairing;
-  readonly audit: AuditWriter;
-  readonly auth: Auth;
   readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
@@ -117,8 +108,6 @@ export class Daemon {
     this.log = opts.log ?? ((m) => process.stderr.write(m + "\n"));
     this.now = opts.now ?? Date.now;
     this.pairing = new Pairing(this.now);
-    this.audit = opts.audit ?? new AuditWriter(auditPath());
-    this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
     this.port = cfg.port;
   }
 
@@ -172,12 +161,10 @@ export class Daemon {
     this.timers.push(setInterval(() => this.gcRestSessions(), 60_000));
     this.timers.push(setInterval(() => this.checkSilent(), this.opts.heartbeatCheckMs ?? 5_000));
     for (const t of this.timers) t.unref();
-    await this.auth.start();
   }
 
   async stop() {
     for (const t of this.timers) clearInterval(t);
-    await this.auth.stop();
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
     this.ext?.ws.terminate();
     for (const c of this.wss.clients) c.terminate();
@@ -234,7 +221,6 @@ export class Daemon {
       return false;
     }
     const hello = h.data;
-    this.auth.bridge.onHello(raw);
     if (hello.protocolVersion !== PROTOCOL_VERSION) {
       const hint = versionMismatchHint(hello.protocolVersion);
       this.refuse(ws, "VERSION_MISMATCH", `Protocol version mismatch: extension ${hello.protocolVersion}, bridge ${PROTOCOL_VERSION}`, hint);
@@ -318,7 +304,6 @@ export class Daemon {
   }
 
   private onExtMessage(ws: WebSocket, msg: any) {
-    if (this.auth.bridge.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     switch (msg?.type) {
       case "ping":
         this.sendTo(ws, { type: "pong" });
@@ -326,7 +311,6 @@ export class Daemon {
       case "result":
         return this.onResult(msg);
       case "event":
-        this.audit.event(String(msg.event), msg.data && typeof msg.data === "object" ? msg.data : undefined, { caller: "extension" });
         this.log(`extension event: ${msg.event}`);
         return;
       case "files.resolve":
@@ -356,14 +340,6 @@ export class Daemon {
     if (!p) return;
     this.pending.delete(raw.id);
     clearTimeout(p.timer);
-    const who = { caller: p.meta.label, session: p.meta.id };
-    const env = ResultEnvelopeSchema.safeParse(raw);
-    if (env.success) this.audit.record(env.data.audit, who);
-    else {
-      // Legacy extension (no audit record): log a minimal record without params (D20).
-      const code = raw?.error?.code;
-      this.audit.minimal(p.tool, raw?.ok ? "ok" : code === "PERMISSION_DENIED" ? "denied" : "error", who, raw?.ok ? undefined : TabAgentError.from(raw?.error ?? {}).code, "extension sent no audit record");
-    }
     const out: OutputResponse = { ok: !!raw.ok };
     if (raw.ok) out.result = raw.result;
     else out.error = TabAgentError.from(raw.error ?? {}).toJSON();
@@ -401,7 +377,6 @@ export class Daemon {
   // -------------------------------------------------------------------------
   /** Run one tool call; never throws. The response is NOT yet wrapped. */
   async dispatchRaw(meta: SessionMeta, toolName: string, rawParams: unknown): Promise<OutputResponse> {
-    const who = { caller: meta.label, session: meta.id };
     const tool = getTool(toolName);
     try {
       if (!tool) throw new TabAgentError("BAD_REQUEST", `Unknown tool "${toolName}"`, "GET /v1/tools lists tools.");
@@ -416,7 +391,6 @@ export class Daemon {
       return resp;
     } catch (e) {
       const err = toTabAgentError(e);
-      this.audit.minimal(tool?.name ?? String(toolName).slice(0, 64), err.code === "PERMISSION_DENIED" ? "denied" : "error", who, err.code);
       return { ok: false, error: err.toJSON() };
     }
   }
@@ -441,7 +415,6 @@ export class Daemon {
         return { ...resp, result: { id, mime: br.mime ?? rest.mime, ...content } };
       } catch (e) {
         const err = toTabAgentError(e);
-        this.audit.minimal(tool, "error", { caller: meta.label, session: meta.id }, err.code, "bridge file read");
         return { ok: false, error: err.toJSON() };
       }
     }
@@ -452,7 +425,7 @@ export class Daemon {
     const id = randomUUID();
     const t = Number(params.timeout ?? 0) || defaultTimeout(tool);
     // Generous: a permission prompt (120s) plus the tool's own timeout plus slack.
-    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000 + authExtraTimeout(tool);
+    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000;
     const ws = this.ext!.ws;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -493,14 +466,13 @@ export class Daemon {
     return this.cfg.extensionIds.some((id) => origin === `chrome-extension://${id}`);
   }
 
-  /** Live reload of tokens (and newly paired IDs) when the CLI edits config.json. */
+  /** Live reload of upload dirs when the CLI edits config.json. */
   private refreshConfig() {
     try {
       const m = statSync(configPath()).mtimeMs;
       if (m === this.cfgMtime) return;
       this.cfgMtime = m;
       const raw = JSON.parse(readFileSync(configPath(), "utf8"));
-      this.cfg.tokens = raw.tokens ?? [];
       if (Array.isArray(raw.uploadDirs)) this.cfg.uploadDirs = raw.uploadDirs;
     } catch {
       /* keep current */
@@ -552,7 +524,6 @@ export class Daemon {
     const who = this.principal(req);
     if (!who) return this.err(res, "UNAUTHORIZED", "Missing or invalid bearer token", 401);
 
-    if (path.startsWith("/v1/admin/")) return this.auth.onAdmin(req, res, who.kind === "secret", path, () => this.readBody(req));
     if (path === "/mcp") return this.onMcp(req, res, who, url);
 
     if (path === "/v1/tools" && req.method === "GET") {
@@ -626,7 +597,7 @@ export class Daemon {
     const client = String(req.headers["x-tabagent-client"] ?? "").replace(/[^\w .-]/g, "").slice(0, 40);
     let s = this.restSessions.get(key);
     if (!s) {
-      const label = who.kind === "token" ? who.name : (proxy && client) || "local";
+      const label = (proxy && client) || "local";
       s = { meta: { id: `${proxy ? "mcp" : "rest"}:${key}`, label, cap: who.cap, sites: who.sites }, lastSeen: this.now(), persistent: proxy };
       this.restSessions.set(key, s);
     } else if (proxy && who.kind === "secret" && client && s.meta.label === "local") s.meta.label = client;
@@ -649,7 +620,7 @@ export class Daemon {
       } catch (e) {
         return this.sendJson(res, 400, { jsonrpc: "2.0", error: { code: -32602, message: (e as Error).message }, id: null });
       }
-      const meta: SessionMeta = { id: `mcp-${randomUUID().slice(0, 8)}`, label: who.kind === "token" ? who.name : "local", cap: who.cap, sites: who.sites };
+      const meta: SessionMeta = { id: `mcp-${randomUUID().slice(0, 8)}`, label: "local", cap: who.cap, sites: who.sites };
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {

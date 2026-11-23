@@ -1,4 +1,5 @@
-// #19 iframes + shadow DOM across snapshot and actions.
+// Same-process iframes + open shadow DOM across snapshot and actions (M1 scope:
+// cross-origin frames are #19). Every frame here is served from the same origin.
 import { test, expect } from "./fixture";
 import { refIn, view } from "./view";
 
@@ -6,10 +7,10 @@ test.describe.configure({ mode: "serial" });
 
 const settle = () => new Promise((r) => setTimeout(r, 400));
 
-test("same-origin and cross-origin iframes: snapshot includes their controls; click and type work in each", async ({ h }) => {
+test("same-origin iframes: snapshot includes their controls; click and type work in each", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/frames.html?cross=${encodeURIComponent(h.B)}` });
+  await h.ok(c, "nav.goto", { url: `${h.A}/frames.html?cross=${encodeURIComponent(h.A)}` });
   await h.ok(c, "nav.wait", { for: "networkidle" });
   await settle();
   const s = view(await h.ok(c, "page.snapshot")).snap;
@@ -24,15 +25,15 @@ test("same-origin and cross-origin iframes: snapshot includes their controls; cl
     const t = view(await h.ok(c, "act.type", { ref: input, text: `typed ${which}` }));
     expect(t.json.snapshotDiff).toContain(`value="typed ${which}"`);
   }
-  // page.find searches same- and cross-origin frames
+  // page.find searches every frame
   const f = view(await h.ok(c, "page.find", { by: "css", value: "#fi" })).json;
   expect(f.matches.map((m: any) => m.ref).sort()).toEqual([...inputs].sort());
 });
 
-test("nested, scrolled cross-origin frames: coordinates are translated to the top-level viewport", async ({ h }) => {
+test("nested, scrolled frames: coordinates are translated to the top-level viewport", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/nested.html?cross=${encodeURIComponent(h.B)}` });
+  await h.ok(c, "nav.goto", { url: `${h.A}/nested.html?cross=${encodeURIComponent(h.A)}` });
   await h.ok(c, "nav.wait", { for: "networkidle" });
   await settle();
   // scroll the top page so the outer frame is partly off-screen
@@ -48,7 +49,7 @@ test("nested, scrolled cross-origin frames: coordinates are translated to the to
 test("a frame that navigates makes its refs REF_STALE; the parent's refs stay valid", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/frames.html?cross=${encodeURIComponent(h.B)}` });
+  await h.ok(c, "nav.goto", { url: `${h.A}/frames.html?cross=${encodeURIComponent(h.A)}` });
   await h.ok(c, "nav.wait", { for: "networkidle" });
   await settle();
   const s = view(await h.ok(c, "page.snapshot")).snap;
@@ -63,22 +64,6 @@ test("a frame that navigates makes its refs REF_STALE; the parent's refs stay va
   // and a fresh snapshot gives the reloaded frame new refs
   const s2 = view(await h.ok(c, "page.snapshot")).snap;
   expect(refIn(s2, /button "Frame button same"/)).not.toBe(inner);
-});
-
-test("a denied-origin frame is a one-line placeholder with no refs", async ({ h }) => {
-  await h.setPolicies({ [h.A]: "full", [h.B]: "deny" }, { devAllowSensitive: true });
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/frames.html?cross=${encodeURIComponent(h.B)}` });
-  await h.ok(c, "nav.wait", { for: "networkidle" });
-  await settle();
-  const s = view(await h.ok(c, "page.snapshot")).snap;
-  expect(s).toMatch(/- iframe "Cross origin frame" \(content hidden: http:\/\/127\.0\.0\.1:\d+ is denied by site policy\)/);
-  expect(s).not.toContain("Frame button cross");
-  expect(s).toContain("Frame button same");
-  // page.find does not reach into the denied frame either
-  const f = view(await h.ok(c, "page.find", { by: "css", value: "#fb" })).json;
-  expect(f.matches).toHaveLength(1);
-  await h.trustFixtures();
 });
 
 test("open shadow DOM: snapshot pierces it; fill and click work inside", async ({ h }) => {

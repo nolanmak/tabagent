@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { extractLinks, extractSchema, extractTable, markdown, nextControl, storage, text } from "../src/pagelib/extract";
+import { extractLinks, extractSchema, extractTable, markdown, nextControl, text } from "../src/pagelib/extract";
 import { csvCell, toCsv } from "../src/pure/csv";
 
 const FIX = join(__dirname, "../../../e2e/fixtures");
@@ -212,12 +212,3 @@ describe("pagination next control", () => {
   });
 });
 
-describe("storage.get", () => {
-  it("returns local and session entries for the origin", () => {
-    localStorage.clear();
-    localStorage.setItem("theme", "dark");
-    sessionStorage.setItem("tab", "one");
-    expect(storage(null, "local")).toMatchObject({ kind: "local", entries: { theme: "dark" }, count: 1 });
-    expect(storage(null, "session").entries).toEqual({ tab: "one" });
-  });
-});

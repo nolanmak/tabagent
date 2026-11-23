@@ -1,4 +1,4 @@
-// page.snapshot, page.screenshot, page.find (#6, #8, #20, #26).
+// page.snapshot, page.screenshot, page.find (#6, #8, #26).
 import { baselines } from "../refstore";
 import { normalizeFind } from "../wait";
 import { onTab, titleOf, type Ctx } from "../tabctx";
@@ -14,11 +14,6 @@ export const pageHandlers: Record<string, Handler> = {
       const body = { snapshot: r.text, refs: r.refs.length, ...(r.truncated ? { truncated: true } : {}) };
       // Root and full-mode snapshots don't move the (interactive, whole-page) baseline.
       if (c.p.root || mode !== "interactive") return { ...head, ...body };
-      if (c.p.diff) {
-        const d = baselines.deliver(c.meta.id, t.tabId, r.lines, { maxChars: (c.p.maxTokens ?? 6000) * 4 });
-        if (!d) return { ...head, ...body, full: true };
-        return { ...head, snapshot: d.added || d.removed || d.changed ? d.text : "(no changes)", diff: true };
-      }
       baselines.set(c.meta.id, t.tabId, r.lines);
       return { ...head, ...body };
     });

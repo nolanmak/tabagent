@@ -3,10 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { MCP_NAME_PATTERN, toMcpName, toolsForProfiles } from "@tabagent/protocol";
-import { saveConfig } from "../src/config";
 import type { Daemon } from "../src/daemon";
 import { renderCli, renderMcp } from "../src/format";
-import { createToken } from "../src/tokens";
 import { EXT_ID, okEnvelope, pairedExt, rest, startDaemon } from "./helpers";
 
 let daemons: Daemon[] = [];
@@ -59,14 +57,12 @@ describe("HTTP auth (D2)", () => {
     expect(r.status).toBe(200);
     expect(Object.keys(r.body).sort()).toEqual(["bridgeVersion", "ok", "protocolVersion"]);
   });
-  it("/v1/status shows the pair code to the secret holder only; /v1/pair is secret-only", async () => {
+  it("/v1/status shows the pair code to the secret holder; anything else is 401", async () => {
     const { base, cfg, d } = await boot();
     const s = await rest(base, "/v1/status", cfg.secret);
     expect(s.body).toMatchObject({ ok: true, extension: false, paired: false, pairCode: d.pairCode });
-    const tok = createToken(cfg, "bot", "read");
-    saveConfig(cfg);
-    expect((await rest(base, "/v1/status", tok)).body.pairCode).toBeUndefined();
-    expect((await rest(base, "/v1/pair", tok, {})).status).toBe(403);
+    expect((await rest(base, "/v1/status", "tab_not-a-credential")).status).toBe(401);
+    expect((await rest(base, "/v1/pair", "tab_not-a-credential", {})).status).toBe(401);
   });
 });
 
@@ -96,16 +92,6 @@ describe("REST dispatch", () => {
     expect(b.body.result.sid).toBe("rest:local:default");
     const c = await rest(base, "/v1/call", cfg.secret, { tool: "session.info", params: {}, session: "s2" });
     expect(c.body.result.sid).toBe("rest:local:s2");
-    e.close();
-  });
-  it("token sessions carry the token's cap, sites and name as label", async () => {
-    const { d, base, cfg } = await boot();
-    const tok = createToken(cfg, "reader", "read", ["*.github.com"]);
-    saveConfig(cfg);
-    const e = await pairedExt(d);
-    e.onCommand = () => okEnvelope({}, "session.info");
-    await rest(base, "/v1/session.info", tok, {});
-    expect(e.msgs.find((m) => m.type === "command").session).toMatchObject({ label: "reader", cap: "read", sites: ["*.github.com"] });
     e.close();
   });
   it("no extension -> 503 NO_EXTENSION with pairing hint", async () => {
@@ -219,18 +205,6 @@ describe("MCP Streamable HTTP", () => {
     expect(norm(r.content[0].text)).toBe(norm((renderMcp(restBody).content[0] as { text: string }).text));
     expect(norm(renderCli(restBody))).toBe(norm(r.content[0].text));
     expect(r.content[0].text).toContain("snapshot:\n<<<PAGE_DATA");
-    await c.close();
-    e.close();
-  });
-  it("token MCP sessions use the token name as label", async () => {
-    const { d, base, cfg } = await boot();
-    const tok = createToken(cfg, "ci-bot", "act");
-    saveConfig(cfg);
-    const e = await pairedExt(d);
-    e.onCommand = () => okEnvelope({}, "tabs");
-    const c = await mcpClient(base, tok, undefined, "ignored-name");
-    await c.callTool({ name: "tabs", arguments: { action: "list" } });
-    expect(e.msgs.find((m) => m.type === "command").session).toMatchObject({ label: "ci-bot", cap: "act" });
     await c.close();
     e.close();
   });
