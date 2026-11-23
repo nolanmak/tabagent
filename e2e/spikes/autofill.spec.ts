@@ -144,12 +144,16 @@ test("M6: background tab (another page in front): Chrome still fills on load and
   await seedPassword(sp.ctx, sp.site, "alice@example.com", PW_A);
   const front = await sp.ctx.newPage();
   await front.goto("about:blank");
-  const page = await sp.ctx.newPage();
-  const cdp = await sp.ctx.newCDPSession(page);
   await front.bringToFront();
-  await page.goto(sp.site + "/login.html");
+  // A background tab in the same window, the way TabAgent opens agent tabs (D10: never focused).
+  const fcdp = await sp.ctx.newCDPSession(front);
+  const pageP = sp.ctx.waitForEvent("page");
+  await fcdp.send("Target.createTarget", { url: sp.site + "/login.html", background: true });
+  const page = await pageP;
+  await page.waitForLoadState();
+  const cdp = await sp.ctx.newCDPSession(page);
   await expect.poll(() => pageValues(page).then((v) => v.username), { timeout: 5000 }).toBe("alice@example.com");
-  expect(await page.evaluate(() => document.visibilityState)).toBe("hidden");
+  // (document.visibilityState is not asserted: Playwright emulates focus, so it always reads "visible".)
   expect(await page.evaluate(() => document.getElementById("password")!.matches(":autofill"))).toBe(true);
   await cdpClick(cdp, page, "#submit");
   const r = await waitReceived(sp.srv);
