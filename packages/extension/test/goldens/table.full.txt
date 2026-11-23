@@ -1,0 +1,31 @@
+- main
+  - heading "Products (page 1)" level=1
+  - table [ref=e1]
+    - row
+      - columnheader "Name"
+      - columnheader "Price"
+      - columnheader "Stock"
+    - row
+      - cell "Apple"
+      - cell "$1.50"
+      - cell "no"
+    - row
+      - cell "Banana"
+      - cell "$3.00"
+      - cell "yes"
+    - row
+      - cell "Cherry"
+      - cell "$4.50"
+      - cell "no"
+  - heading "Apple" level=3
+  - text "$1.50"
+  - link "View" [ref=e2]
+  - heading "Banana" level=3
+  - text "$3.00"
+  - link "View" [ref=e3]
+  - heading "Cherry" level=3
+  - text "$4.50"
+  - link "View" [ref=e4]
+  - navigation "pagination"
+    - link "Next" [ref=e5]
+  - text "tiny"

@@ -1,0 +1,10 @@
+- main
+  - heading "Checkout" level=1
+  - form [ref=e1]
+    - text "Card number"
+    - textbox "Card number" [ref=e2] value=""
+    - text "Name on card"
+    - textbox "Name on card" [ref=e3] value=""
+    - button "Pay $42.00" [ref=e4]
+  - button "Delete account" [ref=e5]
+  - paragraph "UNPAID"

@@ -1,0 +1,2 @@
+- main
+  - combobox "Fruit" [ref=e1] value="Pick one"

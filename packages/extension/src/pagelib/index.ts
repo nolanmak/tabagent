@@ -15,22 +15,25 @@ export interface Ret<T = unknown> {
 
 
 // ---------------------------------------------------------------------------
-// Element registry (used by lite mode for refs)
+// Element registry (lite mode): numeric ids that stand in for backendNodeIds.
+// DOC_ID identifies this document instance; a new document gets a new pagelib
+// instance and a new DOC_ID, which makes refs from the old document stale.
 // ---------------------------------------------------------------------------
-const reg = new Map<string, WeakRef<El>>();
-const rev = new WeakMap<El, string>();
+const reg = new Map<number, WeakRef<El>>();
+const rev = new WeakMap<El, number>();
 let regN = 0;
-function liteRef(el: El): string {
+const DOC_ID = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+function liteId(el: El): number {
   let r = rev.get(el);
   if (!r) {
-    r = "l" + ++regN;
+    r = ++regN;
     rev.set(el, r);
     reg.set(r, new WeakRef(el));
   }
   return r;
 }
-function byLiteRef(r: string): El | null {
-  const el = reg.get(r)?.deref();
+function byLiteId(id: number): El | null {
+  const el = reg.get(id)?.deref();
   return el && el.isConnected ? el : null;
 }
 
@@ -612,47 +615,206 @@ export function deepActive(): El | null {
 }
 
 // ---------------------------------------------------------------------------
-// Lite-mode DOM snapshot (debugger mode uses the CDP AX tree instead)
+// Driver support: lite-mode DOM walker (AX-shaped output, rendered by the same
+// pure renderer as CDP trees), auto-wait observations, find, DOM quiet.
 // ---------------------------------------------------------------------------
-const LANDMARKS = new Set(["banner", "navigation", "main", "contentinfo", "complementary", "region", "form", "search", "dialog", "alertdialog", "heading", "table", "row", "cell", "columnheader", "rowheader", "list", "listitem", "img", "alert", "status", "tablist", "tabpanel", "menu", "menubar", "toolbar", "tree", "grid", "article", "group", "paragraph", "iframe"]);
+interface LiteAXNode {
+  nodeId: string;
+  ignored?: boolean;
+  role?: { value: string };
+  name?: { value: string };
+  value?: { value: string };
+  properties?: { name: string; value: { value: unknown } }[];
+  childIds?: string[];
+  parentId?: string;
+  backendDOMNodeId?: number;
+}
 
-function snapshotDom(root: El | null, mode: "interactive" | "full" = "interactive") {
-  const lines: string[] = [];
-  const visit = (el: El, depth: number) => {
-    if (!isVisible(el) && !el.shadowRoot && roleOf(el) !== "option") {
-      // still descend: children may be visible (e.g. display:contents) — cheap check
-      if (getComputedStyle(el).display === "none" || getComputedStyle(el).visibility === "hidden") return;
-    }
-    const role = roleOf(el);
-    const name = nameOf(el);
-    const keep = INTERACTIVE.has(role) || (LANDMARKS.has(role) && (mode === "full" || role !== "paragraph" || name.length < 120)) || ((role === "group" || role === "region") && !!name);
-    let d = depth;
-    if (keep && role !== "generic" && role !== "none" && role !== "presentation") {
-      let line = `${"  ".repeat(depth)}- ${role}`;
-      const shown = mode === "full" ? name : name.length > 100 ? name.slice(0, 100) + "…" : name;
-      if (shown) line += ` "${shown.replace(/"/g, '\\"')}"`;
-      if (INTERACTIVE.has(role)) line += ` [ref=${liteRef(el)}]`;
-      const ch = getChecked(el);
-      if (ch !== null) line += ` checked=${ch}`;
-      if (isEditable(el) || el instanceof HTMLSelectElement) line += ` value="${valueOf(el).slice(0, 80)}"`;
-      if (isDisabled(el)) line += " disabled";
-      if (role === "heading") line += ` level=${el.tagName.match(/H(\d)/)?.[1] ?? el.getAttribute("aria-level") ?? "2"}`;
-      lines.push(line);
-      d = depth + 1;
-      if (["button", "link", "option", "heading", "cell", "columnheader", "paragraph"].includes(role) && name) return;
-    } else if (mode === "full") {
-      const own = Array.from(el.childNodes)
-        .filter((n) => n.nodeType === Node.TEXT_NODE)
-        .map((n) => norm(n.textContent))
-        .join(" ")
-        .trim();
-      if (own) lines.push(`${"  ".repeat(depth)}- text "${own.slice(0, 300)}"`);
-    }
-    const kids = el.shadowRoot ? [...Array.from(el.shadowRoot.children), ...Array.from(el.children)] : Array.from(el.children);
-    for (const c of kids) visit(c, d);
+const LITE_ROLE: Record<string, string> = { iframe: "Iframe", presentation: "none", img: "image" };
+const SKIP_WALK = new Set(["script", "style", "noscript", "template", "head", "link", "meta"]);
+
+function isOverlay(el: El): boolean {
+  return el.hasAttribute("data-tabagent-overlay");
+}
+
+const SENSITIVE_INPUT = /card|cc-?num|ccnum|cvv|cvc|csc|security.?code/i;
+function isSensitiveInput(el: El): boolean {
+  if (!(el instanceof HTMLInputElement)) return false;
+  if (el.type === "password") return true;
+  const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
+  if (/^cc-(number|csc|exp)/.test(ac) || /\bone-time-code\b/.test(ac)) return true;
+  return SENSITIVE_INPUT.test(el.name || "") || SENSITIVE_INPUT.test(el.id || "");
+}
+
+/** D18: password and card inputs (values are masked in snapshots and diffs). */
+function sensitiveInputs(self: El | null): Ret {
+  const els = Array.from(walk((self ?? document) as Node)).filter(isSensitiveInput);
+  return { value: els.map((_e, i) => ({ el: i })), elements: els };
+}
+
+function domAxTree(self: El | null) {
+  const nodes: LiteAXNode[] = [];
+  const sensitive: number[] = [];
+  let n = 0;
+  const add = (node: Omit<LiteAXNode, "nodeId">, parent?: LiteAXNode): LiteAXNode => {
+    const x: LiteAXNode = { nodeId: String(++n), ...node, ...(parent ? { parentId: parent.nodeId } : {}) };
+    nodes.push(x);
+    if (parent) (parent.childIds ??= []).push(x.nodeId);
+    return x;
   };
-  visit(root ?? document.body, 0);
-  return { snapshot: lines.join("\n"), url: location.href, title: document.title };
+  const visitChildren = (container: Node, parent: LiteAXNode) => {
+    const kids: Node[] = [];
+    if (container instanceof Element && container.shadowRoot) kids.push(...Array.from(container.shadowRoot.childNodes));
+    kids.push(...Array.from(container.childNodes));
+    for (const k of kids) visit(k, parent);
+  };
+  const visit = (node: Node, parent: LiteAXNode) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = norm(node.textContent);
+      if (t) add({ role: { value: "StaticText" }, name: { value: t } }, parent);
+      return;
+    }
+    if (!(node instanceof Element)) return;
+    const el = node;
+    const tag = el.tagName.toLowerCase();
+    if (SKIP_WALK.has(tag) || isOverlay(el) || el.getAttribute("aria-hidden") === "true") return;
+    if (el instanceof HTMLElement && el.hidden && tag !== "option") return;
+    const st = getComputedStyle(el);
+    if (st.display === "none" && tag !== "option") return;
+    const hiddenVis = st.visibility === "hidden";
+    let role = roleOf(el);
+    if (tag === "select") role = (el as HTMLSelectElement).multiple || (el as HTMLSelectElement).size > 1 ? "listbox" : "combobox";
+    const name = ["generic", "none", "presentation", "paragraph", "listitem", "row"].includes(role) ? "" : nameOf(el);
+    const props: { name: string; value: { value: unknown } }[] = [];
+    const ch = getChecked(el);
+    if (ch !== null && ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)) props.push({ name: "checked", value: { value: String(ch) } });
+    if (el.getAttribute("aria-expanded")) props.push({ name: "expanded", value: { value: el.getAttribute("aria-expanded") === "true" } });
+    if (el.getAttribute("aria-selected") === "true" || (el instanceof HTMLOptionElement && el.selected && role === "option")) props.push({ name: "selected", value: { value: true } });
+    if (isDisabled(el)) props.push({ name: "disabled", value: { value: true } });
+    if ((el as HTMLInputElement).required) props.push({ name: "required", value: { value: true } });
+    if ((el as HTMLInputElement).readOnly && (tag === "input" || tag === "textarea")) props.push({ name: "readonly", value: { value: true } });
+    if (role === "heading") props.push({ name: "level", value: { value: Number(el.tagName.match(/^H(\d)$/)?.[1] ?? el.getAttribute("aria-level") ?? 2) } });
+    if (el.hasAttribute("tabindex") && (el as HTMLElement).tabIndex >= 0) props.push({ name: "focusable", value: { value: true } });
+    let value: string | undefined;
+    if (tag === "select") value = (el as HTMLSelectElement).selectedOptions[0]?.text.trim() ?? "";
+    else if (isEditable(el) || ["textbox", "searchbox", "combobox", "spinbutton", "slider"].includes(role)) value = valueOf(el);
+    const ax = add(
+      {
+        ...(hiddenVis ? { ignored: true } : {}),
+        role: { value: LITE_ROLE[role] ?? role },
+        ...(name ? { name: { value: name } } : {}),
+        ...(value !== undefined ? { value: { value } } : {}),
+        ...(props.length ? { properties: props } : {}),
+        backendDOMNodeId: liteId(el),
+      },
+      parent,
+    );
+    if (isSensitiveInput(el)) sensitive.push(ax.backendDOMNodeId!);
+    if (tag === "iframe") return;
+    visitChildren(el, ax);
+  };
+  const root = add({ role: { value: self ? "generic" : "RootWebArea" }, name: { value: document.title }, ...(self ? { backendDOMNodeId: liteId(self) } : {}) });
+  if (self) visitChildren(self, root);
+  else if (document.body) visitChildren(document.body, root);
+  return { nodes, sensitive, docId: DOC_ID, url: location.href, title: document.title };
+}
+
+/** One auto-wait observation (frame-local CSS px). */
+async function observe(el: El, opts: { scroll?: boolean } = {}) {
+  if (!el.isConnected) return { attached: false, visible: false, enabled: false, box: null, inView: false };
+  if (opts.scroll) el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" as ScrollBehavior });
+  const visible = isVisible(el);
+  const enabled = !isDisabled(el);
+  const editable = isEditable(el);
+  const a = el.getBoundingClientRect();
+  await raf();
+  const b = el.getBoundingClientRect();
+  const rects = el.getClientRects();
+  const r = rects.length ? rects[0] : b;
+  const x = r.left + Math.min(r.width / 2, Math.max(1, r.width - 1));
+  const y = r.top + Math.min(r.height / 2, Math.max(1, r.height - 1));
+  const inView = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
+  const box = (q: DOMRect) => ({ x: q.left, y: q.top, w: q.width, h: q.height });
+  return { attached: true, visible, enabled, editable, box: box(a), box2: box(b), inView, point: { x, y }, hit: inView && visible ? hitTest(el, x, y) : undefined };
+}
+
+interface FindSpec2 {
+  by: "text" | "role" | "label" | "css" | "xpath";
+  value: string;
+  name?: string;
+  limit?: number;
+}
+
+/** page.find: document order, up to limit+1 so the caller can flag truncation. */
+function findNodes(self: El | null, q: FindSpec2): Ret {
+  const root = (self ?? document) as Node;
+  const limit = (q.limit ?? 20) + 1;
+  let cands: El[];
+  if (q.by === "css") cands = deepQueryAll(root as ParentNode, q.value);
+  else if (q.by === "xpath") {
+    let snap: XPathResult;
+    try {
+      snap = document.evaluate(q.value, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    } catch {
+      throw new Error(`Invalid xpath: ${q.value}`);
+    }
+    cands = [];
+    for (let i = 0; i < snap.snapshotLength; i++) {
+      const n = snap.snapshotItem(i);
+      if (n instanceof Element) cands.push(n);
+    }
+  } else {
+    cands = Array.from(walk(root)).filter((e) => !isOverlay(e) && !SKIP_WALK.has(e.tagName.toLowerCase()));
+    if (q.by === "role") cands = cands.filter((e) => roleOf(e) === q.value.toLowerCase());
+    else if (q.by === "label") cands = cands.filter((e) => isFormControl(e) && lc(nameOf(e)).includes(lc(q.value)));
+    else if (q.by === "text") {
+      const needle = lc(q.value);
+      const hits = cands.filter((e) => !["html", "body"].includes(e.tagName.toLowerCase()) && (lc(textOf(e)).includes(needle) || lc(nameOf(e)).includes(needle)));
+      const set = new Set(hits);
+      const inner = hits.filter((e) => !Array.from(e.children).some((c) => set.has(c)) && !(e.shadowRoot && Array.from(e.shadowRoot.children).some((c) => set.has(c))));
+      cands = Array.from(new Set(inner.map((e) => closestDeep(e, "a[href],button,[role=button],[role=link],summary,[role=tab],[role=menuitem],[role=option],label") ?? e)));
+    }
+  }
+  if (q.name) cands = cands.filter((e) => lc(nameOf(e)).includes(lc(q.name)));
+  const els = cands.slice(0, limit);
+  return { value: { total: cands.length, matches: els.map((e, i) => ({ el: i, role: roleOf(e), name: nameOf(e).slice(0, 120) })) }, elements: els };
+}
+
+/** D24: resolve once the DOM has been quiet for `quiet` ms (max `max` ms). Timers, not rAF: works in background tabs. */
+function quietDom(_self: unknown, quiet = 100, max = 1000): Promise<{ quiet: boolean; waited: number }> {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let hard: ReturnType<typeof setTimeout> | undefined;
+    const obs = new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => done(true), quiet);
+    });
+    function done(q: boolean) {
+      obs.disconnect();
+      clearTimeout(timer);
+      clearTimeout(hard);
+      resolve({ quiet: q, waited: Date.now() - t0 });
+    }
+    hard = setTimeout(() => done(false), max);
+    obs.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    timer = setTimeout(() => done(true), quiet);
+  });
+}
+
+/** Metrics of an <iframe> element for frame -> top-level coordinate translation. */
+function ownerMetrics(iframe: El) {
+  const r = iframe.getBoundingClientRect();
+  const s = getComputedStyle(iframe);
+  return { rect: { left: r.left, top: r.top }, clientLeft: iframe.clientLeft, clientTop: iframe.clientTop, paddingLeft: parseFloat(s.paddingLeft || "0"), paddingTop: parseFloat(s.paddingTop || "0") };
+}
+
+function rectsOf(_self: unknown, ...els: El[]) {
+  return els.map((e) => {
+    if (!e || !e.isConnected) return null;
+    const r = e.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -668,6 +830,23 @@ function syntheticClick(el: El, opts: { button?: number; clickCount?: number } =
   el.dispatchEvent(new MouseEvent("mouseup", init));
   el.dispatchEvent(new MouseEvent("click", { ...init, detail: 1 }));
   if ((opts.clickCount ?? 1) >= 2) el.dispatchEvent(new MouseEvent("dblclick", { ...init, detail: 2 }));
+  return true;
+}
+
+/** Lite mode drag: synthetic HTML5 drag events from `el` to the element with lite id `toId`. */
+function syntheticDragTo(el: El, toId: number) {
+  const to = byLiteId(toId);
+  if (!to) throw new Error("drop target is no longer in the page");
+  const dt = new DataTransfer();
+  const at = (e: El) => {
+    const r = e.getBoundingClientRect();
+    return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+  };
+  el.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(el) }));
+  to.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(to) }));
+  to.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(to) }));
+  to.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at(to) }));
+  el.dispatchEvent(new DragEvent("dragend", { bubbles: true, composed: true, dataTransfer: dt, ...at(el) }));
   return true;
 }
 
@@ -713,16 +892,20 @@ function syntheticType(el: El | null, s: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Overlay (visibility while an agent drives)
+// Overlay (D40): elements carry data-tabagent-overlay, pointer-events:none, are
+// aria-hidden (so excluded from snapshots) and hidden while a screenshot is
+// taken. Set-of-marks labels use their own host, which stays visible.
 // ---------------------------------------------------------------------------
 const OVERLAY_ID = "__tabagent_overlay__";
+const MARKS_ID = "__tabagent_marks__";
 const shadowFor = new WeakMap<HTMLElement, ShadowRoot>();
-function overlayShadow(): ShadowRoot {
-  let host = document.getElementById(OVERLAY_ID) as HTMLElement | null;
+function overlayShadow(id = OVERLAY_ID, kind = "activity"): ShadowRoot {
+  let host = document.getElementById(id) as HTMLElement | null;
   if (host && shadowFor.has(host)) return shadowFor.get(host)!;
   host?.remove();
   host = document.createElement("div");
-  host.id = OVERLAY_ID;
+  host.id = id;
+  host.setAttribute("data-tabagent-overlay", kind);
   host.setAttribute("aria-hidden", "true");
   host.setAttribute("role", "presentation");
   host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
@@ -749,13 +932,19 @@ function showActivity(el: El | null, label: string) {
     sr.appendChild(h);
   }
   clearTimeout(overlayTimer);
-  overlayTimer = setTimeout(() => clearOverlay(), 1500) as unknown as number;
+  overlayTimer = setTimeout(() => document.getElementById(OVERLAY_ID)?.remove(), 1500) as unknown as number;
   return true;
 }
 
+/** Hide (or restore) the activity overlay, e.g. while a screenshot is taken. */
+function hideOverlay(_self: unknown, hidden: boolean) {
+  const host = document.getElementById(OVERLAY_ID) as HTMLElement | null;
+  if (host) host.style.visibility = hidden ? "hidden" : "visible";
+  return !!host;
+}
+
 function drawMarks(_self: unknown, marks: { label: string; x: number; y: number; w: number; h: number }[]) {
-  const sr = overlayShadow();
-  clearTimeout(overlayTimer);
+  const sr = overlayShadow(MARKS_ID, "marks");
   sr.innerHTML = `<style>.m{position:fixed;border:1.5px solid #e11d48;box-sizing:border-box}.l{position:absolute;top:-1px;left:-1px;background:#e11d48;color:#fff;font:700 10px/12px monospace;padding:0 2px}</style>`;
   for (const m of marks) {
     const d = document.createElement("div");
@@ -772,6 +961,7 @@ function drawMarks(_self: unknown, marks: { label: string; x: number; y: number;
 
 function clearOverlay() {
   document.getElementById(OVERLAY_ID)?.remove();
+  document.getElementById(MARKS_ID)?.remove();
   return true;
 }
 
@@ -819,24 +1009,27 @@ export function mapEls(v: unknown, refs: (string | null)[]): unknown {
   return v;
 }
 
-/** Lite mode: resolve ref, run, map elements to lite refs. */
-async function callLite(_self: unknown, name: string, ref: string | null, args: unknown[]) {
+/**
+ * Lite mode entry: resolve an element id from this document, run `name`, and
+ * return element ids for returned elements. A docId from another document, or
+ * an element that's gone, reports `stale`.
+ */
+async function callLite(_self: unknown, name: string, id: number | null, docId: string | null, args: unknown[]) {
+  if (docId && docId !== DOC_ID) return { stale: "navigated", docId: DOC_ID };
   let self: El | null = null;
-  if (ref) {
-    self = byLiteRef(ref);
-    if (!self) return { stale: true };
+  if (id != null) {
+    self = byLiteId(id);
+    if (!self) return { stale: "gone", docId: DOC_ID };
   }
   const r = await invoke(self, name, args);
-  const refs = r.elements.map((e) => liteRef(e));
-  return { value: mapEls(r.value, refs) };
+  return { value: r.value, ids: r.elements.map((e) => (e ? liteId(e) : -1)), docId: DOC_ID };
 }
 
 const api = {
   invoke: (self: El | null, name: string, args: unknown[]) => invoke(self, name, args),
   callLite,
   // lite registry
-  liteRef: (_s: unknown, el: El) => liteRef(el),
-  byLiteRef: (_s: unknown, r: string) => byLiteRef(r),
+  docId: () => DOC_ID,
   // queries
   find,
   info,
@@ -878,8 +1071,17 @@ const api = {
   pageState,
   waitSelector,
   waitText,
+  // driver (snapshot, auto-wait, find, frames)
+  domAxTree,
+  sensitiveInputs,
+  observe,
+  findNodes,
+  quietDom,
+  ownerMetrics,
+  rectsOf,
+  hideOverlay,
   // lite mode
-  snapshotDom,
+  syntheticDragTo,
   syntheticClick,
   syntheticHover,
   syntheticKey,

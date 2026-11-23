@@ -29,7 +29,7 @@ export const fileHandlers: Record<string, Handler> = {
         let backendNodeId: number;
         let sessionId: string | undefined;
         if (direct?.ref) {
-          const ri = t.drv.resolveRef(direct.ref);
+          const ri = await t.drv.resolveRef(direct.ref);
           backendNodeId = ri.backendNodeId;
           [sessionId] = splitKey(ri.frameKey);
         } else {

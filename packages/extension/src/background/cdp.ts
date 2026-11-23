@@ -2,6 +2,7 @@
 // sessions, network, console, dialogs, navigation lifecycle and isolated worlds.
 import { TabAgentError } from "@tabagent/protocol";
 import { onCdpEvent, setDialogSender, tabState } from "./capture";
+import { taErr } from "./errors";
 
 declare const PAGELIB_SRC: string;
 
@@ -46,6 +47,8 @@ export interface FrameInfo {
   parentKey?: string;
   url: string;
   ownerBackendNodeId?: number;
+  /** Current document's loaderId (D22 ref staleness). */
+  loaderId?: string;
 }
 
 type Waiter = { pred: (method: string, params: any, sessionId?: string) => boolean; resolve: (v: any) => void };
@@ -78,6 +81,17 @@ export async function detachTab(tabId: number) {
   }
 }
 
+/** The user cancelled the debugging bar earlier; they resumed the tab in the side panel (D27). */
+export function resumeDebugger(tabId: number) {
+  const t = tabs.get(tabId);
+  if (t) t.userDetached = false;
+}
+
+/** Tabs the user stopped by cancelling the debugging bar. */
+export function stoppedTabs(): number[] {
+  return [...tabs.values()].filter((t) => t.userDetached).map((t) => t.tabId);
+}
+
 export async function detachAll() {
   for (const id of [...tabs.keys()]) await detachTab(id);
 }
@@ -95,8 +109,10 @@ chrome.debugger.onDetach.addListener((source, reason) => {
     t.attached = false;
     t.contexts.clear();
     t.children.clear();
+    t.loaders.clear();
     if (reason === "canceled_by_user") t.userDetached = true;
     tabState(source.tabId).dialogs.onClosed();
+    t.fireDetached(String(reason));
   }
 });
 
@@ -120,13 +136,45 @@ export class CdpTab {
   url = "";
   waiters = new Set<Waiter>();
   dragData: unknown = null;
+  /** frameKey -> current loaderId */
+  loaders = new Map<string, string>();
+  private detachHandlers = new Set<(reason: string) => void>();
+  private navHandlers = new Set<(url: string) => void>();
 
   constructor(public tabId: number) {}
 
+  /** Called when the debugger detaches (user cancelled the bar, tab closed, ...). */
+  onDetached(fn: (reason: string) => void): () => void {
+    this.detachHandlers.add(fn);
+    return () => this.detachHandlers.delete(fn);
+  }
+  fireDetached(reason: string) {
+    for (const f of [...this.detachHandlers]) f(reason);
+  }
+  /** Main-frame cross-document navigation. */
+  onNavigated(fn: (url: string) => void): () => void {
+    this.navHandlers.add(fn);
+    return () => this.navHandlers.delete(fn);
+  }
+
+  detachedError() {
+    return taErr("DEBUGGER_DETACHED", "The user cancelled debugging on this tab (Chrome's debugging bar).", "Ask the user to resume the tab in the TabAgent side panel, or open a new tab with tabs action=new.");
+  }
+
+  /** Reject when the user cancels the debugging bar while `p` runs (D27). */
+  guard<T>(p: Promise<T>): Promise<T> {
+    if (this.userDetached) return Promise.reject(this.detachedError());
+    let off: () => void = () => {};
+    const det = new Promise<never>((_r, reject) => {
+      off = this.onDetached((reason) => {
+        if (reason === "canceled_by_user") reject(this.detachedError());
+      });
+    });
+    return Promise.race([p, det]).finally(off);
+  }
+
   async ensure(): Promise<void> {
-    if (this.userDetached) {
-      throw new TabAgentError("PERMISSION_DENIED", "The user cancelled debugging on this tab.", "Open a new tab with tabs action=new, or enable lite mode for this site in the TabAgent side panel.");
-    }
+    if (this.userDetached) throw this.detachedError();
     if (this.attached) return;
     if (this.attaching) return this.attaching;
     this.attaching = this.doAttach().finally(() => (this.attaching = null));
@@ -154,6 +202,7 @@ export class CdpTab {
     const tree = await this.send<any>("Page.getFrameTree", {});
     this.mainFrameId = tree.frameTree.frame.id;
     this.url = tree.frameTree.frame.url;
+    this.loaders.set(`|${this.mainFrameId}`, tree.frameTree.frame.loaderId);
   }
 
   private async enableDomains(sessionId?: string) {
@@ -176,6 +225,7 @@ export class CdpTab {
     } catch (e) {
       const msg = String((e as Error).message ?? e);
       if (/not attached|Detached while handling/i.test(msg)) this.attached = false;
+      if (this.userDetached) throw this.detachedError();
       throw new Error(`${method}: ${msg}`);
     }
   }
@@ -204,14 +254,20 @@ export class CdpTab {
       }
       case "Target.detachedFromTarget":
         this.children.delete(p.sessionId);
+        for (const k of [...this.loaders.keys()]) if (k.startsWith(p.sessionId + "|")) this.loaders.delete(k);
         for (const k of [...this.contexts.keys()]) if (k.startsWith(p.sessionId + "|")) this.contexts.delete(k);
         break;
       case "Page.frameNavigated":
+        this.loaders.set(`${sessionId ?? ""}|${p.frame.id}`, p.frame.loaderId);
         if (!p.frame.parentId && !sessionId) {
           this.mainFrameId = p.frame.id;
           this.url = p.frame.url + (p.frame.urlFragment ?? "");
+          for (const f of [...this.navHandlers]) f(this.url);
         }
         this.contexts.delete(`${sessionId ?? ""}|${p.frame.id}`);
+        break;
+      case "Page.frameDetached":
+        this.loaders.delete(`${sessionId ?? ""}|${p.frameId}`);
         break;
       case "Page.navigatedWithinDocument":
         if (!sessionId && p.frameId === this.mainFrameId) this.url = p.url;
@@ -370,7 +426,7 @@ export class CdpTab {
           return;
         }
         key = `${childSid}|${fid}`;
-        out.push({ key, sessionId: childSid, frameId: fid, parentKey, url: childTree.frame.url, ownerBackendNodeId: owner });
+        out.push({ key, sessionId: childSid, frameId: fid, parentKey, url: childTree.frame.url, ownerBackendNodeId: owner, loaderId: childTree.frame.loaderId });
         for (const ch of childTree.childFrames ?? []) await visit(childSid, ch, key);
         return;
       }
@@ -383,7 +439,7 @@ export class CdpTab {
           /* ignore */
         }
       }
-      out.push({ key, sessionId: sid, frameId: fid, parentKey, url: node.frame.url, ownerBackendNodeId: owner });
+      out.push({ key, sessionId: sid, frameId: fid, parentKey, url: node.frame.url, ownerBackendNodeId: owner, loaderId: node.frame.loaderId });
       for (const ch of node.childFrames ?? []) await visit(sid, ch, key);
     };
     const tree = (await this.send<any>("Page.getFrameTree", {})).frameTree;
@@ -429,12 +485,13 @@ export class CdpTab {
           }
         }
         const key = `${childSid}|${c.targetId}`;
-        out.push({ key, sessionId: childSid, frameId: c.targetId, parentKey: parentKey ?? out[0].key, url: childTree.frame.url, ownerBackendNodeId: owner });
+        out.push({ key, sessionId: childSid, frameId: c.targetId, parentKey: parentKey ?? out[0].key, url: childTree.frame.url, ownerBackendNodeId: owner, loaderId: childTree.frame.loaderId });
         seen.add(c.targetId);
         for (const ch of childTree.childFrames ?? []) await visit(childSid, ch, key);
         progress = true;
       }
     }
+    for (const f of out) if (f.loaderId) this.loaders.set(f.key, f.loaderId);
     return out;
   }
 

@@ -1,0 +1,13 @@
+- main
+  - heading "Create your account" level=1
+  - form
+    - textbox "Email address" [ref=e1] value="" required
+    - textbox "Full name" [ref=e2] value=""
+    - combobox "Country" [ref=e3] value="Choose…"
+    - radio "Free" [ref=e4] checked=false
+    - radio "Pro" [ref=e5] checked=false
+    - checkbox "Subscribe to newsletter" [ref=e6] checked=false
+    - textbox "Bio" [ref=e7] value=""
+    - textbox "Start date" [ref=e8]
+    - textbox "Controlled" [ref=e9] value=""
+    - button "Create account" [ref=e10]

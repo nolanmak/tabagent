@@ -1,0 +1,21 @@
+- navigation
+  - link "Home" [ref=e1]
+- main
+  - article [ref=e2]
+    - heading "The Tab Agent Story" level=1
+    - paragraph "Agents can browse the web with ."
+      - link "forms" [ref=e3]
+    - heading "Details" level=2
+    - list [ref=e4]
+      - listitem "Fast"
+      - listitem "Safe"
+    - table [ref=e5]
+      - row
+        - columnheader "Key"
+        - columnheader "Value"
+      - row
+        - cell "speed"
+        - cell "high"
+    - paragraph "Longer paragraph text that goes on so the main element has enough content to be chosen as the main root for markdown extraction, which requires about two hundred characters of text content in total."
+- contentinfo
+  - text "© fixtures"
