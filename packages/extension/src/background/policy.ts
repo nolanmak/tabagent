@@ -1,32 +1,61 @@
-// Pure interim permission policy (D17). No chrome.*, no I/O: plain data in, plain data out.
+// Pure permission engine (D16). No chrome.*, no I/O: plain data in, plain data out.
 //
-// Until the permission engine (#12) and sensitive confirmation (#13) land, the
-// policy behind the router's authorize() chokepoint is:
-//   hard deny (chrome://, extension pages, Web Store) -> only http(s)/file pages
-//   -> D18 gated effects refused with PERMISSION_DENIED unless devAllowSensitive.
-// Session-owned tabs only is enforced by the router's tab resolution (D9).
-// #12 and #13 replace this policy, not the hook.
+// Evaluation order for every command:
+//   paused (D12) -> hard deny -> denylist -> token scope (D3) -> site policy / session grant / ask -> sensitive gate (D18)
+// "ask" is not a stored level: it is the absence of a policy.
 
 export type Level = "read" | "act" | "full";
+export type StoredPolicy = Level | "deny";
 /** D18 categories. a/b are detected dynamically by handlers; c-f are static per registry. */
 export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f";
+/** a-e pre-approve per origin; f (attach) never. */
+export type PreapprovableCategory = Exclude<SensitiveCategory, "f">;
 
 export const LEVELS: Level[] = ["read", "act", "full"];
+export const RANK: Record<StoredPolicy, number> = { deny: 0, read: 1, act: 2, full: 3 };
+
+export interface SiteEntry {
+  policy?: StoredPolicy;
+  preapproved?: Partial<Record<PreapprovableCategory, true>>;
+}
+
+/** Per-session answers ("Allow once" / "Deny"), keyed by origin. */
+export interface SessionGrant {
+  /** Highest level allowed once for this session. */
+  once?: Level;
+  /** Lowest level the user denied for this session; requests at or above it are denied. */
+  denied?: Level;
+}
 
 export interface PolicyState {
-  /** Extension setting (D32), off by default; the e2e harness turns it on. */
+  paused: boolean;
+  sites: Record<string, SiteEntry>;
+  denylist: string[];
+  /** sessionId -> origin -> grant */
+  grants: Record<string, Record<string, SessionGrant>>;
   devAllowSensitive?: boolean;
 }
 
 export interface PolicyRequest {
-  /** URL being acted on (the tab's current URL, a nav target, or a download's URL). */
+  sessionId: string;
+  /** Token cap (D3). */
+  cap: Level;
+  /** Token site globs; empty = no limit. */
+  sites: string[];
+  /** URL being acted on (the tab's current URL, a nav target, or a frame URL). */
   url: string;
-  /** Required level; null = not site-scoped. Every level is allowed until #12. */
+  /** Required level; null = not site-scoped (still subject to paused + hard deny). */
   level: Level | null;
   sensitive?: SensitiveCategory;
 }
 
-export type Decision = { decision: "allow"; origin: string | null } | { decision: "deny"; code: "PERMISSION_DENIED"; message: string; hint?: string; origin: string | null };
+export type DenyCode = "PERMISSION_DENIED" | "KILLED";
+
+export type Decision =
+  | { decision: "allow"; origin: string | null }
+  | { decision: "deny"; code: DenyCode; message: string; hint?: string; origin: string | null }
+  | { decision: "ask"; kind: "site"; origin: string; level: Level; reason?: string }
+  | { decision: "ask"; kind: "sensitive"; origin: string; category: SensitiveCategory };
 
 // ---------------------------------------------------------------------------
 // URL helpers
@@ -75,17 +104,27 @@ export function isHardDenied(url: string): boolean {
   return false;
 }
 
-/** D18 text for a refused gated effect. */
-export const CATEGORY_TEXT: Record<SensitiveCategory, string> = {
-  a: "Submitting a form with password, card or SSN-like fields",
-  b: "Click that looks like purchase, delete, send or transfer",
-  c: "Running arbitrary JavaScript in the page",
-  d: "Reading credentials (cookies, storage, network headers/bodies)",
-  e: "Transferring a local file (upload or reading a download)",
-  f: "Taking over one of your tabs",
-};
+/** `*.github.com` matches `github.com` and every subdomain; `*` matches all. */
+export function hostMatches(glob: string, host: string): boolean {
+  const g = glob.trim().toLowerCase();
+  const h = host.toLowerCase();
+  if (!g || !h) return false;
+  if (g === "*") return true;
+  if (g.startsWith("*.")) {
+    const base = g.slice(2);
+    return h === base || h.endsWith("." + base);
+  }
+  return h === g;
+}
 
-export const SENSITIVE_HINT = "Gated actions are refused until TabAgent can ask the user. A developer can turn on devAllowSensitive in the extension settings.";
+export function isDenylisted(url: string, denylist: string[]): boolean {
+  const h = hostOf(url);
+  return !!h && denylist.some((g) => hostMatches(g, h));
+}
+
+function minLevel(a: Level, b: Level): Level {
+  return RANK[a] <= RANK[b] ? a : b;
+}
 
 // ---------------------------------------------------------------------------
 // resolve
@@ -93,22 +132,114 @@ export const SENSITIVE_HINT = "Gated actions are refused until TabAgent can ask 
 
 export function resolve(state: PolicyState, req: PolicyRequest): Decision {
   const origin = originOf(req.url);
+  if (state.paused) {
+    return { decision: "deny", code: "KILLED", origin, message: "The user stopped all agents with the TabAgent kill switch", hint: "Ask the user to press Resume in the TabAgent side panel." };
+  }
   if (isHardDenied(req.url)) {
     return { decision: "deny", code: "PERMISSION_DENIED", origin, message: "TabAgent cannot act on browser pages, extension pages or the Chrome Web Store" };
   }
-  if (!isBlank(req.url) && !origin) {
+  const blank = isBlank(req.url);
+  if (!blank && !origin) {
     return { decision: "deny", code: "PERMISSION_DENIED", origin, message: "TabAgent only works on http(s) and file pages" };
   }
-  const cat = req.sensitive;
-  if (!cat || state.devAllowSensitive) return { decision: "allow", origin };
-  return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `Refused: ${CATEGORY_TEXT[cat].toLowerCase()} (D18 ${cat})`, hint: SENSITIVE_HINT };
+  if (!blank && isDenylisted(req.url, state.denylist)) {
+    return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `${hostOf(req.url)} is on the TabAgent denylist`, hint: "The user can edit the denylist in the TabAgent side panel." };
+  }
+  // token scope
+  if (req.level && RANK[req.level] > RANK[req.cap]) {
+    return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `This client's token is limited to "${req.cap}" but ${req.level} access is needed`, hint: "Create a token with a higher --caps." };
+  }
+  if (!blank && req.sites.length) {
+    const h = hostOf(req.url);
+    if (!req.sites.some((g) => hostMatches(g, h))) {
+      return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `This client's token is not allowed on ${h}`, hint: `Allowed sites: ${req.sites.join(", ")}` };
+    }
+  }
+  if (blank || !origin) return sensitiveStep(state, req, origin);
+
+  // site policy / session grant / ask
+  if (req.level) {
+    const stored = state.sites[origin]?.policy;
+    const g = state.grants[req.sessionId]?.[origin];
+    if (stored === "deny") {
+      return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `${origin} is set to deny`, hint: "The user can change this in the TabAgent side panel." };
+    }
+    if (g?.denied && RANK[req.level] >= RANK[g.denied]) {
+      return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `The user denied ${req.level} access to ${origin} for this session` };
+    }
+    const ok = (stored && RANK[stored] >= RANK[req.level]) || (g?.once && RANK[g.once] >= RANK[req.level]);
+    if (!ok) {
+      return { decision: "ask", kind: "site", origin, level: req.level, ...(stored ? { reason: `Site is set to "${stored}"; ${req.level} needs more access` } : {}) };
+    }
+  }
+  return sensitiveStep(state, req, origin);
 }
 
-/** Effective access for display (session.permissions). */
-export function effectiveLevel(state: PolicyState, url: string): { origin: string | null; level: Level | "deny"; source: string; sensitiveAllowed: boolean } {
-  const origin = originOf(url);
-  const sensitiveAllowed = !!state.devAllowSensitive;
-  if (isBlank(url)) return { origin: null, level: "full", source: "blank page", sensitiveAllowed };
-  if (isHardDenied(url) || !origin) return { origin, level: "deny", source: "restricted browser page", sensitiveAllowed };
-  return { origin, level: "full", source: "interim policy (D17): session tabs allowed, gated actions refused unless devAllowSensitive", sensitiveAllowed };
+function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | null): Decision {
+  const cat = req.sensitive;
+  if (!cat) return { decision: "allow", origin };
+  const key = origin ?? (isBlank(req.url) ? "about:blank" : req.url);
+  if (cat !== "f") {
+    if (state.devAllowSensitive) return { decision: "allow", origin };
+    if (origin && state.sites[origin]?.preapproved?.[cat]) return { decision: "allow", origin };
+  }
+  return { decision: "ask", kind: "sensitive", origin: key, category: cat };
+}
+
+// ---------------------------------------------------------------------------
+// Applying answers (pure state transitions)
+// ---------------------------------------------------------------------------
+
+export type Answer = "once" | "always" | "deny";
+
+/** Site prompt answer -> new state. Always stores exactly the requested level. */
+export function applySiteAnswer(state: PolicyState, sessionId: string, origin: string, level: Level, answer: Answer): PolicyState {
+  if (answer === "always") {
+    return { ...state, sites: { ...state.sites, [origin]: { ...state.sites[origin], policy: level } } };
+  }
+  const sess = { ...(state.grants[sessionId] ?? {}) };
+  const cur = { ...(sess[origin] ?? {}) };
+  if (answer === "once") {
+    cur.once = cur.once && RANK[cur.once] >= RANK[level] ? cur.once : level;
+  } else {
+    cur.denied = cur.denied ? minLevel(cur.denied, level) : level;
+  }
+  sess[origin] = cur;
+  return { ...state, grants: { ...state.grants, [sessionId]: sess } };
+}
+
+/** Sensitive prompt answer: only "always" changes state (per-origin per-category pre-approval, never f). */
+export function applySensitiveAnswer(state: PolicyState, origin: string, category: SensitiveCategory, answer: Answer): PolicyState {
+  if (answer !== "always" || category === "f" || !originOf(origin)) return state;
+  const e = state.sites[origin] ?? {};
+  return { ...state, sites: { ...state.sites, [origin]: { ...e, preapproved: { ...e.preapproved, [category]: true } } } };
+}
+
+export function clearSessionGrants(state: PolicyState, sessionId?: string): PolicyState {
+  if (sessionId == null) return { ...state, grants: {} };
+  const { [sessionId]: _drop, ...rest } = state.grants;
+  return { ...state, grants: rest };
+}
+
+/** Effective level for display (session.permissions). */
+export function effectiveLevel(state: PolicyState, req: Omit<PolicyRequest, "level" | "sensitive">): { origin: string | null; level: StoredPolicy | "ask"; source: string } {
+  const origin = originOf(req.url);
+  if (isBlank(req.url)) return { origin: null, level: req.cap, source: "blank page" };
+  if (isHardDenied(req.url) || !origin) return { origin, level: "deny", source: "restricted browser page" };
+  if (isDenylisted(req.url, state.denylist)) return { origin, level: "deny", source: "denylist" };
+  if (req.sites.length && !req.sites.some((g) => hostMatches(g, hostOf(req.url)))) return { origin, level: "deny", source: "token site scope" };
+  const stored = state.sites[origin]?.policy;
+  const g = state.grants[req.sessionId]?.[origin];
+  let lvl: StoredPolicy | "ask" = stored ?? "ask";
+  let source = stored ? "site policy" : "no policy (ask)";
+  if (g?.once && (lvl === "ask" || (lvl !== "deny" && RANK[g.once] > RANK[lvl]))) {
+    lvl = g.once;
+    source = "allowed once for this session";
+  }
+  if (lvl !== "ask" && lvl !== "deny") {
+    const capped = minLevel(lvl, req.cap);
+    if (capped !== lvl) source += ` (token cap ${req.cap})`;
+    lvl = capped;
+  }
+  return { origin, level: lvl, source };
 }

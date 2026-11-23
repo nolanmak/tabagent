@@ -1,10 +1,10 @@
-// Pure snapshot renderer: CDP accessibility trees (or the lite DOM walker's
-// AX-shaped nodes) -> compact, ref-annotated text. No chrome.*, no CDP.
+// Pure snapshot renderer: CDP accessibility trees -> compact, ref-annotated
+// text. No chrome.*, no CDP.
 //
 // D23: `interactive` (default) = interactive nodes with refs, plus landmarks and
 // headings as unreferenced structure. `full` = everything, including text.
-// Budget: maxTokens (default 6000), token = ceil(chars / 4). Over budget, a hard
-// stop with `… truncated, N more nodes; narrow with root=<ref>` (D23, M1).
+// Budget: maxTokens (default 6000), token = ceil(chars / 4). Over budget, a
+// hard stop with `… truncated, N more nodes; narrow with root=<ref>` (D23, M1).
 // Refs are minted only for lines that are actually shown.
 // D18: password / card values render as `value="••••"`.
 import { taErr } from "./errors";
@@ -125,8 +125,6 @@ interface TNode {
   /** Printed line, or a transparent node whose children are spliced in. */
   line?: { head: string; tail: string; refKey?: [string, number]; interactive: boolean };
   role: string;
-  /** For collapse: the node that can be passed as root=. */
-  key?: [string, number];
   children: TNode[];
 }
 
@@ -189,7 +187,7 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
       const kids = () => (n.childIds ?? []).flatMap(visit);
       const transparent = (): TNode[] => {
         const children = kids();
-        return children.length ? [{ role: rawRole || "generic", key, children }] : [];
+        return children.length ? [{ role: rawRole || "generic", children }] : [];
       };
 
       if (n.ignored) return transparent();
@@ -207,7 +205,7 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
         const cf = frameFor(f.key, n.backendDOMNodeId);
         const head = `- iframe${name ? " " + quote(name) : ""}`;
         const refKey: [string, number] | undefined = full ? key : undefined;
-        return [{ role: "iframe", key, line: { head, tail: "", refKey, interactive: false }, children: cf ? renderFrame(cf) : [] }];
+        return [{ role: "iframe", line: { head, tail: "", refKey, interactive: false }, children: cf ? renderFrame(cf) : [] }];
       }
 
       const interactive = isInteractiveNode(n, rawRole, name);
@@ -262,7 +260,7 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
       if (["Date", "DateTime", "InputTime"].includes(rawRole)) children = [];
       // empty landmarks carry no information in interactive mode
       if (!full && landmark && !interactive && !children.some(hasOutput)) return [];
-      return [{ role, key, line: { head, tail, refKey, interactive }, children }];
+      return [{ role, line: { head, tail, refKey, interactive }, children }];
     };
 
     if (startNodeId) return visit(startNodeId);

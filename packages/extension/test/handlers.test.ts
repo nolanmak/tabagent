@@ -29,7 +29,7 @@ const { navHandlers } = await import("../src/background/handlers/nav");
 const { assertNoDialog, levelOf } = await import("../src/background/tabctx");
 const { baselines } = await import("../src/background/refstore");
 
-function fakeDriver(kind: "cdp" | "lite" = "cdp") {
+function fakeDriver(kind: "cdp" = "cdp") {
   const log: string[] = [];
   let snap = ["- main", '  - button "Go" [ref=e1]'];
   const d: any = {
@@ -163,6 +163,16 @@ describe("D18(a)(b) gates", () => {
 });
 
 describe("page / nav handlers", () => {
+  it("page.snapshot sets the diff baseline (D24)", async () => {
+    const r: any = await pageHandlers["page.snapshot"](ctx("page.snapshot"));
+    expect(r.snapshot).toContain('button "Go"');
+    expect(baselines.get("S", 1)).toEqual(["- main", '  - button "Go" [ref=e1]']);
+    // root and full-mode snapshots don't move the baseline
+    state.drv.setSnap(["- x"]);
+    await pageHandlers["page.snapshot"](ctx("page.snapshot", { mode: "full" }));
+    expect(baselines.get("S", 1)).toEqual(["- main", '  - button "Go" [ref=e1]']);
+  });
+
   it("page.screenshot maps the spike's fullPage to target=full; page.find validates", async () => {
     const r: any = await pageHandlers["page.screenshot"](ctx("page.screenshot", { fullPage: true }));
     expect(r.o.target).toBe("full");

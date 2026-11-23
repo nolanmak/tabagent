@@ -99,8 +99,7 @@ test("page.find: label ref is clickable, role+name, css, xpath, text, empty, tru
   expect(many.truncated).toBe(true);
   // a found node keeps its ref in the next snapshot
   const btn = view(await h.ok(c, "page.find", { by: "role", value: "button", name: "After the list" })).json.matches[0].ref;
-  // (M1 snapshots hard-stop at maxTokens, so ask for room for all 500 rows)
-  expect(view(await h.ok(c, "page.snapshot", { maxTokens: 20000 })).snap).toContain(`button "After the list" [ref=${btn}]`);
+  expect(view(await h.ok(c, "page.snapshot", { maxTokens: 40000 })).snap).toContain(`button "After the list" [ref=${btn}]`);
 });
 
 test("page.text / page.markdown", async ({ h }) => {
@@ -166,6 +165,30 @@ test("snapshot goldens, masking, budgets, root, REF_STALE after navigation and a
   const cross = await h.call(c, "act.click", { ref: counter, tabId: other });
   expect(cross.text).toContain("REF_STALE");
   await h.ok(c, "tabs", { action: "close", tabId: other });
+});
+
+test("snapshot diff: an action diffs against the last delivered snapshot (D24)", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp();
+  await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
+  const first = view(await h.ok(c, "page.snapshot"));
+  expect(first.snap).toContain('button "Click me"');
+  const btn = refIn(first.snap, /Click me/);
+  const r = view(await h.ok(c, "act.click", { ref: btn }));
+  expect(r.json.snapshotDiff).toMatch(/^~ - button "Clicked 1 times" \[ref=e\d+\]/m);
+});
+
+test("500-row list stops at the budget (M1 hard stop); a larger maxTokens shows more", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp();
+  await h.ok(c, "nav.goto", { url: `${h.A}/list500.html` });
+  const s = view(await h.ok(c, "page.snapshot"));
+  expect(tokens(s.snap)).toBeLessThanOrEqual(6000);
+  expect(s.json.truncated).toBe(true);
+  expect(s.snap).toMatch(/… truncated, \d+ more nodes; narrow with root=<ref>/);
+  expect(s.snap).not.toContain('button "After the list"');
+  const big = view(await h.ok(c, "page.snapshot", { maxTokens: 40000 })).snap;
+  expect(big).toContain('button "After the list"');
 });
 
 test("screenshots: viewport, full, ref, jpeg, 16000px cap, marks", async ({ h }) => {

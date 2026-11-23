@@ -136,6 +136,7 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
 
 const REASONS: Record<string, string> = {
   c: "Runs code in the page with access to its data",
+  d: "Can include session credentials",
   e: "Moves a local file between your computer and the page",
   f: "Adopting a tab you opened gives the agent your page and its sign-ins",
 };
@@ -195,9 +196,6 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         switch (req.urlSource) {
           case "param":
             url = tool.name === "nav.goto" ? normalizeNavUrl(String(params.url ?? "")) : String(params.url ?? "");
-            break;
-          case "tab-or-param":
-            if (params.url) url = String(params.url);
             break;
           case "download":
             url = deps.downloadUrl(Number(params.id), cmd.session.id) ?? "";

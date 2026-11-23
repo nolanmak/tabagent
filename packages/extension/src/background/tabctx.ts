@@ -82,10 +82,10 @@ export function levelOf(c: Ctx, fallback: Level): Level {
   }
 }
 
-/** Tools that need the CDP driver (console/network) reject lite tabs. */
+/** Tools that need CDP-only driver methods. */
 export function cdp(drv: Driver): CdpDriver {
   if (drv instanceof CdpDriver) return drv;
-  throw taErr("UNSUPPORTED", "This tool needs full (debugger) mode; the site is in lite mode", "Turn lite mode off for this site in the TabAgent side panel.");
+  throw taErr("UNSUPPORTED", "This tool needs the debugger driver");
 }
 
 /** D28: while a dialog is open, everything on the tab except dialog.handle gets DIALOG_OPEN. */

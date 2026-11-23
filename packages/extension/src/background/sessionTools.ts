@@ -3,8 +3,9 @@
 // the attach (f) gate, so these handlers only do the work.
 import { TabAgentError, type SessionMeta, type ToolDef } from "@tabagent/protocol";
 import { driverFor } from "./driver";
-import { effectivePolicy } from "./permissions";
+import { effectivePolicy, preapprovalsFor } from "./permissions";
 import { addTab, endSession, newTab, ownerOf, resolveTab, selectTab, userActiveTab, type Session } from "./sessions";
+import { getSettings } from "./settings";
 
 interface Ctx {
   s: Session;
@@ -89,8 +90,8 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
       const id = await resolveTab(c.s, undefined).catch(() => null);
       url = id != null ? (await tabInfo(id)).url : "about:blank";
     }
-    const e = await effectivePolicy(url);
-    return { url, origin: e.origin, level: e.policy, policy: e.policy, source: e.source, sensitiveAllowed: e.sensitiveAllowed };
+    const e = await effectivePolicy(url, c.meta);
+    return { url, origin: e.origin, level: e.policy, policy: e.policy, source: e.source, preapproved: await preapprovalsFor(url), tokenCap: c.meta.cap, tokenSites: c.meta.sites };
   },
 
   async "session.info"(c) {
@@ -98,13 +99,13 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
     for (const id of c.s.tabIds) {
       try {
         const t = await tabInfo(id);
-        const drv = await driverFor(id, t.url);
-        tabs.push({ tabId: id, ...t, mode: drv.kind, active: id === c.s.active, attached: c.s.attached.includes(id) });
+        tabs.push({ tabId: id, ...t, active: id === c.s.active, attached: c.s.attached.includes(id) });
       } catch {
         /* gone */
       }
     }
-    return { id: c.meta.id, label: c.meta.label, tabs, groupId: c.s.groupId };
+    const s = await getSettings();
+    return { id: c.meta.id, label: c.meta.label, cap: c.meta.cap, sites: c.meta.sites, tabs, paused: s.paused, groupId: c.s.groupId };
   },
 
   async "session.end"(c) {

@@ -35,10 +35,19 @@
     "storage",
     "downloads",
     "alarms",
+    "notifications",
     "scripting",
     "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"
-  ]
+  ],
+  "commands": {
+    "kill-switch": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Stop all agents (kill switch)"
+    }
+  }
 }

@@ -211,4 +211,3 @@ describe("pagination next control", () => {
     expect(nextControl(null, ".pg").value?.href).toBe("http://shop.test/x");
   });
 });
-

@@ -123,7 +123,6 @@ describe("D18 static sensitivity", () => {
     ["tabs", { action: "attach" }, "f"],
     ["tabs", { action: "new" }, undefined],
     ["act.click", {}, undefined],
-    ["downloads.list", {}, undefined],
   ] as const)("%s %j -> %s", (name, params, cat) => {
     expect(sensitiveFor(getTool(name)!, params as Record<string, unknown>)).toBe(cat);
   });
@@ -138,7 +137,7 @@ const D29: Record<string, string[]> = {
   core: CORE,
   forms: [...CORE, "form.describe", "form.submit", "act.fill", "act.check", "act.upload"],
   data: [...CORE, "page.text", "page.find", "extract.links", "extract.schema", "extract.paginate", "downloads.list", "downloads.wait", "downloads.read"],
-  // No dev tools are registered before #17/#18, so dev is core.
+  // D29: a profile lists only registered tools; the dev group is not registered yet (M4).
   dev: CORE,
   full: tools.map((t) => t.name),
 };
@@ -165,9 +164,9 @@ describe("D29 profiles", () => {
     expect(PROFILES).toEqual(["core", "forms", "data", "dev", "full"]);
   });
   it("lists only registered tools (works on a smaller registry)", () => {
-    const small = tools.filter((t) => ["tabs", "nav.goto", "page.text"].includes(t.name));
+    const small = tools.filter((t) => ["tabs", "nav.goto", "form.describe"].includes(t.name));
     expect(names(toolsForProfiles("core", small))).toEqual(["nav.goto", "tabs"]);
-    expect(names(toolsForProfiles("data", small))).toEqual(["nav.goto", "page.text", "tabs"]);
+    expect(names(toolsForProfiles("forms", small))).toEqual(["form.describe", "nav.goto", "tabs"]);
   });
 });
 

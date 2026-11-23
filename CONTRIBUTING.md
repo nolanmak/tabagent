@@ -9,7 +9,7 @@ npm run build          # packages/extension/dist, then packages/bridge/dist
 
 Load `packages/extension/dist` as an unpacked extension (`chrome://extensions` → Developer mode →
 Load unpacked), run `node packages/bridge/dist/cli.js serve`, and pair from the side panel. The dev
-build has a fixed extension ID.
+build has a fixed extension ID; the Web Store build (`TABAGENT_STORE_BUILD=1`) drops the key.
 
 ## Scripts
 
@@ -49,6 +49,6 @@ Read the roadmap (#28) and [docs/DESIGN.md](docs/DESIGN.md) first. The rules:
 ## Adding a tool
 
 A new tool needs a registry entry in `packages/protocol` (params, result, level, sensitive
-category, `pageContent`, profiles, `handledBy`), an extension handler, and an e2e test against a
-fixture page. The registry drives the MCP list, REST routes and CLI. If it pushes the `core` or
+category, `pageContent`, profiles, `handledBy`), an extension handler, and an e2e test against
+a fixture page. The registry drives the MCP list, REST routes and CLI. If it pushes the `core` or
 `full` profile over budget, `npm run tool-budget` fails.
