@@ -1,0 +1,6 @@
+<!doctype html><html><head><title>Frames</title></head><body><main>
+<h1>Frames</h1>
+<iframe id="same" title="Same origin frame" src="/frame-child.html?which=same" width="400" height="160"></iframe>
+<iframe id="cross" title="Cross origin frame" width="400" height="160"></iframe>
+<script>document.getElementById('cross').src = new URLSearchParams(location.search).get('cross') + '/frame-child.html?which=cross';</script>
+</main></body></html>

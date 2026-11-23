@@ -1,0 +1,5 @@
+<!doctype html><html><head><title>Upload</title></head><body><main>
+<label for="f">Attachment</label><input id="f" type="file" onchange="document.getElementById('o').textContent = [...this.files].map(f=>f.name+':'+f.size).join(',')">
+<p id="o"></p>
+<a href="/download/data.csv" id="dl">Download CSV</a>
+</main></body></html>

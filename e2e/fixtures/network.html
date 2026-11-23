@@ -1,0 +1,4 @@
+<!doctype html><html><head><title>Network</title></head><body><main>
+<button onclick="fetch('/api/data.json').then(r=>r.json()).then(j=>{document.getElementById('o').textContent=j.items.join(',');console.log('loaded', j.items.length)})">Load data</button>
+<button onclick="console.error('boom happened')">Log error</button>
+<p id="o"></p></main></body></html>

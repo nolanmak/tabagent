@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TabAgent</title>
+<link rel="stylesheet" href="ui.css" />
+</head>
+<body>
+<header>
+  <div class="brand"><img src="icons/32.png" alt="" width="20" height="20" /> TabAgent</div>
+  <span id="status" class="pill">…</span>
+</header>
+
+<section id="pairBox" class="card" hidden>
+  <h2>Pair with the bridge</h2>
+  <p class="muted">Run <code>tabagent serve</code> (or <code>npx tabagent serve</code>) and enter the pairing code it prints.</p>
+  <form id="pairForm">
+    <input id="pairCode" placeholder="Pairing code (e.g. 7KQ-4MX)" autocomplete="off" aria-label="Pairing code" />
+    <input id="pairPort" type="number" placeholder="Port" aria-label="Bridge port" />
+    <button type="submit" id="pairBtn">Pair</button>
+  </form>
+  <p id="pairErr" class="err" hidden></p>
+</section>
+
+<section class="card kill">
+  <button id="killBtn" class="danger" title="Alt+Shift+K">■ Stop all agents</button>
+  <button id="resumeBtn" hidden>▶ Resume</button>
+  <span class="muted small">Shortcut: Alt+Shift+K</span>
+</section>
+
+<section id="promptsBox" class="card" hidden>
+  <h2>Waiting for you</h2>
+  <ul id="prompts" class="list"></ul>
+</section>
+
+<section class="card">
+  <h2>Sessions</h2>
+  <ul id="sessions" class="list"><li class="muted">No agents connected.</li></ul>
+</section>
+
+<section class="card">
+  <h2>Activity</h2>
+  <ul id="feed" class="feed"></ul>
+</section>
+
+<details class="card" id="settingsBox">
+  <summary><h2>Settings</h2></summary>
+  <label class="row">Unknown sites
+    <select id="defaultPolicy">
+      <option value="ask">Ask</option><option value="read">Read</option><option value="act">Act</option><option value="full">Full</option><option value="deny">Deny</option>
+    </select>
+  </label>
+  <label class="row"><input type="checkbox" id="showOverlay" /> Show on-page activity border</label>
+  <label class="row"><input type="checkbox" id="forceLite" /> Lite mode everywhere (no debugger)</label>
+  <label class="row">When a session ends
+    <select id="onSessionEnd"><option value="collapse">Collapse its tab group</option><option value="keep">Keep tabs</option><option value="close">Close its tabs</option></select>
+  </label>
+  <h3>Site policies</h3>
+  <table class="policies"><tbody id="policies"></tbody></table>
+  <form id="addPolicy" class="row">
+    <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
+    <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option><option>ask</option></select>
+    <button type="submit">Add</button>
+  </form>
+  <h3>Lite-mode sites</h3>
+  <textarea id="liteSites" rows="2" placeholder="*.example.com, one per line"></textarea>
+  <h3>Denylist</h3>
+  <textarea id="denylist" rows="4"></textarea>
+  <div class="row"><button id="saveLists">Save lists</button> <button id="unpair" class="link">Unpair bridge</button></div>
+  <p class="muted small" id="about"></p>
+</details>
+<script src="sidepanel.js"></script>
+</body>
+</html>

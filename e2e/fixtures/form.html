@@ -1,0 +1,37 @@
+<!doctype html><html><head><title>Sign up</title>
+<style>.sr{position:absolute;opacity:0;width:1px;height:1px} .fake{display:inline-block;width:14px;height:14px;border:1px solid #333}</style></head><body>
+<main>
+<h1>Create your account</h1>
+<form id="signup" action="/submitted" onsubmit="event.preventDefault(); done()">
+  <label for="email">Email address</label> <input id="email" name="email" type="email" required>
+  <label>Full name <input name="fullname" type="text"></label>
+  <label for="country">Country</label>
+  <select id="country" name="country"><option value="">Choose…</option><option value="us">United States</option><option value="ca">Canada</option><option value="mx">Mexico</option></select>
+  <fieldset><legend>Plan</legend>
+    <label><input type="radio" name="plan" value="free"> Free</label>
+    <label><input type="radio" name="plan" value="pro"> Pro</label>
+  </fieldset>
+  <label class="cb"><input class="sr" type="checkbox" name="subscribe" id="subscribe"><span class="fake"></span> Subscribe to newsletter</label>
+  <label for="bio">Bio</label> <textarea id="bio" name="bio"></textarea>
+  <label for="start">Start date</label> <input id="start" name="start" type="date">
+  <input id="controlled" aria-label="Controlled" placeholder="Nickname">
+  <p>Nickname preview: <span id="preview"></span></p>
+  <button type="submit">Create account</button>
+</form>
+<pre id="result"></pre>
+</main>
+<script>
+// Emulate a React-style controlled input: the instance tracks its value and
+// ignores programmatic sets from the page world; only input events update state.
+const c = document.getElementById('controlled');
+let state = '';
+c.addEventListener('input', e => { state = e.target.value; document.getElementById('preview').textContent = state; });
+function done(){
+  const f = document.getElementById('signup');
+  const d = Object.fromEntries(new FormData(f).entries());
+  d.subscribe = document.getElementById('subscribe').checked;
+  d.nickname = state;
+  document.getElementById('result').textContent = JSON.stringify(d);
+  document.title = 'Submitted';
+}
+</script></body></html>
