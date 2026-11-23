@@ -153,8 +153,6 @@ export class LiteDriver implements Driver {
     const v = r.value as { nodes: AXNode[]; sensitive: number[]; docId: string };
     await this.refs.reserve(v.nodes.length + 1);
     const loaderId = this.docId;
-    const { maskedByHook } = await import("./driver");
-    for (const n of v.nodes) if (n.backendDOMNodeId != null && maskedByHook(this.tabId, n.backendDOMNodeId, LITE_FRAME)) v.sensitive.push(n.backendDOMNodeId);
     return render([{ key: LITE_FRAME, nodes: v.nodes, sensitive: v.sensitive }], {
       mode: o.mode,
       maxTokens: o.maxTokens,

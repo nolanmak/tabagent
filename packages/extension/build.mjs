@@ -1,6 +1,6 @@
 // Build the MV3 extension into dist/.
 import { build } from "esbuild";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,7 +24,6 @@ await build({
   define: { PAGELIB_SRC: JSON.stringify(pagelibSrc) },
 });
 const uiEntries = { sidepanel: join(here, "src/ui/sidepanel.ts"), prompt: join(here, "src/ui/prompt.ts") };
-if (existsSync(join(here, "src/ui/authpanel.ts"))) uiEntries.authpanel = join(here, "src/ui/authpanel.ts"); // M6 handoff UI (optional)
 await build({ ...common, entryPoints: uiEntries, outdir: out, format: "iife" });
 
 cpSync(join(here, "static"), out, { recursive: true });

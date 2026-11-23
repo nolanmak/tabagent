@@ -3,7 +3,6 @@
 import { z } from "zod";
 import { TabAgentError } from "./errors";
 import { TIMEOUTS } from "./messages";
-import { AUTH_TOOLS, OPT_IN_GROUPS } from "./auth";
 
 export type Level = "read" | "act" | "full";
 /** "none" = not site-scoped (no origin is involved). */
@@ -21,9 +20,9 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   f: "Taking over one of your tabs",
 };
 
-export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth";
-export type Profile = "core" | "forms" | "data" | "dev" | "full" | "auth";
-export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full", "auth"];
+export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session";
+export type Profile = "core" | "forms" | "data" | "dev" | "full";
+export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full"];
 
 export type LiteSupport = "supported" | "degraded" | "unsupported";
 export type HandledBy = "extension" | "bridge" | "both";
@@ -53,8 +52,6 @@ export interface ToolDef<S extends z.ZodObject = z.ZodObject> {
   profiles: Exclude<Profile, "full">[];
   lite: LiteSupport;
   handledBy: HandledBy;
-  /** DA1: handles a secret; its result schema must have no free-text string (auth group). */
-  secret?: boolean;
 }
 
 /** Mark a result field as page-derived; the registry sweep test checks pageContent against these marks. */
@@ -730,7 +727,6 @@ export const TOOLS = [
     lite: "supported",
     handledBy: "extension",
   }),
-  ...AUTH_TOOLS,
 ] as const satisfies readonly ToolDef[];
 
 export type ToolName = (typeof TOOLS)[number]["name"];
@@ -757,9 +753,8 @@ export function getTool(name: string): ToolDef | undefined {
 export function toolsForProfiles(profiles: string | string[] | undefined, tools: readonly ToolDef[] = TOOLS as unknown as ToolDef[]): ToolDef[] {
   const list = (Array.isArray(profiles) ? profiles : (profiles ?? "core").split(",")).map((p) => p.trim()).filter(Boolean);
   for (const p of list) if (!PROFILES.includes(p as Profile)) throw new Error(`Unknown profile "${p}". Valid profiles: ${PROFILES.join(", ")}`);
+  if (list.includes("full")) return tools.slice();
   const want = new Set<string>(["core", ...list]);
-  // full = everything except opt-in groups (DA10: auth only via --profile auth).
-  if (list.includes("full")) return tools.filter((t) => !OPT_IN_GROUPS.includes(t.group) || t.profiles.some((p) => want.has(p)));
   return tools.filter((t) => t.profiles.some((p) => want.has(p)));
 }
 

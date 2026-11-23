@@ -62,7 +62,7 @@ describe("npm package", () => {
         }
         if (!body) await new Promise((r) => setTimeout(r, 200));
       }
-      expect(body?.name).toBe("tabagent");
+      expect(body).toMatchObject({ ok: true, bridgeVersion: pkg.version });
     });
   });
 

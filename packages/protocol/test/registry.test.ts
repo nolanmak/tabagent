@@ -98,10 +98,6 @@ const LEVELS: Record<string, string> = {
   "session.info": "none",
   "session.permissions": "none",
   "session.end": "none",
-  "auth.status": "read",
-  "auth.login": "act",
-  "auth.code": "act",
-  "auth.handoff": "read",
 };
 
 describe("D16 level table", () => {
@@ -155,9 +151,7 @@ const D29: Record<string, string[]> = {
   forms: [...CORE, "form.describe", "form.submit", "act.fill", "act.check", "act.upload"],
   data: [...CORE, "page.text", "page.find", "extract.links", "extract.schema", "extract.paginate", "downloads.list", "downloads.wait", "downloads.read"],
   dev: [...CORE, "js.eval", "console.list", "network.list", "network.get", "network.waitFor", "cookies.get", "storage.get"],
-  // DA10: full is everything except the opt-in auth group.
-  full: tools.filter((t) => t.group !== "auth").map((t) => t.name),
-  auth: [...CORE, "auth.status", "auth.login", "auth.code", "auth.handoff"],
+  full: tools.map((t) => t.name),
 };
 
 describe("D29 profiles", () => {
@@ -179,7 +173,7 @@ describe("D29 profiles", () => {
   });
   it("unknown profile throws with the valid list", () => {
     expect(() => toolsForProfiles("core,bogus")).toThrow(/bogus.*core, forms, data, dev, full/);
-    expect(PROFILES).toEqual(["core", "forms", "data", "dev", "full", "auth"]);
+    expect(PROFILES).toEqual(["core", "forms", "data", "dev", "full"]);
   });
   it("lists only registered tools (works on a smaller registry)", () => {
     const small = tools.filter((t) => ["tabs", "nav.goto", "js.eval"].includes(t.name));

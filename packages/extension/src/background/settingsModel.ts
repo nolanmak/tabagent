@@ -63,11 +63,6 @@ function cleanEntry(e: unknown): SiteEntry | null {
     for (const c of CATS) if ((x.preapproved as Record<string, unknown>)[c] === true) p[c] = true;
     if (Object.keys(p).length) out.preapproved = p;
   }
-  if (x.auth === true) out.auth = true;
-  if (Array.isArray(x.authAlways)) {
-    const ids = x.authAlways.filter((v): v is string => typeof v === "string" && !!v);
-    if (ids.length) out.authAlways = [...new Set(ids)];
-  }
   return Object.keys(out).length ? out : null;
 }
 

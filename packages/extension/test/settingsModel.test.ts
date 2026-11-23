@@ -17,8 +17,8 @@ describe("settings model (D32, contract §7)", () => {
     expect(s.beforeUnload).toBe("dismiss");
   });
   it("cleans site entries", () => {
-    const s = migrateSettings({ sites: { "https://a": { policy: "full", lite: true, preapproved: { a: true, f: true, b: false }, auth: true, authAlways: ["x", "x", 3, ""] }, "https://empty": {}, "https://junk": 5 } });
-    expect(s.sites).toEqual({ "https://a": { policy: "full", lite: true, preapproved: { a: true }, auth: true, authAlways: ["x"] } });
+    const s = migrateSettings({ sites: { "https://a": { policy: "full", lite: true, preapproved: { a: true, f: true, b: false } }, "https://empty": {}, "https://junk": 5 } });
+    expect(s.sites).toEqual({ "https://a": { policy: "full", lite: true, preapproved: { a: true } } });
   });
   it("validates scalars", () => {
     const s = migrateSettings({ port: 70000, secret: "", onSessionEnd: "explode", beforeUnload: "ask-agent", showOverlay: false, devAllowSensitive: "yes", denylist: [" a.com ", "", 3], liteSites: ["x", 1], forceLite: true });

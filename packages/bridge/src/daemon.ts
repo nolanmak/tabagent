@@ -6,7 +6,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
-  authExtraTimeout,
   defaultTimeout,
   FilesResolveSchema,
   getTool,
@@ -27,7 +26,6 @@ import {
   type SessionMeta,
 } from "@tabagent/protocol";
 import { AuditWriter } from "./audit";
-import { createAuth, type Auth } from "./auth";
 import { auditPath, configPath, saveConfig, type Config } from "./config";
 import { readDownload, resolveUploads, SessionDownloads } from "./files";
 import { buildMcpServer } from "./mcp";
@@ -75,8 +73,6 @@ export interface DaemonOpts {
   /** Heartbeat check interval (the 45s rule itself is TIMEOUTS.silentSocket). */
   heartbeatCheckMs?: number;
   audit?: AuditWriter;
-  /** M6 auth (tests inject a fake). */
-  auth?: Auth;
 }
 
 const STATUS: Partial<Record<ErrorCode, number>> = {
@@ -97,7 +93,6 @@ export class Daemon {
   port: number;
   readonly pairing: Pairing;
   readonly audit: AuditWriter;
-  readonly auth: Auth;
   readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
@@ -118,7 +113,6 @@ export class Daemon {
     this.now = opts.now ?? Date.now;
     this.pairing = new Pairing(this.now);
     this.audit = opts.audit ?? new AuditWriter(auditPath());
-    this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
     this.port = cfg.port;
   }
 
@@ -172,12 +166,10 @@ export class Daemon {
     this.timers.push(setInterval(() => this.gcRestSessions(), 60_000));
     this.timers.push(setInterval(() => this.checkSilent(), this.opts.heartbeatCheckMs ?? 5_000));
     for (const t of this.timers) t.unref();
-    await this.auth.start();
   }
 
   async stop() {
     for (const t of this.timers) clearInterval(t);
-    await this.auth.stop();
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
     this.ext?.ws.terminate();
     for (const c of this.wss.clients) c.terminate();
@@ -234,7 +226,6 @@ export class Daemon {
       return false;
     }
     const hello = h.data;
-    this.auth.bridge.onHello(raw);
     if (hello.protocolVersion !== PROTOCOL_VERSION) {
       const hint = versionMismatchHint(hello.protocolVersion);
       this.refuse(ws, "VERSION_MISMATCH", `Protocol version mismatch: extension ${hello.protocolVersion}, bridge ${PROTOCOL_VERSION}`, hint);
@@ -318,7 +309,6 @@ export class Daemon {
   }
 
   private onExtMessage(ws: WebSocket, msg: any) {
-    if (this.auth.bridge.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     switch (msg?.type) {
       case "ping":
         this.sendTo(ws, { type: "pong" });
@@ -452,7 +442,7 @@ export class Daemon {
     const id = randomUUID();
     const t = Number(params.timeout ?? 0) || defaultTimeout(tool);
     // Generous: a permission prompt (120s) plus the tool's own timeout plus slack.
-    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000 + authExtraTimeout(tool);
+    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000;
     const ws = this.ext!.ws;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -552,7 +542,6 @@ export class Daemon {
     const who = this.principal(req);
     if (!who) return this.err(res, "UNAUTHORIZED", "Missing or invalid bearer token", 401);
 
-    if (path.startsWith("/v1/admin/")) return this.auth.onAdmin(req, res, who.kind === "secret", path, () => this.readBody(req));
     if (path === "/mcp") return this.onMcp(req, res, who, url);
 
     if (path === "/v1/tools" && req.method === "GET") {
