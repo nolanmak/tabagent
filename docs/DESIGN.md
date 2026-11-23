@@ -1,6 +1,6 @@
-# Tabwright — Design
+# TabAgent — Design
 
-Tabwright is an open-source Chrome extension plus a small local bridge that lets
+TabAgent is an open-source Chrome extension plus a small local bridge that lets
 any AI agent (Claude Code, Codex, Cursor, custom agents over MCP or HTTP) drive
 the user's real Chrome: open tabs, read pages, pull structured data, fill and
 submit forms, upload/download files, watch network and console, and run JS —
@@ -28,7 +28,7 @@ permission model the user controls.
 
 - Headless/cloud browsers (use Playwright for that).
 - Firefox/Safari (MV3 Firefox port is a later milestone).
-- Built-in LLM. Tabwright is the hands and eyes; the agent is the brain.
+- Built-in LLM. TabAgent is the hands and eyes; the agent is the brain.
 - CAPTCHA solving or bot-detection evasion.
 
 ## Architecture
@@ -36,7 +36,7 @@ permission model the user controls.
 ```
  ┌──────────────┐  MCP stdio   ┌───────────────────────────┐   WebSocket    ┌──────────────────────────┐
  │ Claude Code  │─────────────▶│                           │  (127.0.0.1,   │  Chrome extension (MV3)  │
- ├──────────────┤  MCP HTTP    │   tabwright bridge        │   paired token)│                          │
+ ├──────────────┤  MCP HTTP    │   tabagent bridge        │   paired token)│                          │
  │ Codex / etc. │─────────────▶│   (Node daemon)           │◀──────────────▶│  service worker          │
  ├──────────────┤  REST + CLI  │   - session manager       │                │   ├ command router       │
  │ scripts/curl │─────────────▶│   - auth / pairing        │                │   ├ CDP driver           │
@@ -58,12 +58,12 @@ HTTP. The bridge is the server; the extension is a client that dials out to
 `ws://127.0.0.1:<port>`. Keeping the bridge thin (routing, auth, sessions, logs)
 keeps all browser logic in the extension.
 
-- `npx tabwright mcp` — stdio MCP server. If a daemon is already running it
+- `npx tabagent mcp` — stdio MCP server. If a daemon is already running it
   proxies to it; otherwise it starts one in-process. This means each agent
   config is a one-liner.
-- `tabwright serve` — long-running daemon: WebSocket for the extension, MCP
+- `tabagent serve` — long-running daemon: WebSocket for the extension, MCP
   Streamable HTTP at `/mcp`, REST at `/v1`.
-- `tabwright <tool> [args]` — CLI wrapper over REST, for shell-only agents.
+- `tabagent <tool> [args]` — CLI wrapper over REST, for shell-only agents.
 
 Native Messaging was considered as the transport. It needs a per-OS host
 manifest install and spawns one host per connection, which makes
@@ -78,14 +78,14 @@ offscreen document is the fallback if a Chrome release regresses this.
 
 ### Pairing and auth
 
-1. `tabwright serve` prints a one-time pairing code and writes a random bridge
-   secret to `~/.tabwright/config.json` (0600).
+1. `tabagent serve` prints a one-time pairing code and writes a random bridge
+   secret to `~/.tabagent/config.json` (0600).
 2. The user enters the code in the extension's side panel. The extension stores
    the bridge secret in `chrome.storage.local`.
 3. The WebSocket handshake carries the secret. The bridge binds to 127.0.0.1
    only and rejects any `Origin` other than the extension's ID, so web pages
    cannot reach it.
-4. Agents get **per-client tokens** (`tabwright token create --name codex`),
+4. Agents get **per-client tokens** (`tabagent token create --name codex`),
    scoped to a set of capabilities and sites. stdio MCP clients use the local
    config file automatically.
 
@@ -173,7 +173,7 @@ downloads? }`, so an agent rarely needs a second call to see what happened.
 
 ### No-debugger mode
 
-`chrome.debugger` shows the "Tabwright started debugging this browser" bar, and
+`chrome.debugger` shows the "TabAgent started debugging this browser" bar, and
 some users or sites dislike it. **Lite mode** uses content scripts only:
 synthetic events, DOM-based snapshot, no network bodies. It is selectable per
 site and documented as less reliable.
@@ -193,7 +193,7 @@ The permission engine runs in the extension, so the bridge can never bypass it.
 - **Built-in denylist**: `chrome://`, the Web Store, password managers, and
   banking domains (user-editable list) are `deny` until explicitly unlocked.
 - **Prompt-injection hygiene**: page content goes back to the agent wrapped and
-  labelled as untrusted page data. Tabwright never acts on instructions found in
+  labelled as untrusted page data. TabAgent never acts on instructions found in
   pages; that remains the agent's responsibility, and the docs say so.
 - **Visibility**: a badge on the toolbar icon, a coloured tab group, an
   optional on-page border with highlighted target elements, and the side panel
@@ -201,17 +201,17 @@ The permission engine runs in the extension, so the bridge can never bypass it.
 - **Kill switch**: a toolbar button or `Alt+Shift+K` detaches all sessions
   immediately.
 - **Audit log**: every command, its caller, and its result are recorded in
-  `~/.tabwright/audit.jsonl`. Screenshots are optional, and form values are
+  `~/.tabagent/audit.jsonl`. Screenshots are optional, and form values are
   redacted for sensitive fields.
 
 ## Repo layout
 
 ```
-tabwright/
+tabagent/
   packages/
     protocol/    # zod schemas for commands/results, shared types, error codes
     extension/   # MV3: background SW, content scripts, side panel (Vite + TS)
-    bridge/      # Node daemon + MCP server + REST + CLI (published as `tabwright` on npm)
+    bridge/      # Node daemon + MCP server + REST + CLI (published as `tabagent` on npm)
   examples/      # agent configs (Claude Code, Codex, Cursor), sample tasks
   e2e/           # Playwright-launched Chrome with the unpacked extension + fixture sites
   docs/
@@ -223,9 +223,9 @@ e2e (launching Chromium with `--load-extension`).
 ## Agent setup (target UX)
 
 ```bash
-npm i -g tabwright && tabwright serve      # once; prints the pairing code
-claude mcp add tabwright -- npx tabwright mcp
-codex mcp add tabwright -- npx tabwright mcp
+npm i -g tabagent && tabagent serve      # once; prints the pairing code
+claude mcp add tabagent -- npx tabagent mcp
+codex mcp add tabagent -- npx tabagent mcp
 ```
 
 ## Milestones

@@ -1,7 +1,7 @@
 {
-  "name": "tabwright",
+  "name": "tabagent",
   "version": "0.0.0",
   "type": "module",
-  "bin": { "tabwright": "dist/cli.js" },
-  "dependencies": { "@tabwright/protocol": "workspace:*", "@modelcontextprotocol/sdk": "^1.0.0", "ws": "^8.18.0" }
+  "bin": { "tabagent": "dist/cli.js" },
+  "dependencies": { "@tabagent/protocol": "workspace:*", "@modelcontextprotocol/sdk": "^1.0.0", "ws": "^8.18.0" }
 }

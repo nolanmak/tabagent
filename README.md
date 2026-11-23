@@ -1,8 +1,8 @@
-# Tabwright
+# TabAgent
 
-**Let any AI agent drive your real Chrome.** Tabwright is an open-source Chrome extension plus a tiny local bridge that exposes your browser to Claude Code, Codex, Cursor, and any MCP or HTTP client. Agents can navigate, read pages, pull structured data, fill forms, upload/download files, and inspect network/console. They do it with your existing sign-ins, under permissions you control.
+**Let any AI agent drive your real Chrome.** TabAgent is an open-source Chrome extension plus a tiny local bridge that exposes your browser to Claude Code, Codex, Cursor, and any MCP or HTTP client. Agents can navigate, read pages, pull structured data, fill forms, upload/download files, and inspect network/console. They do it with your existing sign-ins, under permissions you control.
 
-> Status: **design / pre-alpha.** See [docs/DESIGN.md](docs/DESIGN.md) and the [issues](https://github.com/nolanmak/tabwright/issues) for the roadmap.
+> Status: **design / pre-alpha.** See [docs/DESIGN.md](docs/DESIGN.md) and the [issues](https://github.com/nolanmak/tabagent/issues) for the roadmap.
 
 ## Why
 
@@ -15,10 +15,10 @@
 ## Planned usage
 
 ```bash
-npm i -g tabwright
-tabwright serve                          # prints a pairing code; enter it in the extension
-claude mcp add tabwright -- npx tabwright mcp
-codex  mcp add tabwright -- npx tabwright mcp
+npm i -g tabagent
+tabagent serve                          # prints a pairing code; enter it in the extension
+claude mcp add tabagent -- npx tabagent mcp
+codex  mcp add tabagent -- npx tabagent mcp
 ```
 
 ## Layout
