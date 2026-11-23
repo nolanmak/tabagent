@@ -184,7 +184,9 @@ export async function resolveTab(s: Session, tabId?: number, create = false): Pr
     if (o) throw new TabAgentError("TAB_BUSY", `Tab ${tabId} belongs to another agent session (${sessions.get(o)?.meta.label ?? o})`);
     throw new TabAgentError("NOT_FOUND", `Tab ${tabId} is not in this session`, "Use tabs action=attach to adopt a user tab (asks the user), or tabs action=new.");
   }
-  if (s.active != null && s.tabIds.includes(s.active)) return s.active;
+  if (s.active != null && s.tabIds.includes(s.active)) {
+    return s.active;
+  }
   if (s.tabIds.length) {
     s.active = s.tabIds[s.tabIds.length - 1];
     return s.active;

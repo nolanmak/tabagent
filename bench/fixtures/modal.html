@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Saved items</title>
+<script src="bench.js"></script>
+<style>
+  #cookie { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+  #cookie div, dialog { background: white; padding: 1em; }
+</style>
+<h1>Saved items</h1>
+<ul id="items"></ul>
+<button id="continue">Continue</button>
+<div id="cookie" role="dialog" aria-modal="true" aria-label="Cookie consent">
+  <div><p>We use cookies.</p><button id="accept">Accept cookies</button></div>
+</div>
+<dialog id="confirm"><p id="confirmText"></p><button id="yes">Yes, delete</button> <button id="no">Cancel</button></dialog>
+<script>
+  let items = ["Alpha", "Beta", "Gamma"];
+  let pending = null;
+  function render() {
+    document.getElementById("items").innerHTML = items.map((n) => `<li>${n} <button data-n="${n}">Delete ${n}</button></li>`).join("");
+    document.querySelectorAll("#items button").forEach((b) =>
+      b.addEventListener("click", () => {
+        pending = b.dataset.n;
+        document.getElementById("confirmText").textContent = `Delete ${pending}?`;
+        document.getElementById("confirm").showModal();
+      }),
+    );
+    bench.set({ items });
+  }
+  document.getElementById("accept").addEventListener("click", () => {
+    document.getElementById("cookie").remove();
+    bench.set({ cookiesAccepted: true });
+  });
+  document.getElementById("continue").addEventListener("click", () => bench.set({ continued: !!bench.get().cookiesAccepted }));
+  document.getElementById("yes").addEventListener("click", () => {
+    items = items.filter((n) => n !== pending);
+    document.getElementById("confirm").close();
+    render();
+  });
+  document.getElementById("no").addEventListener("click", () => document.getElementById("confirm").close());
+  render();
+</script>
