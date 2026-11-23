@@ -61,33 +61,4 @@ test("js.eval, cookies.get, storage.get ask the user first", async ({ h }) => {
   expect((denied.result as any).text).toContain("PERMISSION_DENIED");
 });
 
-test("iframes (same + cross origin) and shadow DOM", async ({ h }) => {
-  await h.trustFixtures();
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/frames.html?cross=${encodeURIComponent(h.B)}` });
-  await h.ok(c, "nav.wait", { for: "networkidle" });
-  await new Promise((r) => setTimeout(r, 500));
-  const s = await h.ok(c, "page.snapshot");
-  expect(s.text).toContain('iframe "Same origin frame"');
-  expect(s.text).toContain("Frame button same");
-  expect(s.text).toContain("Frame button cross");
-  const crossBtn = Harness.ref(s.text, /button "Frame button cross"/);
-  const r = await h.ok(c, "act.click", { ref: crossBtn });
-  expect(r.text).toContain("pressed in cross");
-  const sameBtn = Harness.ref(s.text, /button "Frame button same"/);
-  const r2 = await h.ok(c, "act.click", { ref: sameBtn });
-  expect(r2.text).toContain("pressed in same");
-  const crossInput = s.text.split("\n").filter((l) => /textbox "Frame input"/.test(l))[1].match(/ref=(e\d+)/)![1];
-  await h.ok(c, "act.fill", { ref: crossInput, value: "typed across origins" });
-  const f = await h.ok(c, "page.find", { css: "#fi" });
-  expect(f.text).toContain("frame");
-
-  await h.ok(c, "nav.goto", { url: `${h.A}/shadow.html` });
-  const sh = await h.ok(c, "page.snapshot");
-  const si = Harness.ref(sh.text, /textbox "Shadow input"/);
-  await h.ok(c, "act.fill", { ref: si, value: "deep" });
-  await h.ok(c, "act.click", { ref: Harness.ref(sh.text, /button "Shadow button"/) });
-  expect((await h.ok(c, "page.text", {})).text).toContain("shadow:deep");
-  const fs = await h.ok(c, "page.find", { css: "#sb" });
-  expect(fs.text).toContain("Shadow button");
-});
+// iframe + shadow DOM coverage moved to frames.spec.ts (#19)
