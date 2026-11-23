@@ -4,8 +4,8 @@
 // reference elements inside `value` as { el: <index> }; the background maps those
 // indexes to refs.
 
-type El = Element;
-interface Ret<T = unknown> {
+export type El = Element;
+export interface Ret<T = unknown> {
   value: T;
   elements: El[];
 }
@@ -35,7 +35,7 @@ function byLiteRef(r: string): El | null {
 // ---------------------------------------------------------------------------
 // Tree walking (pierces open shadow roots)
 // ---------------------------------------------------------------------------
-function* walk(root: Node): Generator<El> {
+export function* walk(root: Node): Generator<El> {
   const stack: Node[] = [root];
   while (stack.length) {
     const n = stack.pop()!;
@@ -44,14 +44,15 @@ function* walk(root: Node): Generator<El> {
       if (n !== root) yield n;
       if (n.shadowRoot) kids.push(...Array.from(n.shadowRoot.children));
     }
-    if (n instanceof Element || n instanceof Document || n instanceof DocumentFragment) {
+    // nodeType, not instanceof: Document subclasses differ across realms (and in happy-dom).
+    if (n.nodeType === 1 || n.nodeType === 9 || n.nodeType === 11) {
       kids.push(...Array.from((n as ParentNode).children));
     }
     for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
   }
 }
 
-function deepQueryAll(root: ParentNode | null, selector: string): El[] {
+export function deepQueryAll(root: ParentNode | null, selector: string): El[] {
   const r = (root ?? document) as Node;
   const out: El[] = [];
   for (const el of walk(r)) {
@@ -64,13 +65,13 @@ function deepQueryAll(root: ParentNode | null, selector: string): El[] {
   return out;
 }
 
-function parentOf(el: El): El | null {
+export function parentOf(el: El): El | null {
   if (el.parentElement) return el.parentElement;
   const root = el.getRootNode();
   return root instanceof ShadowRoot ? root.host : null;
 }
 
-function closestDeep(el: El, selector: string): El | null {
+export function closestDeep(el: El, selector: string): El | null {
   let cur: El | null = el;
   while (cur) {
     if (cur.matches(selector)) return cur;
@@ -82,8 +83,8 @@ function closestDeep(el: El, selector: string): El | null {
 // ---------------------------------------------------------------------------
 // Roles + accessible names (simplified ARIA)
 // ---------------------------------------------------------------------------
-const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
-const lc = (s: string | null | undefined) => norm(s).toLowerCase();
+export const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+export const lc = (s: string | null | undefined) => norm(s).toLowerCase();
 
 function implicitRole(el: El): string {
   const tag = el.tagName.toLowerCase();
@@ -168,18 +169,18 @@ function implicitRole(el: El): string {
   return "generic";
 }
 
-function roleOf(el: El): string {
+export function roleOf(el: El): string {
   const r = el.getAttribute("role");
   if (r) return r.split(/\s+/)[0].toLowerCase();
   return implicitRole(el);
 }
 
-function textOf(el: El): string {
+export function textOf(el: El): string {
   const h = el as HTMLElement;
   return norm(typeof h.innerText === "string" ? h.innerText : el.textContent);
 }
 
-function nameOf(el: El): string {
+export function nameOf(el: El): string {
   const by = el.getAttribute("aria-labelledby");
   if (by) {
     const root = el.getRootNode() as Document | ShadowRoot;
@@ -256,7 +257,7 @@ function labelText(label: HTMLLabelElement, control: El): string {
   return norm(clone.textContent);
 }
 
-function isVisible(el: El): boolean {
+export function isVisible(el: El): boolean {
   const h = el as HTMLElement;
   if (!el.isConnected) return false;
   if (typeof h.checkVisibility === "function") {
@@ -269,7 +270,7 @@ function isVisible(el: El): boolean {
   return r.width > 0 && r.height > 0;
 }
 
-function isDisabled(el: El): boolean {
+export function isDisabled(el: El): boolean {
   if ((el as HTMLInputElement).disabled) return true;
   if (el.getAttribute("aria-disabled") === "true") return true;
   const fs = el.closest("fieldset[disabled]");
@@ -277,7 +278,7 @@ function isDisabled(el: El): boolean {
   return false;
 }
 
-function isEditable(el: El): boolean {
+export function isEditable(el: El): boolean {
   const tag = el.tagName.toLowerCase();
   if (tag === "textarea") return !(el as HTMLTextAreaElement).readOnly;
   if (tag === "input") {
@@ -287,7 +288,7 @@ function isEditable(el: El): boolean {
   return (el as HTMLElement).isContentEditable;
 }
 
-function describeEl(el: El): string {
+export function describeEl(el: El): string {
   const tag = el.tagName.toLowerCase();
   const id = el.id ? "#" + el.id : "";
   const cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
@@ -340,7 +341,7 @@ export function asRegex(s: string): RegExp | null {
   }
 }
 
-function matchText(hay: string, needle: string): boolean {
+export function matchText(hay: string, needle: string): boolean {
   const re = asRegex(needle);
   if (re) return re.test(hay);
   return lc(hay).includes(lc(needle));
@@ -493,12 +494,12 @@ function scrollBy(el: El | null, dx: number, dy: number) {
 // ---------------------------------------------------------------------------
 // Values
 // ---------------------------------------------------------------------------
-function nativeSetter(el: El) {
+export function nativeSetter(el: El) {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
   return Object.getOwnPropertyDescriptor(proto, "value")!.set!;
 }
 
-function fire(el: El, type: string) {
+export function fire(el: El, type: string) {
   el.dispatchEvent(new Event(type, { bubbles: true, composed: true }));
 }
 
@@ -557,7 +558,7 @@ function focus(el: El, opts: { end?: boolean } = {}) {
   return true;
 }
 
-function valueOf(el: El) {
+export function valueOf(el: El) {
   if ("value" in el) return String((el as HTMLInputElement).value);
   return (el as HTMLElement).textContent ?? "";
 }
@@ -581,7 +582,7 @@ function selectOptions(el: El, values: string[]) {
   return { selected: chosen.map((o) => o.text.trim()) };
 }
 
-function getChecked(el: El): boolean | null {
+export function getChecked(el: El): boolean | null {
   if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) return el.checked;
   const a = el.getAttribute("aria-checked") ?? el.getAttribute("aria-pressed") ?? el.getAttribute("aria-selected");
   if (a === "true") return true;
@@ -791,7 +792,7 @@ function keySensitivity(_self: unknown, key: string) {
   return { reasons: formSensitivity(f ?? null).map((r) => `Enter submits a form with a ${r}`) };
 }
 
-function deepActive(): El | null {
+export function deepActive(): El | null {
   let a: El | null = document.activeElement;
   while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
   return a;
