@@ -1,19 +1,16 @@
 // tabagent CLI: serve | mcp | pair | status | tools | token | audit | skill | config | <tool>
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, statSync, watchFile, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync, watchFile } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getTool, PROFILES, TabAgentError, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
+import { getTool, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
 import { parseFlags, toolParamsFromArgs, type Flags } from "./args";
 import { api, ensureDaemon, health, restCall } from "./client";
-import { auditPath, configPath, loadConfig, saveConfig } from "./config";
+import { auditPath, configPath, loadConfig } from "./config";
 import { Daemon } from "./daemon";
-import { renderCli } from "./format";
 import { buildMcpServer } from "./mcp";
-import { installSkill, skillTargets, uninstallSkill } from "./skill";
-import { createToken, parseSites, revokeToken } from "./tokens";
+import { auditTail, configCommand, formatAuditLine, helpText, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out } from "./commands";
 import { BRIDGE_VERSION } from "./version";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -144,58 +141,20 @@ async function cmdTools(f: Flags) {
     await client.close();
     return;
   }
-  const list = toolsForProfiles(profile);
-  for (const t of list) console.log(`${t.name.padEnd(18)} ${t.sensitive ? "! " : "  "}${t.description}`);
-  console.log(`\n${list.length} tools. Profiles: ${PROFILES.join(", ")} (core is always included).`);
+  print(toolsCommand(profile));
 }
 
-function cmdToken(rest: string[], f: Flags) {
-  const cfg = loadConfig();
-  const sub = rest[0];
-  try {
-    if (sub === "create") {
-      const name = String(f.name ?? rest[1] ?? "");
-      const cap = String(f.caps ?? f.cap ?? "act");
-      const sites = parseSites(typeof f.sites === "string" ? f.sites : undefined);
-      const tok = createToken(cfg, name, cap, sites);
-      saveConfig(cfg);
-      console.log(tok);
-      process.stderr.write(`Created token "${name}" (caps=${cap}${sites.length ? `, sites=${sites.join(",")}` : ""}). It is shown once.\nUse it as: TABAGENT_TOKEN=<token> tabagent mcp   or   Authorization: Bearer <token>\n`);
-    } else if (sub === "list") {
-      if (!cfg.tokens.length) console.log("No tokens.");
-      for (const t of cfg.tokens) console.log(`${t.name.padEnd(20)} caps=${t.cap.padEnd(5)} sites=${t.sites.join(",") || "*"}  created ${t.created}`);
-    } else if (sub === "revoke") {
-      const name = String(rest[1] ?? f.name ?? "");
-      if (!revokeToken(cfg, name)) die(`No token named ${name}`);
-      saveConfig(cfg);
-      console.log(`Revoked ${name}. The running bridge picks this up on its next request.`);
-    } else die("Usage: tabagent token create --name <n> [--caps read|act|full] [--sites a.com,*.b.com] | list | revoke <name>");
-  } catch (e) {
-    die(e instanceof TabAgentError ? e.message : String(e));
-  }
-}
-
-export function formatAuditLine(l: string): string {
-  try {
-    const e = JSON.parse(l);
-    if (e.event) return `${e.ts}  event ${e.event}${e.data ? " " + JSON.stringify(e.data).slice(0, 120) : ""}`;
-    return `${e.ts}  ${String(e.caller).padEnd(14)} ${String(e.outcome).padEnd(6)} ${String(e.tool)}${e.action ? `(${e.action})` : ""}  ${e.origin ?? "-"}${e.errorCode ? `  ${e.errorCode}` : ""}${e.params !== undefined ? "  " + JSON.stringify(e.params).slice(0, 100) : ""}`;
-  } catch {
-    return l;
-  }
+function print(o: Out): void {
+  for (const l of o.out) console.log(l);
+  for (const l of o.err) process.stderr.write(l + "\n");
+  if (o.code) process.exit(o.code);
 }
 
 function cmdAudit(rest: string[], f: Flags) {
-  const p = auditPath();
   if (rest[0] !== "tail") die("Usage: tabagent audit tail [-n 50] [--follow]");
-  if (!existsSync(p)) {
-    console.log("No audit log yet.");
-    return;
-  }
-  const n = Number(f.n ?? 30);
-  const lines = readFileSync(p, "utf8").trim().split("\n");
-  for (const l of lines.slice(-n)) console.log(formatAuditLine(l));
-  if (f.follow || f.f) {
+  print(auditTail(Number(f.n ?? 30)));
+  const p = auditPath();
+  if ((f.follow || f.f) && existsSync(p)) {
     let size = statSync(p).size;
     watchFile(p, { interval: 500 }, () => {
       const buf = readFileSync(p);
@@ -210,52 +169,6 @@ function cmdAudit(rest: string[], f: Flags) {
 export function skillSource(): string {
   for (const p of [join(HERE, "../skill/SKILL.md"), join(HERE, "../../skill/SKILL.md")]) if (existsSync(p)) return p;
   die("SKILL.md not found in the package");
-}
-
-function cmdSkill(rest: string[], f: Flags) {
-  const sub = rest[0];
-  if (sub === "print") {
-    process.stdout.write(readFileSync(skillSource(), "utf8"));
-    return;
-  }
-  const targets = skillTargets({ claude: !!f.claude, codex: !!f.codex });
-  if (sub === "install") {
-    let refused = 0;
-    for (const r of installSkill(skillSource(), targets, !!f.force)) {
-      if (r.action === "refused") {
-        refused++;
-        process.stderr.write(`Refused: ${r.path} was edited locally. Re-run with --force to overwrite.\n`);
-      } else console.log(`${r.action === "unchanged" ? "Up to date" : r.action === "updated" ? "Updated" : "Installed"} (${r.target.name}): ${r.path}`);
-    }
-    if (refused) process.exit(1);
-  } else if (sub === "uninstall") {
-    let refused = 0;
-    for (const r of uninstallSkill(targets, !!f.force)) {
-      if (r.action === "refused") {
-        refused++;
-        process.stderr.write(`Refused: ${r.target.dir}/SKILL.md was edited locally. Re-run with --force to remove it.\n`);
-      } else console.log(`${r.action === "removed" ? "Removed" : "Not installed"} (${r.target.name}): ${r.target.dir}`);
-    }
-    if (refused) process.exit(1);
-  } else die("Usage: tabagent skill install [--claude] [--codex] [--force] | uninstall [--claude] [--codex] [--force] | print");
-}
-
-function cmdConfig(rest: string[]) {
-  const cfg = loadConfig();
-  const [sub, a, b] = rest;
-  if (sub === "show" || !sub) {
-    const { secret, tokens, ...safe } = cfg;
-    console.log(JSON.stringify({ ...safe, secret: secret ? "(set)" : null, tokens: tokens.map((t) => t.name), path: configPath() }, null, 2));
-  } else if (sub === "add-upload-dir" && a) {
-    cfg.uploadDirs = [...new Set([...cfg.uploadDirs, resolve(a)])];
-    saveConfig(cfg);
-    console.log(`Upload dirs: ${cfg.uploadDirs.join(", ")}`);
-  } else if (sub === "set" && a === "port" && b) {
-    const raw = JSON.parse(readFileSync(configPath(), "utf8"));
-    raw.port = Number(b);
-    writeFileSync(configPath(), JSON.stringify(raw, null, 2), { mode: 0o600 });
-    console.log(`Port set to ${b}. Also set it in the extension side panel when pairing.`);
-  } else die("Usage: tabagent config [show] | add-upload-dir <dir> | set port <n>");
 }
 
 async function cmdTool(name: string, args: string[]) {
@@ -275,45 +188,7 @@ async function cmdTool(name: string, args: string[]) {
     tool.name,
     params,
   );
-  if (!resp.ok) die(`${resp.error!.code}: ${resp.error!.message}${resp.error!.hint ? `\nHint: ${resp.error!.hint}` : ""}`);
-  const r = resp.result as Record<string, any> | undefined;
-  // D30: screenshots go to a file; print its path.
-  if (r && typeof r.dataBase64 === "string" && typeof r.mime === "string") {
-    const ext = r.mime.split("/")[1] === "jpeg" ? "jpg" : (r.mime.split("/")[1] ?? "png");
-    const out = typeof f.out === "string" ? resolve(f.out) : join(tmpdir(), `tabagent-${Date.now()}.${ext}`);
-    writeFileSync(out, Buffer.from(r.dataBase64, "base64"));
-    const { dataBase64, ...meta } = r;
-    void dataBase64;
-    if (f.raw) console.log(JSON.stringify({ ...resp, result: { ...meta, savedTo: out } }, null, 2));
-    else console.log(out);
-    return;
-  }
-  console.log(f.raw ? JSON.stringify(resp, null, 2) : renderCli(resp));
-}
-
-function help() {
-  console.log(`tabagent v${BRIDGE_VERSION} — let AI agents drive your real Chrome
-
-Usage:
-  tabagent serve [--port N]            Run the bridge (prints a pairing code)
-  tabagent mcp [--profile core,dev]    MCP stdio server; proxies to the bridge, starting one in the background if needed
-  tabagent pair                        Mint a new pairing code on the running bridge
-  tabagent status                      Bridge + extension status (and the pairing code when unpaired)
-  tabagent tools [--profile P]         List tools (profiles: ${PROFILES.join(", ")})
-  tabagent token create --name N [--caps read|act|full] [--sites a.com,*.b.com]
-  tabagent token list | revoke <name>
-  tabagent audit tail [-n 50] [--follow]
-  tabagent skill install [--claude] [--codex] [--force] | uninstall | print
-  tabagent config [show] | add-upload-dir <dir> | set port <n>
-  tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw] [--out file.png]
-
-Examples:
-  claude mcp add tabagent -- npx tabagent mcp
-  codex mcp add tabagent -- npx tabagent mcp
-  tabagent nav.goto --json '{"url":"https://example.com"}'
-  tabagent page.snapshot
-  tabagent act.click --ref e7
-  tabagent page.screenshot --out shot.png`);
+  print(toolOutput(resp, f));
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -335,22 +210,22 @@ switch (cmd) {
     await cmdTools(f);
     break;
   case "token":
-    cmdToken(pos, f);
+    print(tokenCommand(pos, f));
     break;
   case "audit":
     cmdAudit(pos, f);
     break;
   case "skill":
-    cmdSkill(pos, f);
+    print(skillCommand(pos, f, skillSource()));
     break;
   case "config":
-    cmdConfig(pos);
+    print(configCommand(pos));
     break;
   case undefined:
   case "help":
   case "--help":
   case "-h":
-    help();
+    console.log(helpText());
     break;
   case "--version":
   case "-v":
