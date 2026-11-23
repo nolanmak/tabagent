@@ -1,0 +1,5 @@
+- main
+  - button "Drag source" [ref=e1]
+  - region "Drop zone" [ref=e2]
+    - text "Drop here"
+  - paragraph

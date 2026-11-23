@@ -1,43 +1,44 @@
-// Minimal pairing screen (#3): port field, code field, status line. #14 replaces it with the
-// full side panel. A view over worker state, polled while open.
+// Minimal pairing screen (#3): port, pairing code, connection status.
+// The full side panel (feed, prompts, kill switch, settings) is #14.
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const send = (msg: unknown) => chrome.runtime.sendMessage(msg) as Promise<any>;
+let state: any = null;
 
-const LABEL: Record<string, string> = {
-  connected: "Connected",
-  unpaired: "Not paired",
-  "pair-failed": "Pairing failed",
-  "version-mismatch": "Update needed",
-  connecting: "Connecting…",
-};
-
-function render(state: any) {
+function renderStatus() {
+  const st = state.status;
   const el = $("status");
-  el.textContent = LABEL[state.status] ?? "Bridge offline";
-  el.className = "pill " + state.status;
+  el.textContent =
+    st === "connected" ? "Connected" : st === "unpaired" ? "Not paired" : st === "pair-failed" ? "Pairing failed" : st === "version-mismatch" ? "Update needed" : st === "connecting" ? "Connecting…" : "Bridge offline";
+  el.className = "pill " + st;
+  $("pairBox").hidden = state.paired && state.status !== "pair-failed";
   const err = $("pairErr");
   err.hidden = !state.error || (state.status !== "pair-failed" && state.status !== "version-mismatch");
   err.textContent = state.error ?? "";
   ($("pairPort") as HTMLInputElement).placeholder = String(state.port);
+  $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
 }
 
 async function refresh() {
-  try {
-    render(await send({ type: "ui.state" }));
-  } catch {
-    /* worker restarting */
-  }
+  state = await send({ type: "ui.state" });
+  if (state) renderStatus();
 }
+
+chrome.runtime.onMessage.addListener((m: any) => {
+  if (state && m.type === "status") refresh();
+});
 
 $("pairForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const code = ($("pairCode") as HTMLInputElement).value.trim();
-  const port = ($("pairPort") as HTMLInputElement).value.trim();
-  await send({ type: "ui.pair", code, ...(port ? { port: Number(port) } : {}) });
-  ($("pairCode") as HTMLInputElement).value = "";
-  refresh();
+  const code = ($("pairCode") as HTMLInputElement).value;
+  const port = ($("pairPort") as HTMLInputElement).value;
+  await send({ type: "ui.pair", code, port: port || undefined });
+  setTimeout(refresh, 400);
 });
+$("unpair").addEventListener("click", () => send({ type: "ui.unpair" }).then(refresh));
 
 refresh();
-setInterval(refresh, 300);
+setInterval(() => {
+  if (state && state.status !== "connected") refresh();
+}, 3000);
+export {};

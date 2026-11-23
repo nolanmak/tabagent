@@ -10,17 +10,27 @@ export interface ToolLike {
   sensitiveWhen?: { param: string; values: string[] };
 }
 
+/**
+ * Static D18 categories. The registry `sensitive` field is the source of truth;
+ * this map is the fallback while the registry still carries booleans.
+ */
+export const STATIC_SENSITIVE: Record<string, SensitiveCategory> = {
+  "nav.wait": "c", // only when for=fn
+  "tabs.attach": "f",
+};
+
 const TABS_ACTIONS: Record<string, { level: Level | "none"; sensitive?: SensitiveCategory }> = {
   list: { level: "none" },
   new: { level: "act" },
   select: { level: "none" },
   close: { level: "none" },
+  attach: { level: "read", sensitive: "f" },
 };
 
 const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f"]);
 
 /** Where the URL being authorized comes from. */
-export type UrlSource = "tab" | "param" | "none";
+export type UrlSource = "tab" | "param" | "tab-or-param" | "download" | "attach-target" | "none";
 
 export interface Requirements {
   action?: string;
@@ -33,20 +43,25 @@ export interface Requirements {
   tabOptional?: boolean;
 }
 
+/** Tools that work without a session tab. */
+const NO_TAB = new Set(["tabs", "session.info", "session.permissions", "session.end"]);
+
 export function requirementsFor(tool: ToolLike, params: Record<string, unknown>): Requirements {
   const levelOf = (l: Level | "none" | undefined) => (l && l !== "none" ? l : null);
   if (tool.name === "tabs") {
     const action = String(params.action ?? "");
     const a = tool.actions?.[action] ?? TABS_ACTIONS[action] ?? { level: "none" };
-    const sensitive = normalizeCat(a.sensitive);
-    if (action === "new") return { action, level: params.url ? levelOf(a.level) ?? "act" : null, sensitive, urlSource: params.url ? "param" : "none", needsTab: false };
-    return { action, level: null, sensitive, urlSource: "none", needsTab: false };
+    const sensitive = normalizeCat(a.sensitive) ?? (action === "attach" ? "f" : undefined);
+    if (action === "new") return { action, level: params.url ? levelOf(a.level) ?? "act" : null, urlSource: params.url ? "param" : "none", needsTab: false };
+    if (action === "attach") return { action, level: levelOf(a.level) ?? "read", sensitive, urlSource: "attach-target", needsTab: false };
+    return { action, level: null, urlSource: "none", needsTab: false };
   }
   const level = levelOf(tool.level);
-  let sensitive: SensitiveCategory | undefined = normalizeCat(tool.sensitive);
-  const when = tool.sensitiveWhen;
+  let sensitive: SensitiveCategory | undefined = normalizeCat(tool.sensitive) ?? STATIC_SENSITIVE[tool.name];
+  const when = tool.sensitiveWhen ?? (tool.name === "nav.wait" ? { param: "for", values: ["fn"] } : undefined);
   if (sensitive && when && !when.values.includes(String(params[when.param]))) sensitive = undefined;
   if (tool.name === "nav.goto") return { level: level ?? "act", sensitive, urlSource: "param", needsTab: false, tabOptional: true };
+  if (NO_TAB.has(tool.name)) return { level: null, sensitive, urlSource: "none", needsTab: false };
   return { level, sensitive, urlSource: level || sensitive ? "tab" : "none", needsTab: true };
 }
 

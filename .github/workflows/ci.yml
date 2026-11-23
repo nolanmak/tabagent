@@ -1,5 +1,6 @@
 # CI gates (#25, roadmap #28 TDD rule 7): lint → typecheck → unit (coverage
-# floors) → build → e2e. Branch protection on main requires every job below.
+# floors) → build → e2e and tool-budget. Branch protection on main requires
+# every job below.
 name: CI
 
 on:
@@ -90,3 +91,17 @@ jobs:
             test-results/
             playwright-report/
           if-no-files-found: ignore
+
+  tool-budget:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: packages/ }
+      - run: chmod +x packages/bridge/dist/cli.js
+      # core ≤ 2000 and full ≤ 8000 tokens of tools/list JSON (#30).
+      - run: npm run tool-budget

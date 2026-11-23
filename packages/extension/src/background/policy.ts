@@ -1,52 +1,38 @@
-// Interim permission policy (D17). Pure: plain data in, plain data out. No chrome.*, no I/O.
+// Pure interim permission policy (D17). No chrome.*, no I/O: plain data in, plain data out.
 //
-// Until #12 (site policies + prompts) and #13 (sensitive detection) replace this policy, every
-// command that reaches the router's authorize() chokepoint is decided by these rules, in order:
-//   1. the tab must be owned by the calling session (D9)
-//   2. hard denylist: browser pages (chrome://, devtools, ...), extension pages, the Chrome Web Store
-//   3. only http(s), file and blank pages
-//   4. D18 gated effects (categories a-f) are refused with PERMISSION_DENIED unless the
-//      extension setting `devAllowSensitive` is on (off by default; the e2e harness turns it on)
-// Everything else is allowed. #12 and #13 replace this policy, not the hook.
+// Until the permission engine (#12) and sensitive confirmation (#13) land, the
+// policy behind the router's authorize() chokepoint is:
+//   hard deny (chrome://, extension pages, Web Store) -> only http(s)/file pages
+//   -> D18 gated effects refused with PERMISSION_DENIED unless devAllowSensitive.
+// Session-owned tabs only is enforced by the router's tab resolution (D9).
+// #12 and #13 replace this policy, not the hook.
 
 export type Level = "read" | "act" | "full";
-/** D18 categories: a sensitive form submit, b risky click, c arbitrary JS, d credential read, e local file transfer, f tabs attach. */
+/** D18 categories. a/b are detected dynamically by handlers; c-f are static per registry. */
 export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f";
 
-export const CATEGORY_TEXT: Record<SensitiveCategory, string> = {
-  a: "Submitting a form with password, card or SSN-like fields",
-  b: "Click that looks like purchase, delete, send or transfer",
-  c: "Running arbitrary JavaScript in the page",
-  d: "Reading credentials (cookies, storage, network headers/bodies)",
-  e: "Transferring a local file (upload or reading a download)",
-  f: "Taking over one of your tabs",
-};
+export const LEVELS: Level[] = ["read", "act", "full"];
 
 export interface PolicyState {
+  /** Extension setting (D32), off by default; the e2e harness turns it on. */
   devAllowSensitive?: boolean;
 }
 
-/** Who owns the tab a command targets. "none" = the command targets no tab. */
-export type TabOwnership = "own" | "other" | "nobody" | "none";
-
 export interface PolicyRequest {
-  /** URL being acted on (the tab's current URL or a nav target). "" = no page. */
+  /** URL being acted on (the tab's current URL, a nav target, or a download's URL). */
   url: string;
-  /** Required level (D16). Recorded, not enforced: there are no site policies before #12. */
+  /** Required level; null = not site-scoped. Every level is allowed until #12. */
   level: Level | null;
   sensitive?: SensitiveCategory;
-  tab: TabOwnership;
 }
 
-export type DenyCode = "PERMISSION_DENIED" | "NOT_FOUND" | "TAB_BUSY";
-
-export type Decision = { decision: "allow"; origin: string | null } | { decision: "deny"; code: DenyCode; message: string; hint?: string; origin: string | null };
+export type Decision = { decision: "allow"; origin: string | null } | { decision: "deny"; code: "PERMISSION_DENIED"; message: string; hint?: string; origin: string | null };
 
 // ---------------------------------------------------------------------------
 // URL helpers
 // ---------------------------------------------------------------------------
 
-/** Hosts that are hard-denied (Chrome blocks extensions there anyway). */
+/** Hosts that are hard-denied and cannot be unlocked (Chrome blocks extensions there anyway). */
 export const HARD_DENY_HOSTS = ["chromewebstore.google.com"];
 const HARD_DENY_SCHEMES = /^(chrome|chrome-extension|chrome-untrusted|chrome-search|devtools|edge|view-source|about):/i;
 
@@ -89,32 +75,40 @@ export function isHardDenied(url: string): boolean {
   return false;
 }
 
+/** D18 text for a refused gated effect. */
+export const CATEGORY_TEXT: Record<SensitiveCategory, string> = {
+  a: "Submitting a form with password, card or SSN-like fields",
+  b: "Click that looks like purchase, delete, send or transfer",
+  c: "Running arbitrary JavaScript in the page",
+  d: "Reading credentials (cookies, storage, network headers/bodies)",
+  e: "Transferring a local file (upload or reading a download)",
+  f: "Taking over one of your tabs",
+};
+
+export const SENSITIVE_HINT = "Gated actions are refused until TabAgent can ask the user. A developer can turn on devAllowSensitive in the extension settings.";
+
 // ---------------------------------------------------------------------------
 // resolve
 // ---------------------------------------------------------------------------
 
 export function resolve(state: PolicyState, req: PolicyRequest): Decision {
   const origin = originOf(req.url);
-  if (req.tab === "other") {
-    return { decision: "deny", code: "TAB_BUSY", origin, message: "The tab belongs to another agent session" };
-  }
-  if (req.tab === "nobody") {
-    return { decision: "deny", code: "NOT_FOUND", origin, message: "The tab is not in this session", hint: "Use tabs action=new to open a tab for this session." };
-  }
   if (isHardDenied(req.url)) {
     return { decision: "deny", code: "PERMISSION_DENIED", origin, message: "TabAgent cannot act on browser pages, extension pages or the Chrome Web Store" };
   }
   if (!isBlank(req.url) && !origin) {
     return { decision: "deny", code: "PERMISSION_DENIED", origin, message: "TabAgent only works on http(s) and file pages" };
   }
-  if (req.sensitive && !state.devAllowSensitive) {
-    return {
-      decision: "deny",
-      code: "PERMISSION_DENIED",
-      origin,
-      message: `Refused: ${CATEGORY_TEXT[req.sensitive].toLowerCase()} needs the user's approval, and this TabAgent build cannot ask yet`,
-      hint: "Ask the user to do this step by hand.",
-    };
-  }
-  return { decision: "allow", origin };
+  const cat = req.sensitive;
+  if (!cat || state.devAllowSensitive) return { decision: "allow", origin };
+  return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `Refused: ${CATEGORY_TEXT[cat].toLowerCase()} (D18 ${cat})`, hint: SENSITIVE_HINT };
+}
+
+/** Effective access for display (session.permissions). */
+export function effectiveLevel(state: PolicyState, url: string): { origin: string | null; level: Level | "deny"; source: string; sensitiveAllowed: boolean } {
+  const origin = originOf(url);
+  const sensitiveAllowed = !!state.devAllowSensitive;
+  if (isBlank(url)) return { origin: null, level: "full", source: "blank page", sensitiveAllowed };
+  if (isHardDenied(url) || !origin) return { origin, level: "deny", source: "restricted browser page", sensitiveAllowed };
+  return { origin, level: "full", source: "interim policy (D17): session tabs allowed, gated actions refused unless devAllowSensitive", sensitiveAllowed };
 }

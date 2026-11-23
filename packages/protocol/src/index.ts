@@ -3,6 +3,7 @@
 export * from "./errors";
 export * from "./messages";
 export * from "./registry";
+export * from "./wrap";
 
 // ---------------------------------------------------------------------------
 // Site policy helpers (shared by extension engine + bridge token limits)

@@ -167,7 +167,7 @@ describe("one extension connection (D4)", () => {
   it("same ID replaces the old socket; its in-flight command fails NO_EXTENSION", async () => {
     const { d, base, cfg } = await boot();
     const first = await pairedExt(d);
-    const call = rest(base, "/v1/nav.reload", cfg.secret, {});
+    const call = rest(base, "/v1/page.snapshot", cfg.secret, {});
     await first.next("command");
     const second = new FakeExt(d.port);
     expect((await second.hello({ secret: cfg.secret })).type).toBe("welcome");
@@ -175,8 +175,8 @@ describe("one extension connection (D4)", () => {
     expect(r.status).toBe(503);
     expect(r.body.error.code).toBe("NO_EXTENSION");
     expect((await first.closed).code).toBe(4002);
-    second.onCommand = () => okEnvelope({ url: "http://a.test/" }, "nav.reload");
-    expect((await rest(base, "/v1/nav.reload", cfg.secret, {})).body.ok).toBe(true);
+    second.onCommand = () => okEnvelope({ snapshot: "- x" }, "page.snapshot");
+    expect((await rest(base, "/v1/page.snapshot", cfg.secret, {})).body.ok).toBe(true);
     second.close();
   });
   it("a different ID while one is connected is refused with the cause", async () => {
@@ -204,7 +204,7 @@ describe("heartbeat (D11)", () => {
     let now = 5_000_000;
     const { d, base, cfg } = await boot({ now: () => now, heartbeatCheckMs: 60_000 });
     const e = await pairedExt(d);
-    const call = rest(base, "/v1/nav.reload", cfg.secret, {});
+    const call = rest(base, "/v1/page.snapshot", cfg.secret, {});
     await e.next("command");
     now += 44_000;
     d.checkSilent();
@@ -225,20 +225,6 @@ describe("heartbeat (D11)", () => {
     await e.next("pong");
     now += 40_000;
     d.checkSilent();
-    expect(d.extensionConnected).toBe(true);
-    e.close();
-  });
-});
-
-describe("events (D20)", () => {
-  it("events from the extension are accepted and do not close the link", async () => {
-    const logs: string[] = [];
-    const { d } = await boot({ log: (m: string) => logs.push(m) });
-    const e = await pairedExt(d);
-    e.send({ type: "event", event: "session.ended", data: { sessionId: "s1" } });
-    e.send({ type: "ping" });
-    await e.next("pong");
-    expect(logs).toContain("extension event: session.ended");
     expect(d.extensionConnected).toBe(true);
     e.close();
   });

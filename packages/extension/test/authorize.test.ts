@@ -4,17 +4,21 @@ import { normalizeNavUrl, requirementsFor, type ToolLike } from "../src/backgrou
 
 const reg = (n: string) => getTool(n) as unknown as ToolLike;
 
-describe("requirementsFor: D18 categories reach the gate", () => {
-  it("no M0 registry tool is sensitive", () => {
-    for (const t of TOOLS as unknown as ToolLike[]) expect(requirementsFor(t, { action: "list", url: "https://a" }).sensitive, t.name).toBeUndefined();
+describe("requirementsFor: every D18 static path reaches the gate", () => {
+  it.each([
+    ["nav.wait", { for: "fn", value: "true" }, "c"],
+    ["tabs", { action: "attach" }, "f"],
+  ])("%s -> %s", (tool, params, cat) => {
+    expect(requirementsFor(reg(tool), params as any).sensitive).toBe(cat);
   });
-  it("a registry category passes through; sensitiveWhen limits it to matching params", () => {
-    expect(requirementsFor({ name: "x.eval", level: "full", sensitive: "c" }, {}).sensitive).toBe("c");
-    const when = { name: "x.wait", level: "read" as const, sensitive: "c" as const, sensitiveWhen: { param: "for", values: ["fn"] } };
-    expect(requirementsFor(when, { for: "fn" }).sensitive).toBe("c");
-    expect(requirementsFor(when, { for: "load" }).sensitive).toBeUndefined();
-    expect(requirementsFor({ name: "x", level: "read", sensitive: true }, {}).sensitive).toBeUndefined();
-    expect(requirementsFor({ name: "tabs", level: "none", actions: { grab: { level: "read", sensitive: "f" } } }, { action: "grab" }).sensitive).toBe("f");
+  it("nav.wait without fn is not sensitive", () => {
+    for (const f of ["load", "networkidle", "selector", "text", "url"]) expect(requirementsFor(reg("nav.wait"), { for: f }).sensitive).toBeUndefined();
+  });
+  it("registry fallback map applies when the registry carries no category", () => {
+    expect(requirementsFor({ name: "nav.wait", level: "read" }, { for: "fn" }).sensitive).toBe("c");
+    expect(requirementsFor({ name: "nav.wait", level: "read" }, { for: "load" }).sensitive).toBeUndefined();
+    expect(requirementsFor({ name: "nav.wait", level: "read", sensitive: true }, { for: "fn" }).sensitive).toBe("c");
+    expect(requirementsFor({ name: "tabs", level: "none" }, { action: "attach" })).toMatchObject({ level: "read", sensitive: "f" });
   });
 });
 
@@ -25,16 +29,22 @@ describe("requirementsFor: levels and tab resolution", () => {
     expect(requirementsFor(reg("tabs"), { action: "new", url: "https://a" })).toMatchObject({ level: "act", urlSource: "param" });
     expect(requirementsFor(reg("tabs"), { action: "select" })).toMatchObject({ level: null });
     expect(requirementsFor(reg("tabs"), { action: "close" })).toMatchObject({ level: null });
+    expect(requirementsFor(reg("tabs"), { action: "attach" })).toMatchObject({ urlSource: "attach-target", needsTab: false });
     expect(requirementsFor({ name: "tabs", level: "none" }, { action: "bogus" })).toMatchObject({ level: null });
   });
   it("nav.goto authorizes its target and resolves a tab only when named", () => {
     expect(requirementsFor(reg("nav.goto"), { url: "x" })).toMatchObject({ level: "act", urlSource: "param", needsTab: false, tabOptional: true });
   });
-  it("nav.back/forward/reload need a session tab and act level", () => {
-    for (const n of ["nav.back", "nav.forward", "nav.reload"]) expect(requirementsFor(reg(n), {})).toMatchObject({ level: "act", urlSource: "tab", needsTab: true });
+  it("tools with no tab", () => {
+    for (const n of ["session.info", "session.permissions", "session.end"]) expect(requirementsFor(reg(n), {})).toMatchObject({ needsTab: false, level: null });
   });
-  it("a tool with no level and no category still resolves its tab", () => {
-    expect(requirementsFor({ name: "x", level: "none" }, {})).toMatchObject({ level: null, urlSource: "none", needsTab: true });
+  it("every other site-scoped registry tool needs a tab and its registry level", () => {
+    for (const t of TOOLS as unknown as ToolLike[]) {
+      if (["tabs", "nav.goto"].includes(t.name) || t.name.startsWith("session.")) continue;
+      const r = requirementsFor(t, {});
+      expect(r.needsTab).toBe(true);
+      expect(r.level).toBe(t.level === "none" ? null : t.level);
+    }
   });
   it("normalizeNavUrl", () => {
     expect(normalizeNavUrl("example.com")).toBe("https://example.com");

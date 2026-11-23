@@ -1,0 +1,9 @@
+<!doctype html><html><head><title>Nested frames</title></head><body style="margin:0"><main>
+<h1>Nested</h1>
+<div style="height:300px"></div>
+<iframe id="outer" title="Outer frame" width="500" height="320" style="border:7px solid #333;padding:5px"></iframe>
+<div style="height:2000px"></div>
+<script>
+const cross = new URLSearchParams(location.search).get('cross') || '';
+document.getElementById('outer').src = cross + '/nested-mid.html';
+</script></main></body></html>

@@ -1,16 +1,20 @@
 // TabAgent service worker: wires the bridge client, the command router, the
-// permission gate and the pairing screen together.
+// permission gate (D17 interim) and the pairing screen API together.
 // Decisions live in pure modules (policy, router, audit, bridgeClient).
 import { getTool, PROTOCOL_VERSION, validateParams, type SessionMeta } from "@tabagent/protocol";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
-import { navHandlers } from "./handlers/nav";
+import { allCdpTabs } from "./cdp";
+import { driverFor } from "./driver";
+import { broadcast } from "./feed";
 import { authorize } from "./permissions";
 import { createRouter } from "./router";
-import { sessionHandlers } from "./sessionTools";
+import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endSession, getSession, listSessions, resolveTab, restoreSessions, type Session } from "./sessions";
 import { getSettings, updateSettings } from "./settings";
+import { handlers } from "./tools";
 
 const VERSION = chrome.runtime.getManifest().version;
+const FEATURES: string[] = [];
 
 // ---------------------------------------------------------------------------
 // Bridge connection (D4, D5, D11)
@@ -25,9 +29,13 @@ const bridge = createBridgeClient({
     await updateSettings({ secret });
   },
   onMessage: (m) => onBridgeMessage(m),
+  onStatus: (status, error) => {
+    broadcast({ type: "status", status, error });
+  },
   protocolVersion: PROTOCOL_VERSION,
   extensionVersion: VERSION,
   extensionId: chrome.runtime.id,
+  features: FEATURES,
   setInterval: (fn, ms) => setInterval(fn, ms),
   clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),
   setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -53,20 +61,39 @@ async function tabUrl(tabId: number) {
   return t.pendingUrl || t.url || "";
 }
 
-const handlers: Record<string, any> = { ...sessionHandlers, ...navHandlers };
+const SENSITIVE_NAME = /pass(word|code)?|card|cc-?num|cvv|cvc|csc|security.?code|ssn|social.?sec|iban|routing|account.?num/i;
+
+async function refIsSensitive(tabId: number, url: string, ref: string): Promise<boolean> {
+  const drv = await driverFor(tabId, url);
+  const inf = (await Promise.race([drv.call("info", [], { ref }), new Promise((r) => setTimeout(() => r(null), 800))])) as { type?: string; name?: string; inputType?: string } | null;
+  if (!inf) return true; // unknown: mask
+  return inf.type === "password" || inf.inputType === "password" || SENSITIVE_NAME.test(inf.name ?? "");
+}
 
 export const router = createRouter<Session>({
   getTool: (n) => getTool(n) as any,
   validate: (t, p) => validateParams(t as any, p),
+  // The kill switch (D12) arrives with the side panel (#14).
+  isPaused: () => false,
   getSession: (m) => getSession(m as SessionMeta),
   resolveTab: (s, id) => resolveTab(s, id),
   tabUrl,
-  authorize: (r) => authorize({ meta: r.meta, url: r.url, level: r.level, sensitive: r.sensitive, tool: r.action ? `${r.tool} ${r.action}` : r.tool, tabId: r.tabId }),
-  handler: (name) => handlers[name],
+  attachTarget: (m, id) => attachTarget(m as SessionMeta, id),
+  downloadUrl: () => undefined,
+  authorize: (r) => authorize({ meta: r.meta, url: r.url, level: r.level, sensitive: r.sensitive, tool: r.action ? `${r.tool} ${r.action}` : r.tool, summary: r.summary, reasons: r.reasons, tabId: r.tabId }),
+  handler: (name) => (sessionHandlers[name] ?? (handlers as Record<string, any>)[name]) as any,
+  sensitivePaths: async (tool, p, tabId, url) => {
+    if (tabId == null) return [];
+    const out: string[] = [];
+    if ((tool === "act.type" || tool === "act.fill") && typeof p.ref === "string") {
+      if (await refIsSensitive(tabId, url, p.ref)) out.push(tool === "act.type" ? "text" : "value");
+    }
+    return out;
+  },
 });
 
 // ---------------------------------------------------------------------------
-// Pairing screen API. Only our own extension pages may call it.
+// UI API (pairing screen). Only our own extension pages may call it.
 // ---------------------------------------------------------------------------
 async function uiState() {
   const s = await getSettings();
@@ -82,6 +109,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "ui.pair":
         if (msg.port) await updateSettings({ port: Number(msg.port) });
         await bridge.pair(String(msg.code ?? ""));
+        return { ok: true };
+      case "ui.unpair":
+        await updateSettings({ secret: null });
+        bridge.disconnect("unpaired");
+        return { ok: true };
+      case "ui.reconnect":
+        await bridge.reconnect();
         return { ok: true };
     }
     return { error: "unknown message" };
@@ -112,6 +146,10 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   updateSettings,
   connect: () => bridge.connect(),
   status: () => bridge.status(),
+  features: FEATURES,
   listSessions,
+  endSession,
+  inflight: () => router.inflightCount(),
+  attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
 };
 export type { Status };

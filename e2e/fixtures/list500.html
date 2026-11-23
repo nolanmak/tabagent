@@ -1,0 +1,10 @@
+<!doctype html><html><head><title>Big list</title></head><body><main>
+<h1>Five hundred rows</h1>
+<ul id="rows" aria-label="Rows"></ul>
+<button id="after">After the list</button>
+</main>
+<script>
+let h = '';
+for (let i = 1; i <= 500; i++) h += `<li><a href="#row-${i}">Row number ${i}</a> <button>Open ${i}</button></li>`;
+document.getElementById('rows').innerHTML = h;
+</script></body></html>

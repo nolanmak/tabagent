@@ -2,15 +2,48 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { helpText, toolOutput, toolsCommand } from "../src/commands";
+import { configCommand, helpText, skillCommand, toolOutput, toolsCommand } from "../src/commands";
 import { loadConfig } from "../src/config";
 import { tempHome } from "./helpers";
 
+const SKILL = join(__dirname, "../skill/SKILL.md");
+
 describe("CLI commands", () => {
   it("tools lists a profile; bad profile fails", () => {
-    expect(toolsCommand("core").out.at(-1)).toMatch(/^2 tools/);
-    expect(toolsCommand("full").out.at(-1)).toMatch(/^5 tools/);
+    expect(toolsCommand("core").out.at(-1)).toMatch(/^9 tools/);
     expect(toolsCommand("nope").code).toBe(1);
+  });
+  it("skill install/uninstall/print", () => {
+    const home = mkdtempSync(join(tmpdir(), "tabagent-ch-"));
+    const prevHome = process.env.HOME;
+    const prevCodex = process.env.CODEX_HOME;
+    process.env.HOME = home;
+    process.env.CODEX_HOME = join(home, ".codex");
+    try {
+      expect(skillCommand(["install"], {}, SKILL).out.join("\n")).toMatch(/Installed \(claude\)[\s\S]*Installed \(codex\)/);
+      expect(skillCommand(["install"], {}, SKILL).out[0]).toMatch(/Up to date/);
+      writeFileSync(join(home, ".claude/skills/tabagent/SKILL.md"), "mine");
+      const r = skillCommand(["install"], { claude: true }, SKILL);
+      expect(r.code).toBe(1);
+      expect(skillCommand(["uninstall"], { claude: true }, SKILL).code).toBe(1);
+      expect(skillCommand(["install"], { claude: true, force: true }, SKILL).out[0]).toMatch(/Updated/);
+      expect(skillCommand(["uninstall"], {}, SKILL).out.join("\n")).toMatch(/Removed \(claude\)[\s\S]*Removed \(codex\)/);
+      expect(skillCommand(["uninstall"], { codex: true }, SKILL).out[0]).toMatch(/Not installed/);
+      expect(skillCommand(["print"], {}, SKILL).out[0]).toContain("name: tabagent");
+      expect(skillCommand(["bogus"], {}, SKILL).code).toBe(1);
+    } finally {
+      process.env.HOME = prevHome;
+      if (prevCodex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodex;
+    }
+  });
+  it("config show hides secrets; set port", () => {
+    const h = tempHome();
+    const show = JSON.parse(configCommand([]).out[0]);
+    expect(show.secret).toBe("(set)");
+    expect(configCommand(["set", "port", "5555"]).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(h, "config.json"), "utf8")).port).toBe(5555);
+    expect(configCommand(["set", "port", "x"]).code).toBe(1);
   });
   it("tool output: text, raw, errors, screenshot to file (D30)", () => {
     tempHome();

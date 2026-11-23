@@ -1,118 +1,19 @@
-// nav.goto / back / forward / reload (#3, D15). Until the Driver interface lands (#7) navigation
-// goes through chrome.tabs: no debugger, no page access.
-import { TabAgentError } from "@tabagent/protocol";
-import { resolveTab, type Session } from "../sessions";
-import type { SessionMeta, ToolDef } from "@tabagent/protocol";
-
-export interface Ctx {
-  s: Session;
-  meta: SessionMeta;
-  p: any;
-  tool: ToolDef;
-  tabId?: number;
-  url?: string;
-}
+// nav.goto / back / forward / reload / wait (#26, D15, D24, D35).
+import { driverFor } from "../driver";
+import { taErr } from "../errors";
+import { requireSite } from "../permissions";
+import { baselines } from "../refstore";
+import { resolveTab } from "../sessions";
+import { levelOf, onTab, titleOf, withTabLock, type Ctx } from "../tabctx";
+import { describeWait, normalizeWait, pollUntil, urlMatcher } from "../wait";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 
-/** A navigation that does not start loading within this long was same-document (or nothing happened). */
-const START_GRACE_MS = 1000;
-
-async function tabInfo(tabId: number) {
-  const t = await chrome.tabs.get(tabId);
-  return { url: t.pendingUrl || t.url || "", title: t.title ?? "" };
-}
-
-/**
- * Run `start` and wait for the tab to finish loading. Resolves false on timeout.
- * The listener is registered before `start`, so a fast load is never missed.
- */
-export function loadAfter(tabId: number, start: () => Promise<unknown>, timeout: number): Promise<boolean> {
-  return new Promise<boolean>((resolve, reject) => {
-    let loading = false;
-    let done = false;
-    const finish = (ok: boolean, err?: unknown) => {
-      if (done) return;
-      done = true;
-      clearTimeout(grace);
-      clearTimeout(timer);
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      chrome.tabs.onRemoved.removeListener(onRemoved);
-      if (err) reject(err);
-      else resolve(ok);
-    };
-    const onUpdated = (id: number, info: { status?: string }) => {
-      if (id !== tabId) return;
-      if (info.status === "loading") loading = true;
-      else if (info.status === "complete" && loading) finish(true);
-    };
-    const onRemoved = (id: number) => {
-      if (id === tabId) finish(false, new TabAgentError("NOT_FOUND", `Tab ${tabId} was closed`));
-    };
-    chrome.tabs.onUpdated.addListener(onUpdated);
-    chrome.tabs.onRemoved.addListener(onRemoved);
-    const grace = setTimeout(() => !loading && finish(true), Math.min(START_GRACE_MS, timeout));
-    const timer = setTimeout(() => finish(false), timeout);
-    start().catch((e) => finish(false, e));
-  });
-}
-
-/** A tab that was just created is still committing about:blank; a navigation started now can be lost. */
-async function settleBlank(tabId: number, ms = 2000) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    const t = await chrome.tabs.get(tabId);
-    const blank = /^about:blank/.test(t.pendingUrl || t.url || "about:blank");
-    if (!blank || t.status === "complete") return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
-
-/** Navigate a session tab and wait for load (or not, with waitUntil=none). */
-export async function navigate(tabId: number, url: string, waitUntil: string, timeout: number) {
-  await settleBlank(tabId);
-  const go = () => chrome.tabs.update(tabId, { url });
-  const ok = waitUntil === "none" ? (await go(), true) : await loadAfter(tabId, go, timeout);
-  const t = await tabInfo(tabId);
-  return { url: t.url, ...(ok ? {} : { warning: "Timed out waiting for load" }) };
-}
+const clock = { now: () => Date.now(), sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)) };
 
 async function navResult(tabId: number, r: { url: string; warning?: string }, kind: string) {
-  const { title } = await tabInfo(tabId);
+  const title = await titleOf(tabId);
   return { ...r, title, __side: { navigation: { url: r.url, title, kind } } };
-}
-
-/**
- * Back/forward run history.back()/forward() in the page. chrome.tabs.goBack skips entries the
- * browser marks as added without a user gesture, which is every entry an agent creates.
- */
-async function step(tabId: number, dir: "back" | "forward") {
-  let moved = false;
-  try {
-    const [r] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (d: string) => {
-        const nav = (globalThis as any).navigation as { canGoBack?: boolean; canGoForward?: boolean } | undefined;
-        if (nav && !(d === "back" ? nav.canGoBack : nav.canGoForward)) return false;
-        if (d === "back") history.back();
-        else history.forward();
-        return true;
-      },
-      args: [dir],
-    });
-    moved = r?.result === true;
-  } catch {
-    moved = false;
-  }
-  if (!moved) throw new TabAgentError("BAD_REQUEST", `No ${dir} history entry`);
-}
-
-async function historyNav(c: Ctx, action: "back" | "forward" | "reload") {
-  const tabId = c.tabId ?? (await resolveTab(c.s, c.p.tabId));
-  const start = () => (action === "reload" ? chrome.tabs.reload(tabId) : step(tabId, action));
-  const ok = await loadAfter(tabId, start, c.p.timeout ?? 30000);
-  const { url } = await tabInfo(tabId);
-  return navResult(tabId, { url, ...(ok ? {} : { warning: "Timed out waiting for load" }) }, action);
 }
 
 export const navHandlers: Record<string, Handler> = {
@@ -120,12 +21,71 @@ export const navHandlers: Record<string, Handler> = {
     const { url, waitUntil = "load", timeout = 30000 } = c.p;
     let target = String(url);
     if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = "https://" + target;
-    // The router authorized the target origin (D16) before we got here.
+    // D16: the target origin is checked before navigating.
+    await requireSite(c.meta, target, levelOf(c, "act"), c.tool.name, `open ${target}`);
     const tabId = await resolveTab(c.s, c.p.tabId, true);
-    const r = await navigate(tabId, target, waitUntil, timeout);
-    return navResult(tabId, r, "navigate");
+    return withTabLock(tabId, async () => {
+      const drv = await driverFor(tabId, target);
+      baselines.clearTab(tabId);
+      const r = await drv.navigate(target, waitUntil, timeout);
+      return navResult(tabId, r, "navigate");
+    });
   },
-  "nav.back": (c) => historyNav(c, "back"),
-  "nav.forward": (c) => historyNav(c, "forward"),
-  "nav.reload": (c) => historyNav(c, "reload"),
+
+  async "nav.back"(c) {
+    return onTab(c, levelOf(c, "act"), async (t) => {
+      await t.drv.history("back", c.p.timeout ?? 30000);
+      return navResult(t.tabId, { url: await t.drv.currentUrl() }, "back");
+    });
+  },
+  async "nav.forward"(c) {
+    return onTab(c, levelOf(c, "act"), async (t) => {
+      await t.drv.history("forward", c.p.timeout ?? 30000);
+      return navResult(t.tabId, { url: await t.drv.currentUrl() }, "forward");
+    });
+  },
+  async "nav.reload"(c) {
+    return onTab(c, levelOf(c, "act"), async (t) => {
+      await t.drv.history("reload", c.p.timeout ?? 30000);
+      return navResult(t.tabId, { url: await t.drv.currentUrl() }, "reload");
+    });
+  },
+
+  async "nav.wait"(c) {
+    const w = normalizeWait(c.p);
+    return onTab(
+      c,
+      "read",
+      async (t) => {
+        const started = Date.now();
+        let ok = false;
+        switch (w.kind) {
+          case "load":
+            ok = await t.drv.waitLoad(w.timeout);
+            break;
+          case "networkidle":
+            ok = await t.drv.networkIdle(500, w.timeout);
+            break;
+          case "selector":
+            ok = await pollUntil(async () => !!(await t.drv.call("waitSelector", [w.value])), w.timeout, clock, 100);
+            break;
+          case "text":
+            ok = await pollUntil(async () => !!(await t.drv.call("waitText", [w.value])), w.timeout, clock, 100);
+            break;
+          case "url": {
+            const m = urlMatcher(w.value!);
+            ok = await pollUntil(async () => m(await t.drv.currentUrl()), w.timeout, clock, 100);
+            break;
+          }
+          case "fn":
+            // D18(c): the router's sensitive gate ran before we got here (registry sensitiveWhen for=fn).
+            ok = await pollUntil(async () => !!(await t.drv.evaluate(`!!(${w.value})`, "isolated")), w.timeout, clock, 100);
+            break;
+        }
+        if (!ok) throw taErr("TIMEOUT", `Timed out after ${w.timeout}ms waiting for ${describeWait(w)}`, "Take a page.snapshot to see the current state.");
+        return { ok: true, waitedMs: Date.now() - started, url: await t.drv.currentUrl() };
+      },
+      { lock: false },
+    );
+  },
 };
