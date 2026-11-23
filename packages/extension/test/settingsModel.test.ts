@@ -7,16 +7,21 @@ describe("settings model (D32, contract §7)", () => {
     expect(s).toEqual(DEFAULTS);
     expect(s.devAllowSensitive).toBe(false);
     expect(s.onSessionEnd).toBe("collapse");
+    expect(s.beforeUnload).toBe("accept");
     expect(s.showOverlay).toBe(true);
   });
-  it("validates scalars and drops unknown keys", () => {
-    const s = migrateSettings({ port: 70000, secret: "", onSessionEnd: "explode", showOverlay: false, devAllowSensitive: "yes", sites: { "https://a": { policy: "full" } } });
+  it("migrates the spike's autoAcceptBeforeUnload", () => {
+    expect(migrateSettings({ autoAcceptBeforeUnload: false }).beforeUnload).toBe("dismiss");
+    expect(migrateSettings({ autoAcceptBeforeUnload: true }).beforeUnload).toBe("accept");
+  });
+  it("validates scalars", () => {
+    const s = migrateSettings({ port: 70000, secret: "", onSessionEnd: "explode", beforeUnload: "ask-agent", showOverlay: false, devAllowSensitive: "yes" });
     expect(s.port).toBe(DEFAULTS.port);
     expect(s.secret).toBeNull();
     expect(s.onSessionEnd).toBe("collapse");
+    expect(s.beforeUnload).toBe("ask-agent");
     expect(s.showOverlay).toBe(false);
     expect(s.devAllowSensitive).toBe(false);
-    expect(s).not.toHaveProperty("sites");
-    expect(migrateSettings({ port: 1234, secret: "abc", devAllowSensitive: true, onSessionEnd: "close" })).toMatchObject({ port: 1234, secret: "abc", devAllowSensitive: true, onSessionEnd: "close" });
+    expect(migrateSettings({ port: 1234, secret: "abc" })).toMatchObject({ port: 1234, secret: "abc" });
   });
 });

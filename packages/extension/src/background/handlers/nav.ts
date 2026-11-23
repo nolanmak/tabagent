@@ -1,10 +1,11 @@
 // nav.goto / back / forward / reload / wait (#26, D15, D24, D35).
 import { driverFor } from "../driver";
+import { noteAction } from "../downloads";
 import { taErr } from "../errors";
 import { requireSite } from "../permissions";
 import { baselines } from "../refstore";
 import { resolveTab } from "../sessions";
-import { levelOf, onTab, titleOf, withTabLock, type Ctx } from "../tabctx";
+import { assertNoDialog, levelOf, onTab, titleOf, withTabLock, type Ctx } from "../tabctx";
 import { describeWait, normalizeWait, pollUntil, urlMatcher } from "../wait";
 
 type Handler = (c: Ctx) => Promise<unknown>;
@@ -21,10 +22,12 @@ export const navHandlers: Record<string, Handler> = {
     const { url, waitUntil = "load", timeout = 30000 } = c.p;
     let target = String(url);
     if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = "https://" + target;
+    noteAction(c.meta.id);
     // D16: the target origin is checked before navigating.
     await requireSite(c.meta, target, levelOf(c, "act"), c.tool.name, `open ${target}`);
     const tabId = await resolveTab(c.s, c.p.tabId, true);
     return withTabLock(tabId, async () => {
+      assertNoDialog(tabId, c.tool.name);
       const drv = await driverFor(tabId, target);
       baselines.clearTab(tabId);
       const r = await drv.navigate(target, waitUntil, timeout);

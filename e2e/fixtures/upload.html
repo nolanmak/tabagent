@@ -1,0 +1,9 @@
+<!doctype html><html><head><title>Upload</title></head><body><main>
+<label for="f">Attachment</label><input id="f" type="file" onchange="document.getElementById('o').textContent = [...this.files].map(f=>f.name+':'+f.size).join(',')">
+<button id="pick" type="button" onclick="document.getElementById('hiddenFile').click()">Choose avatar</button>
+<input id="hiddenFile" type="file" style="display:none" onchange="document.getElementById('o2').textContent = 'avatar ' + [...this.files].map(f=>f.name+':'+f.size).join(',')">
+<p id="o"></p>
+<p id="o2"></p>
+<a href="/download/data.csv" id="dl">Download CSV</a>
+<button id="plain" type="button">Plain button</button>
+</main></body></html>

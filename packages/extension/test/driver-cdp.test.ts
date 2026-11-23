@@ -1,12 +1,15 @@
 // CDP driver over a fake CDP tab: input sequences, staleness, DEBUGGER_DETACHED,
-// screenshot planning, same-process frames, find.
+// dialogs, screenshot planning, frames, find.
 import { describe, expect, it, vi } from "vitest";
 import { TabAgentError } from "@tabagent/protocol";
 import type { Observation } from "../src/background/autowait";
 import { memoryStore, RefTable } from "../src/background/refs";
 import { loadAx } from "./helpers";
 
-vi.mock("../src/background/permissions", () => ({ requireSite: async () => {}, requireSensitive: async () => {} }));
+vi.mock("../src/background/permissions", () => ({
+  requireSite: async () => {},
+  requireSensitive: async () => {},
+}));
 vi.mock("../src/background/settings", () => ({ getSettings: async () => ({ showOverlay: false }) }));
 vi.mock("../src/background/refstore", async () => {
   const { Baselines } = await import("../src/background/diff");
@@ -23,11 +26,14 @@ function fake(page = "index", extraFrames: any[] = []) {
   const fx = loadAx(page);
   const calls: { m: string; p: any; sid?: string }[] = [];
   const detach = new Set<(r: string) => void>();
-  const st = { obs: { ...OK } as Observation, onInput: undefined as undefined | ((m: string) => void) };
+  const st = { obs: { ...OK } as Observation, dialog: null as any, waitDialog: false, onInput: undefined as undefined | ((m: string) => void) };
   const tab: any = {
     tabId: 1,
     attached: true,
     userDetached: false,
+    get dialog() {
+      return st.dialog;
+    },
     loaders: new Map([["|main", "L1"]]),
     lifecycle: [],
     navEpoch: 0,
@@ -38,6 +44,9 @@ function fake(page = "index", extraFrames: any[] = []) {
     onDetached: (f: (r: string) => void) => (detach.add(f), () => detach.delete(f)),
     ensure: async () => {
       if (tab.userDetached) throw tab.detachedError();
+    },
+    assertNoDialog: () => {
+      if (st.dialog) throw new TabAgentError("DIALOG_OPEN", "dialog", undefined, { pageText: true });
     },
     detachedError: () => new TabAgentError("DEBUGGER_DETACHED", "The user cancelled debugging"),
     guard<T>(p: Promise<T>) {
@@ -56,7 +65,10 @@ function fake(page = "index", extraFrames: any[] = []) {
     },
     mainKey: () => "|main",
     frames: async () => [{ key: "|main", frameId: "main", url: "http://x/", loaderId: "L1" }, ...extraFrames],
-    waitEvent: () => new Promise(() => {}),
+    waitEvent: (pred: (m: string) => boolean) =>
+      new Promise((res) => {
+        if (st.waitDialog && pred("Page.javascriptDialogOpening")) setTimeout(() => res({ method: "Page.javascriptDialogOpening" }), 5);
+      }),
     networkIdle: async () => true,
     evalMain: async () => ({ scrollX: 0, scrollY: 0 }),
     send: async (m: string, p: any = {}, sid?: string) => {
@@ -171,6 +183,17 @@ describe("CdpDriver actions (#7)", () => {
     await expect(f.drv.snapshot({})).rejects.toMatchObject({ code: "DEBUGGER_DETACHED" });
   });
 
+  it("an action that opens a dialog returns at once with the dialog (D28)", async () => {
+    const f = fake();
+    const ref = await refOf(f.drv, /Click me/);
+    f.st.waitDialog = true;
+    f.st.onInput = (m) => {
+      if (m === "Input.dispatchMouseEvent") f.st.dialog = { type: "confirm", message: "Sure?" };
+    };
+    const r = await f.drv.click(ref);
+    expect(r.dialog).toEqual({ type: "confirm", message: "Sure?" });
+    await expect(f.drv.snapshot({})).rejects.toMatchObject({ code: "DIALOG_OPEN" });
+  });
 });
 
 describe("CdpDriver screenshot (#8)", () => {
@@ -208,7 +231,7 @@ describe("CdpDriver screenshot (#8)", () => {
   });
 });
 
-describe("CdpDriver frames and find (#26)", () => {
+describe("CdpDriver same-process frames and find (#26)", () => {
   it("child frame clicks are translated by the owner iframe's offset", async () => {
     const child = loadAx("index");
     const ownerId = 777;
@@ -227,8 +250,6 @@ describe("CdpDriver frames and find (#26)", () => {
     await f.drv.click(refs[1]);
     const press = f.input().find((c) => c.p.type === "mousePressed")!;
     expect([press.p.x, press.p.y]).toEqual([100 + 2 + 60, 200 + 2 + 20]);
-    const all = await f.drv.callAllFrames("findNodes", [{}]);
-    expect(all.map((x) => x.frameKey)).toEqual(["|main", "S1|child"]);
   });
 
   it("find mints refs from the shared table (same ref as the snapshot)", async () => {

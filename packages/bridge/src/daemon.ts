@@ -1,16 +1,17 @@
 // The bridge daemon: WebSocket for the extension at /ext, MCP Streamable HTTP at /mcp, REST at /v1.
 // Binds 127.0.0.1 only. Trusted for *who is calling* (D1); the extension enforces site policy.
 import { randomUUID } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   defaultTimeout,
+  FilesResolveSchema,
   getTool,
   HelloSchema,
   normalizeHello,
   PROTOCOL_VERSION,
-  ResultEnvelopeSchema,
   TabAgentError,
   TIMEOUTS,
   toolsForProfiles,
@@ -23,7 +24,8 @@ import {
   type OutputResponse,
   type SessionMeta,
 } from "@tabagent/protocol";
-import { saveConfig, type Config } from "./config";
+import { configPath, saveConfig, type Config } from "./config";
+import { readDownload, resolveUploads, SessionDownloads } from "./files";
 import { buildMcpServer } from "./mcp";
 import { Pairing } from "./pairing";
 import { authenticate, bearerOf, type Principal } from "./tokens";
@@ -87,6 +89,7 @@ export class Daemon {
   server: Server | null = null;
   port: number;
   readonly pairing: Pairing;
+  readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
   private pending = new Map<string, Pending>();
@@ -96,6 +99,7 @@ export class Daemon {
   private timers: ReturnType<typeof setInterval>[] = [];
   private log: (m: string) => void;
   private now: () => number;
+  private cfgMtime = 0;
 
   constructor(
     public cfg: Config,
@@ -149,6 +153,11 @@ export class Daemon {
     });
     this.server = server;
     this.port = (server.address() as { port: number }).port;
+    try {
+      this.cfgMtime = statSync(configPath()).mtimeMs;
+    } catch {
+      /* no file yet */
+    }
     this.timers.push(setInterval(() => this.gcRestSessions(), 60_000));
     this.timers.push(setInterval(() => this.checkSilent(), this.opts.heartbeatCheckMs ?? 5_000));
     for (const t of this.timers) t.unref();
@@ -304,6 +313,25 @@ export class Daemon {
       case "event":
         this.log(`extension event: ${msg.event}`);
         return;
+      case "files.resolve":
+        return this.onFilesResolve(ws, msg);
+    }
+  }
+
+  /** #11: validate upload paths only once the extension (after its gates) asks for them. */
+  private onFilesResolve(ws: WebSocket, raw: unknown) {
+    const r = FilesResolveSchema.safeParse(raw);
+    if (!r.success) return;
+    const { id, commandId, paths } = r.data;
+    const reply = (m: Omit<Extract<BridgeToExt, { type: "files.resolved" }>, "type" | "id">) => this.sendTo(ws, { type: "files.resolved", id, ...m });
+    const p = this.pending.get(commandId);
+    if (!p || p.ws !== ws || p.tool !== "act.upload") return reply({ ok: false, error: { code: "BAD_REQUEST", message: "No in-flight act.upload with that id" } });
+    const asked = new Set((p.params.paths as string[]) ?? []);
+    if (!paths.every((x) => asked.has(x))) return reply({ ok: false, error: { code: "BAD_REQUEST", message: "Paths differ from the act.upload command" } });
+    try {
+      reply({ ok: true, paths: resolveUploads(paths, this.cfg.uploadDirs) });
+    } catch (e) {
+      reply({ ok: false, error: toTabAgentError(e).toJSON() });
     }
   }
 
@@ -312,8 +340,6 @@ export class Daemon {
     if (!p) return;
     this.pending.delete(raw.id);
     clearTimeout(p.timer);
-    // The audit log is #15; until then the extension's audit record is checked for shape only.
-    ResultEnvelopeSchema.safeParse(raw);
     const out: OutputResponse = { ok: !!raw.ok };
     if (raw.ok) out.result = raw.result;
     else out.error = TabAgentError.from(raw.error ?? {}).toJSON();
@@ -358,15 +384,41 @@ export class Daemon {
       if (!this.extensionConnected && !(await this.waitForExtension(this.opts.extWaitMs ?? 3000))) {
         throw new TabAgentError("NO_EXTENSION", "The TabAgent Chrome extension is not connected", PAIRING_HINT);
       }
-      return await this.send(meta, tool.name, params);
+      // Legacy extensions can't ask for path validation after approval; validate up front for them only.
+      if (tool.name === "act.upload" && !this.ext!.features.has("files.resolve")) params.paths = resolveUploads(params.paths as string[], this.cfg.uploadDirs);
+      const resp = await this.send(meta, tool.name, params);
+      if (resp.ok) return this.afterResult(meta, tool.name, resp);
+      return resp;
     } catch (e) {
-      return { ok: false, error: toTabAgentError(e).toJSON() };
+      const err = toTabAgentError(e);
+      return { ok: false, error: err.toJSON() };
     }
   }
 
   /** Wrapped response for the output edge (D21). MCP, REST and CLI all go through here. */
   async call(meta: SessionMeta, toolName: string, params: unknown): Promise<OutputResponse> {
     return wrapResponse(await this.dispatchRaw(meta, toolName, params), getTool(toolName)).response;
+  }
+
+  private afterResult(meta: SessionMeta, tool: string, resp: OutputResponse): OutputResponse {
+    this.downloads.note(meta.id, resp.downloads);
+    const r = resp.result as Record<string, any> | undefined;
+    if (tool === "downloads.wait" && r) this.downloads.noteOne(meta.id, r);
+    if (tool === "downloads.list" && r) this.downloads.note(meta.id, r.downloads);
+    if (r && typeof r === "object" && Array.isArray(r.downloads) && tool !== "downloads.list") this.downloads.note(meta.id, r.downloads);
+    if (r && typeof r === "object" && r.__bridgeRead) {
+      const { __bridgeRead: br, ...rest } = r;
+      try {
+        const id = Number(br.id ?? rest.id);
+        const path = this.downloads.check(meta.id, id, String(br.path));
+        const content = readDownload(path, this.cfg.maxReadBytes);
+        return { ...resp, result: { id, mime: br.mime ?? rest.mime, ...content } };
+      } catch (e) {
+        const err = toTabAgentError(e);
+        return { ok: false, error: err.toJSON() };
+      }
+    }
+    return resp;
   }
 
   private send(meta: SessionMeta, tool: string, params: Record<string, unknown>): Promise<OutputResponse> {
@@ -386,6 +438,7 @@ export class Daemon {
   }
 
   endSession(sessionId: string) {
+    this.downloads.drop(sessionId);
     if (this.extensionConnected) this.sendTo(this.ext!.ws, { type: "session.closed", sessionId });
   }
 
@@ -413,7 +466,21 @@ export class Daemon {
     return this.cfg.extensionIds.some((id) => origin === `chrome-extension://${id}`);
   }
 
+  /** Live reload of upload dirs when the CLI edits config.json. */
+  private refreshConfig() {
+    try {
+      const m = statSync(configPath()).mtimeMs;
+      if (m === this.cfgMtime) return;
+      this.cfgMtime = m;
+      const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+      if (Array.isArray(raw.uploadDirs)) this.cfg.uploadDirs = raw.uploadDirs;
+    } catch {
+      /* keep current */
+    }
+  }
+
   principal(req: IncomingMessage): Principal | null {
+    this.refreshConfig();
     return authenticate(this.cfg, bearerOf(req.headers.authorization));
   }
 
@@ -477,12 +544,13 @@ export class Daemon {
         extension: this.extensionConnected,
         extensionVersion: this.extensionVersion,
         paired: this.cfg.extensionIds.length > 0,
-        pairCode: this.pairCode,
+        pairCode: who.kind === "secret" ? this.pairCode : undefined,
         mcpSessions: this.mcpSessions.size,
         restSessions: this.restSessions.size,
       });
     }
     if (path === "/v1/pair" && req.method === "POST") {
+      if (who.kind !== "secret") return this.err(res, "UNAUTHORIZED", "Only the local owner can create pairing codes", 403);
       return this.sendJson(res, 200, { ok: true, pairCode: this.newPairCode(), expiresInSec: TIMEOUTS.pairCode / 1000 });
     }
     let body: any;
@@ -532,7 +600,7 @@ export class Daemon {
       const label = (proxy && client) || "local";
       s = { meta: { id: `${proxy ? "mcp" : "rest"}:${key}`, label, cap: who.cap, sites: who.sites }, lastSeen: this.now(), persistent: proxy };
       this.restSessions.set(key, s);
-    } else if (proxy && client && s.meta.label === "local") s.meta.label = client;
+    } else if (proxy && who.kind === "secret" && client && s.meta.label === "local") s.meta.label = client;
     s.lastSeen = this.now();
     return s.meta;
   }
@@ -568,7 +636,7 @@ export class Daemon {
         profile,
         onClientInfo: (name) => {
           const n = String(name ?? "").replace(/[^\w .-]/g, "").slice(0, 40);
-          if (n) meta.label = n;
+          if (who.kind === "secret" && n) meta.label = n;
         },
       });
       await server.connect(transport);

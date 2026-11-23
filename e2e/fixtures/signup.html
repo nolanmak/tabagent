@@ -1,0 +1,72 @@
+<!doctype html><html><head><title>Sign up (2 steps)</title>
+<style>
+  [role=listbox]{border:1px solid #999;list-style:none;margin:0;padding:0;width:200px}
+  [role=option]{padding:2px 4px;cursor:pointer}
+  .ce{border:1px solid #999;min-height:2em;width:300px}
+</style></head><body><main>
+<h1>Create your account</h1>
+
+<form id="step1" aria-label="Step 1">
+  <label for="fullname">Full name</label> <input id="fullname" name="fullname" required>
+  <label for="country">Country</label>
+  <select id="country" name="country"><option value="">Choose…</option><option value="us">United States</option><option value="ca">Canada</option><option value="mx">Mexico</option></select>
+  <fieldset><legend>Account type</legend>
+    <label><input type="radio" name="kind" value="personal"> Personal</label>
+    <label><input type="radio" name="kind" value="business"> Business</label>
+  </fieldset>
+  <div id="companyRow" hidden><label for="company">Company name</label> <input id="company" name="company"></div>
+  <label><input type="checkbox" name="terms" id="terms"> Accept terms</label>
+  <button type="submit">Continue</button>
+</form>
+
+<form id="step2" aria-label="Step 2" hidden>
+  <label for="start">Start date</label> <input id="start" name="start" type="date">
+  <span id="aboutLbl">About you</span>
+  <div id="about" class="ce" contenteditable="true" role="textbox" aria-multiline="true" aria-labelledby="aboutLbl"></div>
+  <label for="city">City</label>
+  <input id="city" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cities" autocomplete="off">
+  <ul id="cities" role="listbox" hidden></ul>
+  <button type="submit">Finish</button>
+</form>
+
+<pre id="result"></pre>
+</main>
+<script>
+const data = {};
+document.querySelectorAll('input[name=kind]').forEach(r => r.addEventListener('change', () => {
+  document.getElementById('companyRow').hidden = !(r.checked && r.value === 'business');
+}));
+document.getElementById('step1').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  Object.assign(data, Object.fromEntries(f.entries()), { terms: document.getElementById('terms').checked });
+  e.target.hidden = true;
+  document.getElementById('step2').hidden = false;
+  document.title = 'Step 2';
+});
+// Async combobox: options arrive 300ms after typing, like a remote search.
+const ALL = ['Paris', 'Parma', 'Porto', 'Prague', 'Toronto'];
+const city = document.getElementById('city'), list = document.getElementById('cities');
+let timer;
+city.addEventListener('input', () => {
+  clearTimeout(timer);
+  list.hidden = true; list.innerHTML = '';
+  const q = city.value.trim().toLowerCase();
+  if (!q) return;
+  timer = setTimeout(() => {
+    for (const c of ALL.filter(c => c.toLowerCase().startsWith(q.slice(0, 2)))) {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option'); li.id = 'opt-' + c; li.textContent = c;
+      li.addEventListener('mousedown', (ev) => { ev.preventDefault(); city.value = c; city.dataset.picked = c; list.hidden = true; city.setAttribute('aria-expanded', 'false'); });
+      list.appendChild(li);
+    }
+    list.hidden = false; city.setAttribute('aria-expanded', 'true');
+  }, 300);
+});
+document.getElementById('step2').addEventListener('submit', (e) => {
+  e.preventDefault();
+  Object.assign(data, { start: document.getElementById('start').value, about: document.getElementById('about').textContent, city: city.dataset.picked || '(typed only) ' + city.value });
+  document.getElementById('result').textContent = JSON.stringify(data);
+  document.title = 'Done';
+});
+</script></body></html>

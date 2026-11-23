@@ -94,7 +94,7 @@ export class FakeExt {
 }
 
 /** Pair a fake extension and leave it connected. */
-export async function pairedExt(d: Daemon, id = EXT_ID, features: string[] = []) {
+export async function pairedExt(d: Daemon, id = EXT_ID, features: string[] = ["files.resolve"]) {
   const e = new FakeExt(d.port, id);
   const w = await e.hello({ pairCode: d.pairCode, features });
   if (w.type !== "welcome") throw new Error(JSON.stringify(w));

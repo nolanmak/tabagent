@@ -1,5 +1,5 @@
-// Same-origin (same-process) iframes and open shadow DOM across snapshot and actions (#6, #7, #26).
-// Cross-origin (out-of-process) frames are #19.
+// Same-process iframes + open shadow DOM across snapshot and actions (M1 scope:
+// cross-origin frames are #19). Every frame here is served from the same origin.
 import { test, expect } from "./fixture";
 import { refIn, view } from "./view";
 
@@ -15,7 +15,7 @@ test("same-origin iframes: snapshot includes their controls; click and type work
   await settle();
   const s = view(await h.ok(c, "page.snapshot")).snap;
   expect(s).toContain('iframe "Same origin frame"');
-  expect(s).toContain('iframe "Cross origin frame"'); // titled for #19; same origin here
+  expect(s).toContain('iframe "Cross origin frame"');
   const inputs = s.split("\n").filter((l) => /textbox "Frame input"/.test(l)).map((l) => l.match(/ref=(e\d+)/)![1]);
   expect(inputs).toHaveLength(2);
 
@@ -25,15 +25,15 @@ test("same-origin iframes: snapshot includes their controls; click and type work
     const t = view(await h.ok(c, "act.type", { ref: input, text: `typed ${which}` }));
     expect(t.json.snapshotDiff).toContain(`value="typed ${which}"`);
   }
-  // page.find searches the top document and same-origin frames
+  // page.find searches every frame
   const f = view(await h.ok(c, "page.find", { by: "css", value: "#fi" })).json;
   expect(f.matches.map((m: any) => m.ref).sort()).toEqual([...inputs].sort());
 });
 
-test("nested, scrolled same-origin frames: coordinates are translated to the top-level viewport", async ({ h }) => {
+test("nested, scrolled frames: coordinates are translated to the top-level viewport", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.A}/nested.html` });
+  await h.ok(c, "nav.goto", { url: `${h.A}/nested.html?cross=${encodeURIComponent(h.A)}` });
   await h.ok(c, "nav.wait", { for: "networkidle" });
   await settle();
   // scroll the top page so the outer frame is partly off-screen
@@ -73,7 +73,7 @@ test("open shadow DOM: snapshot pierces it; fill and click work inside", async (
   const s = view(await h.ok(c, "page.snapshot")).snap;
   await h.ok(c, "act.fill", { ref: refIn(s, /textbox "Shadow input"/), value: "deep" });
   await h.ok(c, "act.click", { ref: refIn(s, /button "Shadow button"/) });
-  expect((await h.call(c, "nav.wait", { for: "text", value: "shadow:deep", timeout: 3000 })).isError).toBe(false);
+  expect(view(await h.ok(c, "page.text", {})).all).toContain("shadow:deep");
   const f = view(await h.ok(c, "page.find", { by: "css", value: "#sb" })).json;
   expect(f.matches[0].name).toBe("Shadow button");
   expect(f.matches[0].ref).toBe(refIn(s, /button "Shadow button"/));

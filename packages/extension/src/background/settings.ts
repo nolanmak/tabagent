@@ -1,14 +1,25 @@
 // Extension settings (D32, contract §7). Persistent settings live in
 // chrome.storage.local (access level TRUSTED_CONTEXTS so content scripts can't
 // read the secret, D7).
-import { migrateSettings, type OnSessionEnd, type StoredShape } from "./settingsModel";
+import { migrateSettings, type BeforeUnload, type OnSessionEnd } from "./settingsModel";
 
 export { migrateSettings };
-export type { OnSessionEnd };
+export type { BeforeUnload, OnSessionEnd };
 
-export type Settings = StoredShape;
+export interface Settings {
+  port: number;
+  secret: string | null;
+  devAllowSensitive: boolean;
+  onSessionEnd: OnSessionEnd;
+  beforeUnload: BeforeUnload;
+  showOverlay: boolean;
+  /** @deprecated derived from beforeUnload === "accept"; read by older cdp.ts. */
+  autoAcceptBeforeUnload: boolean;
+}
 
-let cache: Settings | null = null;
+export type StoredSettings = Omit<Settings, "autoAcceptBeforeUnload">;
+
+let cache: StoredSettings | null = null;
 let accessSet = false;
 
 async function ensureAccessLevel() {
@@ -21,20 +32,27 @@ async function ensureAccessLevel() {
   }
 }
 
+function view(s: StoredSettings): Settings {
+  return { ...s, autoAcceptBeforeUnload: s.beforeUnload === "accept" };
+}
+
 export async function getSettings(): Promise<Settings> {
   if (!cache) {
     await ensureAccessLevel();
     const raw = (await chrome.storage.local.get("settings")).settings as Record<string, unknown> | undefined;
     cache = migrateSettings(raw);
   }
-  return { ...cache };
+  return view(cache);
 }
 
 export async function updateSettings(patch: Partial<Settings> & Record<string, unknown>): Promise<Settings> {
   await getSettings();
-  cache = migrateSettings({ ...cache!, ...patch });
+  const { autoAcceptBeforeUnload: aa, ...rest } = patch;
+  // legacy patch keys (old harness / UI) are folded into the new shape
+  const merged = migrateSettings({ ...cache!, ...rest, ...(aa !== undefined && !("beforeUnload" in rest) ? { beforeUnload: aa ? "accept" : "dismiss" } : {}) });
+  cache = merged;
   await chrome.storage.local.set({ settings: cache });
-  return { ...cache };
+  return view(cache);
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {

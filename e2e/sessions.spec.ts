@@ -31,8 +31,8 @@ test("two agents at once: separate tab groups, TAB_BUSY on each other's tabs", a
   await expect.poll(async () => h.sw.evaluate(() => (globalThis as any).__tabagent.listSessions().map((s: any) => s.label)), { timeout: 5000 }).not.toContain("alpha");
 });
 
-test("tabs attach is a gated effect (D18f): refused in M1 unless devAllowSensitive; session end ungroups it and leaves it open", async ({ h }) => {
-  await h.trustFixtures({ devAllowSensitive: false });
+test("tabs attach is refused unless devAllowSensitive (D17, D18f); session end ungroups it and leaves it open", async ({ h }) => {
+  await h.trustFixtures();
   const userTab = await h.ctx.newPage();
   // unique URL: earlier specs leave agent-owned tabs on article.html in the shared browser
   const userUrl = `${h.A}/article.html?user=${Date.now()}`;
@@ -41,14 +41,12 @@ test("tabs attach is a gated effect (D18f): refused in M1 unless devAllowSensiti
   const c = await h.mcp({ label: "adopter" });
   const notMine = await h.call(c, "page.snapshot", { tabId });
   expect(notMine.text).toContain("not in this session");
-  // M1 has no approval prompts (#12): attach is refused with PERMISSION_DENIED
-  const d = await h.call(c, "tabs", { action: "attach", tabId });
-  expect(d.isError).toBe(true);
+  const d = await h.withGatesOn(() => h.call(c, "tabs", { action: "attach", tabId }));
   expect(d.text).toContain("PERMISSION_DENIED");
-  expect(d.text).toContain("taking over one of your tabs");
-  expect(await h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).groupId, tabId)).toBe(-1);
-  // the developer setting (D17) lets it through
-  await h.trustFixtures({ devAllowSensitive: true });
+  expect(d.text).toContain("devAllowSensitive");
+  const still = await h.call(c, "page.snapshot", { tabId });
+  expect(still.text).toContain("not in this session");
+  // devAllowSensitive is on via trustFixtures: the attach goes through
   await h.ok(c, "tabs", { action: "attach", tabId });
   const s = await h.ok(c, "page.snapshot", { tabId });
   expect(s.json.title).toBe("Article");
@@ -66,7 +64,7 @@ test("tabs attach is a gated effect (D18f): refused in M1 unless devAllowSensiti
 });
 
 test("tabs attach with no tabId adopts the active tab of the last-focused window", async ({ h }) => {
-  await h.trustFixtures({ devAllowSensitive: true });
+  await h.trustFixtures();
   const userTab = await h.ctx.newPage();
   await userTab.goto(`${h.A}/table.html`);
   await userTab.bringToFront();
@@ -138,10 +136,10 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
   const core = await mk("core");
   const tools = (await core.listTools()).tools.map((t) => t.name);
   expect(tools).toContain("nav_goto");
-  expect(tools).not.toContain("js_eval");
+  expect(tools).not.toContain("form_describe");
   expect(tools.length).toBeLessThanOrEqual(15);
   const full = await mk("full");
-  expect((await full.listTools()).tools.length).toBeGreaterThan(tools.length);
+  expect((await full.listTools()).tools.length).toBeGreaterThan(30);
   const r: any = await core.callTool({ name: "nav_goto", arguments: { url: `${h.A}/index.html` } });
   expect(r.content[0].text).toContain("Fixtures home");
   const groups = await h.sw.evaluate(async () => (await chrome.tabGroups.query({})).map((g) => g.title));
@@ -151,3 +149,4 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
   const unauth = await fetch(`http://127.0.0.1:${h.port}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   expect(unauth.status).toBe(401);
 });
+

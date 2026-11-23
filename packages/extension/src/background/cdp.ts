@@ -1,10 +1,37 @@
-// chrome.debugger wrapper: one CdpTab per attached tab. Tracks in-flight
-// requests (D35), navigation lifecycle, same-process frames and isolated worlds.
-// Cross-origin (out-of-process) frames are #19.
+// chrome.debugger wrapper: one CdpTab per attached tab. Tracks child sessions,
+// in-flight requests, dialogs, navigation lifecycle and isolated worlds.
 import { TabAgentError } from "@tabagent/protocol";
+import { onCdpEvent, setDialogSender, tabState } from "./capture";
 import { taErr } from "./errors";
 
 declare const PAGELIB_SRC: string;
+
+export interface NetEntry {
+  requestId: string;
+  sessionId?: string;
+  frameId?: string;
+  url: string;
+  method: string;
+  resourceType?: string;
+  status?: number;
+  statusText?: string;
+  mimeType?: string;
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+  postData?: string;
+  failed?: string;
+  finished?: boolean;
+  ts: number;
+  encodedDataLength?: number;
+}
+
+export interface DialogInfo {
+  type: string;
+  message: string;
+  defaultPrompt?: string;
+  url?: string;
+  sessionId?: string;
+}
 
 export interface FrameInfo {
   key: string; // `${sessionId}|${frameId}`
@@ -47,6 +74,17 @@ export async function detachTab(tabId: number) {
   }
 }
 
+/** The user cancelled the debugging bar earlier; they resumed the tab in the side panel (D27). */
+export function resumeDebugger(tabId: number) {
+  const t = tabs.get(tabId);
+  if (t) t.userDetached = false;
+}
+
+/** Tabs the user stopped by cancelling the debugging bar. */
+export function stoppedTabs(): number[] {
+  return [...tabs.values()].filter((t) => t.userDetached).map((t) => t.tabId);
+}
+
 export async function detachAll() {
   for (const id of [...tabs.keys()]) await detachTab(id);
 }
@@ -63,8 +101,10 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   if (t) {
     t.attached = false;
     t.contexts.clear();
+    t.children.clear();
     t.loaders.clear();
     if (reason === "canceled_by_user") t.userDetached = true;
+    tabState(source.tabId).dialogs.onClosed();
     t.fireDetached(String(reason));
   }
 });
@@ -73,8 +113,14 @@ export class CdpTab {
   attached = false;
   userDetached = false;
   attaching: Promise<void> | null = null;
+  children = new Map<string, { targetId: string; url: string }>(); // sessionId -> target
   contexts = new Map<string, number>(); // frameKey -> isolated contextId
-  inflight = new Map<string, number>(); // requestId -> start ts (D35: the driver's own counter)
+  network = new Map<string, NetEntry>();
+  /** The open JS dialog, owned by the dialog state machine in capture.ts (D28). */
+  get dialog(): DialogInfo | null {
+    return tabState(this.tabId).dialogs.current();
+  }
+  inflight = new Map<string, number>(); // key -> start ts
   lastNetActivity = Date.now();
   navEpoch = 0;
   lifecycle: { frameId: string; loaderId: string; name: string; sessionId?: string }[] = [];
@@ -143,6 +189,7 @@ export class CdpTab {
     }
     this.attached = true;
     this.contexts.clear();
+    this.children.clear();
     await this.enableDomains(undefined);
     const tree = await this.send<any>("Page.getFrameTree", {});
     this.mainFrameId = tree.frameTree.frame.id;
@@ -157,7 +204,9 @@ export class CdpTab {
       this.send("Runtime.enable", {}, sessionId),
       this.send("Network.enable", {}, sessionId),
       this.send("DOM.enable", {}, sessionId),
+      this.send("Log.enable", {}, sessionId).catch(() => {}),
     ]);
+    await this.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, sessionId).catch(() => {});
     await this.send("DOM.getDocument", { depth: 0 }, sessionId).catch(() => {});
   }
 
@@ -184,7 +233,22 @@ export class CdpTab {
         /* ignore */
       }
     }
+    onCdpEvent(this.tabId, method, p, sessionId);
     switch (method) {
+      case "Target.attachedToTarget": {
+        const sid = p.sessionId as string;
+        this.children.set(sid, { targetId: p.targetInfo.targetId, url: p.targetInfo.url });
+        // The frame's document request was handed to the new process; stop waiting on it here.
+        for (const [k] of this.inflight) if (this.network.get(k)?.frameId === p.targetInfo.targetId) this.inflight.delete(k);
+        if (p.targetInfo.type === "iframe" || p.targetInfo.type === "page") this.enableDomains(sid).catch(() => {});
+        else this.send("Runtime.runIfWaitingForDebugger", {}, sid).catch(() => {});
+        break;
+      }
+      case "Target.detachedFromTarget":
+        this.children.delete(p.sessionId);
+        for (const k of [...this.loaders.keys()]) if (k.startsWith(p.sessionId + "|")) this.loaders.delete(k);
+        for (const k of [...this.contexts.keys()]) if (k.startsWith(p.sessionId + "|")) this.contexts.delete(k);
+        break;
       case "Page.frameNavigated":
         this.loaders.set(`${sessionId ?? ""}|${p.frame.id}`, p.frame.loaderId);
         if (!p.frame.parentId && !sessionId) {
@@ -213,18 +277,63 @@ export class CdpTab {
       case "Runtime.executionContextDestroyed":
         for (const [k, v] of this.contexts) if (v === p.executionContextId && k.startsWith(`${sessionId ?? ""}|`)) this.contexts.delete(k);
         break;
-      case "Network.requestWillBeSent":
-        if (!["EventSource", "WebSocket", "Ping"].includes(p.type)) this.inflight.set(`${sessionId ?? ""}:${p.requestId}`, Date.now());
+      case "Network.requestWillBeSent": {
+        const key = `${sessionId ?? ""}:${p.requestId}`;
+        const prev = this.network.get(key);
+        this.network.set(key, {
+          requestId: p.requestId,
+          sessionId,
+          frameId: p.frameId,
+          url: p.request.url,
+          method: p.request.method,
+          resourceType: p.type,
+          requestHeaders: p.request.headers,
+          postData: p.request.postData?.slice(0, 10000),
+          ts: Date.now(),
+          ...(prev && p.redirectResponse ? {} : {}),
+        });
+        if (this.network.size > 400) {
+          const first = this.network.keys().next().value!;
+          this.network.delete(first);
+        }
+        if (!["EventSource", "WebSocket", "Ping"].includes(p.type)) this.inflight.set(key, Date.now());
         this.lastNetActivity = Date.now();
         break;
-      case "Network.responseReceived":
+      }
+      case "Network.responseReceived": {
+        if (p.type === "Document") {
+          // An OOPIF's document request is announced in the parent session but answered in the child.
+          for (const [k] of this.inflight) {
+            const ne = this.network.get(k);
+            if (ne && ne.resourceType === "Document" && ne.url === p.response.url && k !== `${sessionId ?? ""}:${p.requestId}`) this.inflight.delete(k);
+          }
+        }
+        const e = this.network.get(`${sessionId ?? ""}:${p.requestId}`);
+        if (e) {
+          e.status = p.response.status;
+          e.statusText = p.response.statusText;
+          e.mimeType = p.response.mimeType;
+          e.responseHeaders = p.response.headers;
+          e.resourceType = p.type ?? e.resourceType;
+        }
         this.lastNetActivity = Date.now();
         break;
+      }
       case "Network.loadingFinished":
-      case "Network.loadingFailed":
-        this.inflight.delete(`${sessionId ?? ""}:${p.requestId}`);
+      case "Network.loadingFailed": {
+        const key = `${sessionId ?? ""}:${p.requestId}`;
+        const e = this.network.get(key);
+        if (e) {
+          e.finished = true;
+          if (method === "Network.loadingFailed") e.failed = p.errorText;
+          e.encodedDataLength = p.encodedDataLength;
+        }
+        this.inflight.delete(key);
+        // OOPIF document requests start in the parent session and finish in the child.
+        for (const k of [...this.inflight.keys()]) if (k.endsWith(`:${p.requestId}`)) this.inflight.delete(k);
         this.lastNetActivity = Date.now();
         break;
+      }
       case "Input.dragIntercepted":
         this.dragData = p.data;
         break;
@@ -239,6 +348,14 @@ export class CdpTab {
         if (this.waiters.delete(w)) resolve(null);
       }, timeoutMs);
     });
+  }
+
+  async handleDialog(accept: boolean, promptText?: string) {
+    return tabState(this.tabId).dialogs.handle(accept ? "accept" : "dismiss", promptText);
+  }
+
+  assertNoDialog() {
+    tabState(this.tabId).dialogs.assertNone("");
   }
 
   /** Wait until no tracked requests are in flight for `quietMs`. */
@@ -260,8 +377,9 @@ export class CdpTab {
   async frames(): Promise<FrameInfo[]> {
     await this.ensure();
     const out: FrameInfo[] = [];
-    const visit = async (sid: string | undefined, node: any, parentKey?: string) => {
+    const visit = async (sessionId: string | undefined, node: any, parentKey?: string) => {
       const fid = node.frame.id as string;
+      const sid = sessionId;
       const key = `${sid ?? ""}|${fid}`;
       let owner: number | undefined;
       if (parentKey) {
@@ -301,6 +419,7 @@ export class CdpTab {
    * Returns { value, nodes } where nodes are backendNodeIds of returned elements.
    */
   async pagelib(frameKey: string, name: string, args: unknown[], selfNode?: number, extraNodes: number[] = [], attempt = 0): Promise<{ value: any; nodes: number[] }> {
+    this.assertNoDialog();
     const [sid] = splitKey(frameKey);
     try {
       const ctx = await this.isolatedContext(frameKey);
@@ -374,6 +493,7 @@ export class CdpTab {
 
   /** Evaluate in the main world of the top frame. */
   async evalMain(expression: string, awaitPromise = true): Promise<any> {
+    this.assertNoDialog();
     const r = await this.send<any>("Runtime.evaluate", { expression, awaitPromise, returnByValue: true, userGesture: true, replMode: true });
     if (r.exceptionDetails) {
       throw new TabAgentError("BAD_REQUEST", `Evaluation failed: ${r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text}`);
@@ -381,6 +501,10 @@ export class CdpTab {
     return r.result.value ?? (r.result.unserializableValue ? r.result.unserializableValue : r.result.type === "undefined" ? undefined : r.result.description);
   }
 }
+
+setDialogSender(async (tabId, accept, promptText, sessionId) => {
+  await getCdpTab(tabId).send("Page.handleJavaScriptDialog", { accept, ...(promptText !== undefined ? { promptText } : {}) }, sessionId);
+});
 
 export function splitKey(key: string): [string | undefined, string] {
   const i = key.indexOf("|");

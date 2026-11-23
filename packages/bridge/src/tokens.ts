@@ -1,4 +1,5 @@
-// HTTP credentials (D2, D3). Until per-client tokens (#15) the bridge secret is the only credential.
+// Bearer credentials (D2, D3). Until #15 the bridge secret is the only credential:
+// it grants cap `full` with no site limit. Per-client tokens arrive with #15.
 import { timingSafeEqual } from "node:crypto";
 import type { Cap } from "@tabagent/protocol";
 import type { Config } from "./config";

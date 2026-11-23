@@ -12,7 +12,7 @@ mkdirSync(out, { recursive: true });
 
 const common = { bundle: true, target: "chrome125", logLevel: "warning", sourcemap: false, legalComments: "none" };
 
-// pagelib first: it is inlined as a string into the CDP isolated worlds
+// pagelib first: it is inlined as a string (CDP isolated worlds)
 await build({ ...common, entryPoints: [join(here, "src/pagelib/index.ts")], outfile: join(out, "pagelib.js"), format: "iife" });
 const pagelibSrc = readFileSync(join(out, "pagelib.js"), "utf8");
 
@@ -23,7 +23,8 @@ await build({
   format: "esm",
   define: { PAGELIB_SRC: JSON.stringify(pagelibSrc) },
 });
-await build({ ...common, entryPoints: { sidepanel: join(here, "src/ui/sidepanel.ts") }, outdir: out, format: "iife" });
+const uiEntries = { sidepanel: join(here, "src/ui/sidepanel.ts") };
+await build({ ...common, entryPoints: uiEntries, outdir: out, format: "iife" });
 
 cpSync(join(here, "static"), out, { recursive: true });
 const manifest = JSON.parse(readFileSync(join(here, "manifest.json"), "utf8"));

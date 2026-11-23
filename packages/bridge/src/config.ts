@@ -9,13 +9,21 @@ export interface Config {
   port: number;
   secret: string;
   extensionIds: string[];
+  uploadDirs: string[];
+  /** Max bytes downloads.read may return (D31: 5 MB). */
+  maxReadBytes: number;
 }
+
+export const MAX_READ_BYTES = 5 * 1024 * 1024;
 
 export function home(): string {
   return process.env.TABAGENT_HOME ?? join(homedir(), ".tabagent");
 }
 export function configPath() {
   return join(home(), "config.json");
+}
+export function defaultUploadDir() {
+  return join(home(), "uploads");
 }
 
 function ensureDir(dir: string) {
@@ -46,8 +54,11 @@ export function loadConfig(): Config {
     port: raw.port ?? DEFAULT_PORT,
     secret: raw.secret ?? randomBytes(24).toString("base64url"),
     extensionIds: raw.extensionIds ?? [],
+    uploadDirs: raw.uploadDirs ?? [defaultUploadDir()],
+    maxReadBytes: Math.min(raw.maxReadBytes ?? MAX_READ_BYTES, MAX_READ_BYTES),
   };
-  const missing = (["port", "secret", "extensionIds"] as const).some((k) => !(k in raw));
+  if (!raw.uploadDirs) ensureDir(defaultUploadDir());
+  const missing = (["port", "secret", "extensionIds", "uploadDirs", "maxReadBytes"] as const).some((k) => !(k in raw));
   if (missing) saveConfig(full);
   if (process.env.TABAGENT_PORT) full.port = Number(process.env.TABAGENT_PORT);
   return full;
