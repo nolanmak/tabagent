@@ -16,6 +16,7 @@ export const RANK: Record<StoredPolicy, number> = { deny: 0, read: 1, act: 2, fu
 
 export interface SiteEntry {
   policy?: StoredPolicy;
+  lite?: boolean;
   preapproved?: Partial<Record<PreapprovableCategory, true>>;
 }
 

@@ -24,6 +24,7 @@ export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dial
 export type Profile = "core" | "forms" | "data" | "dev" | "full";
 export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full"];
 
+export type LiteSupport = "supported" | "degraded" | "unsupported";
 export type HandledBy = "extension" | "bridge" | "both";
 
 export interface ActionDef {
@@ -49,6 +50,7 @@ export interface ToolDef<S extends z.ZodObject = z.ZodObject> {
   pageContent: string[];
   /** Profiles that list this tool besides `full` (D29). [] = full only. */
   profiles: Exclude<Profile, "full">[];
+  lite: LiteSupport;
   handledBy: HandledBy;
 }
 
@@ -102,6 +104,7 @@ export const TOOLS = [
     },
     pageContent: ["tabs[].url", "tabs[].title", "url", "title"],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   // ---------------- nav ----------------
@@ -119,6 +122,7 @@ export const TOOLS = [
     level: "act",
     pageContent: ["url", "title"],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -130,6 +134,7 @@ export const TOOLS = [
     level: "act",
     pageContent: ["url", "title"],
     profiles: [],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -141,6 +146,7 @@ export const TOOLS = [
     level: "act",
     pageContent: ["url", "title"],
     profiles: [],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -152,6 +158,7 @@ export const TOOLS = [
     level: "act",
     pageContent: ["url", "title"],
     profiles: [],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -170,28 +177,35 @@ export const TOOLS = [
     sensitiveWhen: { param: "for", values: ["fn"] },
     pageContent: ["url"],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   // ---------------- page ----------------
   def({
     name: "page.snapshot",
     group: "page",
-    description: "Accessibility snapshot with [ref=eN] on interactive nodes. Act on refs.",
+    description: "Accessibility snapshot with [ref=eN] on interactive nodes. Act on refs. diff=true returns only changes.",
     params: z.object({
       tabId,
       mode: z.enum(["interactive", "full"]).optional(),
       root: ref.optional(),
       maxTokens: zint().positive().optional(),
+      diff: z.boolean().optional(),
     }),
     result: loose({
       ...urlTitle,
       snapshot: page(z.string()).optional(),
       refs: z.number().optional(),
       truncated: z.boolean().optional(),
+      /** true when `snapshot` holds +/-/~ diff lines (diff=true with a baseline). */
+      diff: z.boolean().optional(),
+      /** true when diff=true was asked but there was no baseline, so `snapshot` is the full tree. */
+      full: z.boolean().optional(),
     }),
     level: "read",
     pageContent: ["snapshot", "title", "url"],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -210,6 +224,7 @@ export const TOOLS = [
     level: "read",
     pageContent: [],
     profiles: ["core"],
+    lite: "degraded",
     handledBy: "extension",
   }),
   def({
@@ -221,6 +236,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["text"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -232,6 +248,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["markdown", "title"],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -250,6 +267,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["matches"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "extension",
   }),
   // ---------------- act ----------------
@@ -269,6 +287,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -280,6 +299,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: [],
+    lite: "degraded",
     handledBy: "extension",
   }),
   def({
@@ -291,6 +311,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: [],
+    lite: "degraded",
     handledBy: "extension",
   }),
   def({
@@ -309,6 +330,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -320,6 +342,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: ["forms"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -331,6 +354,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -342,6 +366,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -353,6 +378,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: ["forms"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -365,6 +391,7 @@ export const TOOLS = [
     level: "read",
     pageContent: [],
     profiles: [],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -376,6 +403,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: [],
+    lite: "degraded",
     handledBy: "extension",
   }),
   def({
@@ -388,6 +416,7 @@ export const TOOLS = [
     sensitive: "e",
     pageContent: [],
     profiles: ["forms"],
+    lite: "unsupported",
     handledBy: "both",
   }),
   // ---------------- form ----------------
@@ -400,6 +429,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["fields", "forms"],
     profiles: ["forms"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -416,6 +446,7 @@ export const TOOLS = [
     level: "act",
     pageContent: ["failed[].message"],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -427,6 +458,7 @@ export const TOOLS = [
     level: "act",
     pageContent: [],
     profiles: ["forms"],
+    lite: "supported",
     handledBy: "extension",
   }),
   // ---------------- extract ----------------
@@ -444,6 +476,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["headers", "rows", "csv"],
     profiles: ["core"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -455,6 +488,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["links"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -471,6 +505,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["data", "selectors"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -498,6 +533,7 @@ export const TOOLS = [
     level: "read",
     pageContent: ["rows", "links", "data", "headers", "urls", "error.message"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "extension",
   }),
   // ---------------- dialog ----------------
@@ -510,6 +546,103 @@ export const TOOLS = [
     level: "act",
     pageContent: ["dialog"],
     profiles: ["core"],
+    lite: "unsupported",
+    handledBy: "extension",
+  }),
+  // ---------------- dev ----------------
+  def({
+    name: "js.eval",
+    group: "dev",
+    description: "Evaluate a JS expression (awaits promises, returns JSON). world=main|isolated. Asks the user.",
+    params: z.object({ expression: z.string(), world: z.enum(["main", "isolated"]).optional(), tabId, timeout: actTimeout }),
+    result: loose({ value: page(z.unknown()) }),
+    level: "full",
+    sensitive: "c",
+    pageContent: ["value"],
+    profiles: ["dev"],
+    lite: "unsupported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "console.list",
+    group: "dev",
+    description: "Recent console messages and errors for the tab.",
+    params: z.object({ tabId, level: z.string().optional(), limit: zint().positive().optional() }),
+    result: loose({ messages: page(z.array(z.unknown())) }),
+    level: "read",
+    pageContent: ["messages"],
+    profiles: ["dev"],
+    lite: "unsupported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "network.list",
+    group: "dev",
+    description: "Recent requests of the top-level page (no headers or bodies). Filter by url substring, method, status, type.",
+    params: z.object({
+      tabId,
+      url: z.string().optional(),
+      method: z.string().optional(),
+      status: zint().optional(),
+      type: z.string().optional(),
+      limit: zint().positive().optional(),
+    }),
+    result: loose({ requests: page(z.array(z.unknown())) }),
+    level: "read",
+    pageContent: ["requests"],
+    profiles: ["dev"],
+    lite: "unsupported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "network.get",
+    group: "dev",
+    description: "Full request/response for a request id, including headers and body. Asks the user.",
+    params: z.object({ id: z.string(), tabId }),
+    result: loose({ request: page(z.unknown()).optional(), response: page(z.unknown()).optional(), body: page(z.unknown()).optional() }),
+    level: "full",
+    sensitive: "d",
+    pageContent: ["request", "response", "body"],
+    profiles: ["dev"],
+    lite: "unsupported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "network.waitFor",
+    group: "dev",
+    description: "Wait for a request completing after this call that matches url (substring or /regex/), method, status.",
+    params: z.object({ url: z.string().optional(), method: z.string().optional(), status: zint().optional(), tabId, timeout: actTimeout }),
+    result: loose({ request: page(z.unknown()).optional(), url: page(z.string()).optional() }),
+    level: "read",
+    pageContent: ["request", "url"],
+    profiles: ["dev"],
+    lite: "unsupported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "cookies.get",
+    group: "dev",
+    description: "Cookies for the tab's current origin. Asks the user.",
+    params: z.object({ url: z.string().optional(), tabId }),
+    result: loose({ cookies: page(z.array(z.unknown())) }),
+    level: "full",
+    sensitive: "d",
+    pageContent: ["cookies"],
+    profiles: ["dev"],
+    lite: "unsupported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "storage.get",
+    group: "dev",
+    description: "Read localStorage or sessionStorage for the tab's origin. Asks the user.",
+    params: z.object({ kind: z.enum(["local", "session"]), tabId }),
+    result: loose({ entries: page(z.unknown()) }),
+    level: "full",
+    sensitive: "d",
+    pageContent: ["entries"],
+    profiles: ["dev"],
+    lite: "unsupported",
     handledBy: "extension",
   }),
   // ---------------- files ----------------
@@ -522,6 +655,7 @@ export const TOOLS = [
     level: "none",
     pageContent: ["downloads[].filename", "downloads[].url"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -533,6 +667,7 @@ export const TOOLS = [
     level: "none",
     pageContent: ["filename", "url"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -552,18 +687,20 @@ export const TOOLS = [
     sensitive: "e",
     pageContent: ["filename", "text", "data"],
     profiles: ["data"],
+    lite: "supported",
     handledBy: "both",
   }),
   // ---------------- session ----------------
   def({
     name: "session.info",
     group: "session",
-    description: "This session's id, label, tabs and connection state.",
+    description: "This session's id, label, tabs, mode and connection state.",
     params: z.object({}),
     result: loose({ tabs: z.array(loose({ url: page(z.string()).optional(), title: page(z.string()).optional() })).optional() }),
     level: "none",
     pageContent: ["tabs[].url", "tabs[].title"],
     profiles: [],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -575,6 +712,7 @@ export const TOOLS = [
     level: "none",
     pageContent: [],
     profiles: [],
+    lite: "supported",
     handledBy: "extension",
   }),
   def({
@@ -586,6 +724,7 @@ export const TOOLS = [
     level: "none",
     pageContent: [],
     profiles: [],
+    lite: "supported",
     handledBy: "extension",
   }),
 ] as const satisfies readonly ToolDef[];
@@ -614,8 +753,8 @@ export function getTool(name: string): ToolDef | undefined {
 export function toolsForProfiles(profiles: string | string[] | undefined, tools: readonly ToolDef[] = TOOLS as unknown as ToolDef[]): ToolDef[] {
   const list = (Array.isArray(profiles) ? profiles : (profiles ?? "core").split(",")).map((p) => p.trim()).filter(Boolean);
   for (const p of list) if (!PROFILES.includes(p as Profile)) throw new Error(`Unknown profile "${p}". Valid profiles: ${PROFILES.join(", ")}`);
+  if (list.includes("full")) return tools.slice();
   const want = new Set<string>(["core", ...list]);
-  if (list.includes("full")) return [...tools];
   return tools.filter((t) => t.profiles.some((p) => want.has(p)));
 }
 

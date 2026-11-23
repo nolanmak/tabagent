@@ -2,8 +2,9 @@
 
 **Let any AI agent drive your real Chrome.** TabAgent is an open-source Chrome extension plus a
 small local bridge that exposes your browser to Claude Code, Codex, Cursor, and any MCP or HTTP
-client. Agents can navigate, read pages, pull structured data, fill forms, and upload and download
-files. They do it with your existing sign-ins, under permissions you control.
+client. Agents can navigate, read pages, pull structured data, fill forms, upload and download
+files, and inspect network and console activity. They do it with your existing sign-ins, under
+permissions you control.
 
 > Status: **pre-alpha**, not yet published. See [docs/DESIGN.md](docs/DESIGN.md) and the
 > [roadmap](https://github.com/nolanmak/tabagent/issues).
@@ -20,16 +21,15 @@ files. They do it with your existing sign-ins, under permissions you control.
 
 ## Quick start
 
-1. **Install the bridge** (Node 20+):
+1. **Build and start the bridge** (Node 20+):
 
    ```bash
-   npm i -g tabagent
-   tabagent serve            # prints a pairing code
+   npm install && npm run build
+   node packages/bridge/dist/cli.js serve    # prints a pairing code
    ```
 
-2. **Install the extension** from the Chrome Web Store, or load it unpacked: run
-   `chrome://extensions` → Developer mode → Load unpacked → the copy shipped in the npm package,
-   `$(npm root -g)/tabagent/dist/extension`.
+2. **Load the extension unpacked**: `chrome://extensions` → Developer mode → Load unpacked →
+   `packages/extension/dist`.
 
 3. **Pair**: open the TabAgent side panel (toolbar icon) and enter the code. `tabagent status`
    shows it again.

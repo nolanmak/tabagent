@@ -72,15 +72,16 @@ by *effect*, so there is no side door through a different tool:
 |---|---|---|
 | a | Submitting a form that has password, card or SSN-like fields | `form.submit`, `act.press` Enter inside the form, `act.click` on its submit control |
 | b | Clicks that look like purchase, delete, send or transfer | `act.click` on a matching accessible name |
-| c | Arbitrary JavaScript | `nav.wait` with `for: fn` |
-| d | Credential reads | none yet (cookie, storage and network tools are not in this build) |
+| c | Arbitrary JavaScript | `js.eval`, `nav.wait` with `for: fn` |
+| d | Credential reads | `cookies.get`, `storage.get`, `network.get` (`network.list` never returns header values) |
 | e | Local file transfer | `act.upload`, `downloads.read` |
 | f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved) |
 
 Categories a–e can be pre-approved per origin; f always asks. Prompts are answered in the side
 panel (reached from the toolbar badge or a notification), never by buttons inside the page, which
 the agent could click (D19). A prompt that is not answered in 120s returns `PROMPT_TIMEOUT`, and a
-late answer never executes anything (D15).
+late answer never executes anything (D15). Until the full permission engine lands, these effects
+are refused outright unless the developer setting `devAllowSensitive` is on (D17).
 
 Each gate has a test for the gated path and for every bypass path listed above.
 

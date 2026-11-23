@@ -5,7 +5,7 @@ import { taErr } from "../errors";
 import { requireSite } from "../permissions";
 import { baselines } from "../refstore";
 import { resolveTab } from "../sessions";
-import { assertNoDialog, levelOf, onTab, titleOf, withTabLock, type Ctx } from "../tabctx";
+import { assertLiteSupport, assertNoDialog, levelOf, onTab, titleOf, withTabLock, type Ctx } from "../tabctx";
 import { describeWait, normalizeWait, pollUntil, urlMatcher } from "../wait";
 
 type Handler = (c: Ctx) => Promise<unknown>;
@@ -29,6 +29,7 @@ export const navHandlers: Record<string, Handler> = {
     return withTabLock(tabId, async () => {
       assertNoDialog(tabId, c.tool.name);
       const drv = await driverFor(tabId, target);
+      assertLiteSupport(drv, c.tool);
       baselines.clearTab(tabId);
       const r = await drv.navigate(target, waitUntil, timeout);
       return navResult(tabId, r, "navigate");
@@ -82,6 +83,7 @@ export const navHandlers: Record<string, Handler> = {
           }
           case "fn":
             // D18(c): the router's sensitive gate ran before we got here (registry sensitiveWhen for=fn).
+            if (t.drv.kind !== "cdp") throw taErr("UNSUPPORTED", "nav.wait for=fn needs full (debugger) mode");
             ok = await pollUntil(async () => !!(await t.drv.evaluate(`!!(${w.value})`, "isolated")), w.timeout, clock, 100);
             break;
         }
