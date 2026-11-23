@@ -29,8 +29,8 @@ permissions you control.
    ```
 
 2. **Install the extension** from the Chrome Web Store, or load it unpacked: run
-   `tabagent extension path`, then `chrome://extensions` → Developer mode → Load unpacked → that
-   folder.
+   `chrome://extensions` → Developer mode → Load unpacked → the copy shipped in the npm package,
+   `$(npm root -g)/tabagent/dist/extension`.
 
 3. **Pair**: open the TabAgent side panel (toolbar icon) and enter the code. `tabagent status`
    shows it again.
