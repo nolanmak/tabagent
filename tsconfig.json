@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["chrome", "node"],
+    "noUnusedLocals": false,
+    "allowImportingTsExtensions": false,
+    "baseUrl": ".",
+    "paths": { "@tabagent/protocol": ["packages/protocol/src/index.ts"] }
+  },
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "e2e/**/*.ts", "test/**/*.ts"]
+}
