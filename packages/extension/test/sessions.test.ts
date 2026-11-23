@@ -85,16 +85,15 @@ describe("sessions + tab ownership (#5)", () => {
     expect(await S.resolveTab(s)).toBe(t1.id);
     expect(fake.calls.filter((c) => c.startsWith("tabs.update") || c.startsWith("windows.update"))).toEqual([]);
   });
-  it("popup opened by an owned tab joins the session", async () => {
+  it("popup opened by an owned tab joins the session (webNavigation)", async () => {
     const s = await S.getSession(meta("a"));
     const t = await S.newTab(s);
     const pop = fake.addUserTab("https://a.example/popup", { openerTabId: t.id });
-    fake.ev.tabsCreated.fire({ ...pop });
+    fake.ev.navTarget.fire({ sourceTabId: t.id, tabId: pop.id });
     await tick();
     await tick();
     expect(s.tabIds).toContain(pop.id);
     expect(s.active).toBe(t.id); // joining doesn't steal the active tab
-    // webNavigation path, idempotent
     fake.ev.navTarget.fire({ sourceTabId: t.id, tabId: pop.id });
     await tick();
     expect(s.tabIds.filter((x) => x === pop.id)).toHaveLength(1);
@@ -103,6 +102,17 @@ describe("sessions + tab ownership (#5)", () => {
     const child = fake.addUserTab("https://u.example/2", { openerTabId: u.id });
     await S.adoptOpened(u.id, child.id);
     expect(S.ownerOf(child.id)).toBeUndefined();
+  });
+  it("regression: a user's new tab is not swallowed because an agent tab was focused (openerTabId alone)", async () => {
+    const s = await S.getSession(meta("a"));
+    const t = await S.newTab(s);
+    // Chrome sets openerTabId for Ctrl+T / new-tab-button tabs too; that is not a popup.
+    const userNew = fake.addUserTab("https://u.example/new", { openerTabId: t.id });
+    fake.ev.tabsCreated.fire({ ...userNew });
+    await tick();
+    await tick();
+    expect(S.ownerOf(userNew.id)).toBeUndefined();
+    expect(s.tabIds).not.toContain(userNew.id);
   });
   it("user moving a tab out of the group removes ownership", async () => {
     const s = await S.getSession(meta("a"));

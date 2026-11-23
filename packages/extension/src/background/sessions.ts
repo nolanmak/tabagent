@@ -387,10 +387,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-chrome.tabs.onCreated.addListener((tab) => {
-  adoptOpened(tab.openerTabId, tab.id).catch(() => {});
-});
-
+// Only page-initiated opens (window.open, target=_blank, modified clicks) join the opener's
+// session. tabs.onCreated's openerTabId is also set for the user's own Ctrl+T / new-tab button
+// while an agent tab is focused, which must never hand the user's tab to the agent.
 chrome.webNavigation?.onCreatedNavigationTarget?.addListener((d) => {
   adoptOpened(d.sourceTabId, d.tabId).catch(() => {});
 });

@@ -34,8 +34,10 @@ test("two agents at once: separate tab groups, TAB_BUSY on each other's tabs", a
 test("tabs attach adopts a user tab only after the user agrees; session end ungroups it and leaves it open", async ({ h }) => {
   await h.trustFixtures();
   const userTab = await h.ctx.newPage();
-  await userTab.goto(`${h.A}/article.html`);
-  const tabId = await h.sw.evaluate(async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)!.id!, `${h.A}/article.html`);
+  // unique URL: earlier specs leave agent-owned tabs on article.html in the shared browser
+  const userUrl = `${h.A}/article.html?user=${Date.now()}`;
+  await userTab.goto(userUrl);
+  const tabId = await h.sw.evaluate(async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)!.id!, userUrl);
   const c = await h.mcp({ label: "adopter" });
   const notMine = await h.call(c, "page.snapshot", { tabId });
   expect(notMine.text).toContain("not in this session");
