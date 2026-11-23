@@ -170,7 +170,7 @@ test("background tab: type/press/click work without focusing the tab (headless t
   const t0 = Date.now();
   await h.ok(c, "act.type", { tabId: bg, ref: nick, text: "bg typing", timeout: 3000 });
   await h.ok(c, "act.press", { tabId: bg, key: "End" });
-  await h.ok(c, "act.click", { tabId: bg, ref: refIn(s, /checkbox "Subscribe/) });
+  await h.ok(c, "act.click", { tabId: bg, ref: refIn(s, /radio "Pro"/) });
   expect(Date.now() - t0).toBeLessThan(15000);
   expect(view(await h.ok(c, "page.text", { tabId: bg })).all).toContain("Nickname preview: bg typing");
   const active = await h.sw.evaluate(async (id) => (await chrome.tabs.get(id)).active, bg);
