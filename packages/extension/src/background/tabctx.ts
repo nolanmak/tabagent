@@ -1,5 +1,5 @@
 // Shared plumbing for tab-scoped tool handlers: tab resolution + per-tab lock,
-// DIALOG_OPEN (D28), lite UNSUPPORTED (#21), and the post-action report that
+// DIALOG_OPEN (D28), and the post-action report that
 // becomes the D14 side-effect fields via `__side` (contract §3, D24).
 import { levelFor, type Level, type SessionMeta, type ToolDef } from "@tabagent/protocol";
 import { peekCdpTab } from "./cdp";
@@ -82,10 +82,10 @@ export function levelOf(c: Ctx, fallback: Level): Level {
   }
 }
 
-/** Tools that need the CDP driver (console/network) reject lite tabs. */
+/** Tools that need CDP-only driver methods. */
 export function cdp(drv: Driver): CdpDriver {
   if (drv instanceof CdpDriver) return drv;
-  throw taErr("UNSUPPORTED", "This tool needs full (debugger) mode; the site is in lite mode", "Turn lite mode off for this site in the TabAgent side panel.");
+  throw taErr("UNSUPPORTED", "This tool needs the debugger driver");
 }
 
 /** D28: while a dialog is open, everything on the tab except dialog.handle gets DIALOG_OPEN. */
@@ -95,14 +95,6 @@ export function assertNoDialog(tabId: number, tool: string) {
   if (d) throw taErr("DIALOG_OPEN", `A ${d.type} dialog is open on this tab: "${String(d.message).slice(0, 200)}"`, "Call dialog.handle with accept=true|false first.", { pageText: true });
 }
 
-/** #21: tools the lite driver can't do return UNSUPPORTED without touching the page. */
-export function assertLiteSupport(drv: Driver, tool: ToolDef) {
-  const lite = (tool as unknown as { lite?: string }).lite;
-  if (drv.kind === "lite" && lite === "unsupported") {
-    throw taErr("UNSUPPORTED", `${tool.name} is not available in lite mode`, "Lite mode avoids chrome.debugger. Turn lite mode off for this site in the TabAgent side panel.");
-  }
-}
-
 export async function onTab<T>(c: Ctx, level: Level | null, fn: (t: TabCtx) => Promise<T>, opts: { create?: boolean; lock?: boolean } = {}): Promise<T> {
   const tabId = await resolveTab(c.s, c.p.tabId, opts.create);
   const run = async () => {
@@ -110,7 +102,6 @@ export async function onTab<T>(c: Ctx, level: Level | null, fn: (t: TabCtx) => P
     const url = await tabUrl(tabId);
     if (level) await requireSite(c.meta, url, level, c.tool.name, summaryFor(c));
     const drv = await driverFor(tabId, url);
-    assertLiteSupport(drv, c.tool);
     return fn({ tabId, url, drv });
   };
   // Waiting tools must not hold the tab lock, or the action they wait on could never run.

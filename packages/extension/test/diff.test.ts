@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { Baselines, diff } from "../src/background/diff";
-import { render } from "../src/background/snapshot";
-import { ax, list, source } from "./helpers";
 
 describe("diff (D24)", () => {
   const a = ["- main", '  - button "Save" [ref=e1]', '  - textbox "Name" [ref=e2] value=""', '  - link "Help" [ref=e3]'];
@@ -61,34 +59,3 @@ describe("Baselines", () => {
   });
 });
 
-describe("diff over collapsed snapshots (#20)", () => {
-  const page = (n: number) => ax(["RootWebArea", "p", [["main", undefined, [list(n, (i) => ["listitem", undefined, [["link", `Row ${i}`]]])]]]]);
-
-  it("unchanged page -> empty diff; items collapsed in the baseline are not reported as removed", () => {
-    const nodes = page(300);
-    const src = source();
-    const one = render(nodes, { maxTokens: 400, refs: src });
-    const two = render(nodes, { maxTokens: 400, refs: src });
-    expect(diff(one.lines, two.lines).text).toBe("");
-    // a change elsewhere: only the new button is added, collapsed rows aren't noise
-    const main = nodes.find((n) => n.role?.value === "main")!;
-    nodes.push({ nodeId: "new-btn", role: { value: "button" }, name: { value: "New" }, backendDOMNodeId: 1, parentId: main.nodeId });
-    main.childIds!.push("new-btn");
-    const three = render(nodes, { maxTokens: 400, refs: src });
-    const d = diff(two.lines, three.lines);
-    expect(d.removed).toBe(0);
-    expect(d.text).toMatch(/^\+ - button "New"/m);
-  });
-
-  it("collapsed-then-expanded items are reported as added", () => {
-    const nodes = page(40);
-    const src = source();
-    const collapsed = render(nodes, { maxTokens: 120, refs: src });
-    expect(collapsed.collapsed).toBe(1);
-    const expanded = render(nodes, { maxTokens: 6000, refs: src });
-    const d = diff(collapsed.lines, expanded.lines);
-    expect(d.added).toBe(36);
-    expect(d.text).toMatch(/^- - … 36 more listitem items/m);
-    expect(d.text).not.toMatch(/^- - link/m);
-  });
-});

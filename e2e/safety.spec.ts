@@ -25,10 +25,11 @@ test("#12 unknown site asks: deny sticks for the session, once, always", async (
   await h.ok(c2, "page.snapshot");
   expect((await settings(h)).sites[h.A]).toBeUndefined();
   // a higher level asks again; Always stores exactly the requested level
-  await h.setPolicies({}, { sites: { [h.A]: { preapproved: { c: true } } }, devAllowSensitive: false });
-  const a = await h.answerPrompt("always", () => h.ok(c2, "js.eval", { expression: "1+1" }));
-  expect(a.title).toContain(`full access to ${h.A}`);
-  expect((await settings(h)).sites[h.A].policy).toBe("full");
+  await h.setPolicies({ [h.A]: "read" }, { devAllowSensitive: false });
+  const c4 = await h.mcp({ label: "higher" });
+  const a = await h.answerPrompt("always", () => h.ok(c4, "nav.goto", { url: `${h.A}/index.html` }));
+  expect(a.title).toContain(`to act on ${h.A}`);
+  expect((await settings(h)).sites[h.A].policy).toBe("act");
   // another session now needs no prompt on A
   const c3 = await h.mcp({ label: "third" });
   await h.ok(c3, "nav.goto", { url: `${h.A}/index.html` });
@@ -145,7 +146,7 @@ test("#13 card form + delete button prompt; pre-approval is per origin per categ
   // pre-approved now for b on A: no prompt
   await h.ok(c, "act.click", { ref: del });
   // ...but not for c on A
-  const js = await h.answerPrompt("deny", () => h.call(c, "js.eval", { expression: "1" }));
+  const js = await h.answerPrompt("deny", () => h.call(c, "nav.wait", { for: "fn", value: "true", timeout: 2000 }));
   expect((js.result as any).text).toContain("PERMISSION_DENIED");
   // ...and not for b on B
   await h.ok(c, "nav.goto", { url: `${h.B}/checkout.html` });
@@ -155,7 +156,7 @@ test("#13 card form + delete button prompt; pre-approval is per origin per categ
   expect((await h.ok(c, "page.text", {})).text).toContain("UNPAID");
 });
 
-test("#13 static categories are gated in the router: nav.wait fn, cookies, storage", async ({ h }) => {
+test("#13 static categories are gated in the router: nav.wait fn", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
   const c = await h.mcp({ label: "static" });
   await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
@@ -164,13 +165,11 @@ test("#13 static categories are gated in the router: nav.wait fn, cookies, stora
   const fn = await h.answerPrompt("deny", () => h.call(c, "nav.wait", { for: "fn", value: "true", timeout: 2000 }));
   expect((fn.result as any).text).toContain("PERMISSION_DENIED");
   expect(fn.prompt.sensitive.category).toBe("c");
-  const ck = await h.answerPrompt("deny", () => h.call(c, "cookies.get"));
-  expect(ck.prompt.sensitive.category).toBe("d");
-  const st = await h.answerPrompt("once", () => h.ok(c, "storage.get", { kind: "local" }));
-  expect(st.prompt.sensitive.category).toBe("d");
+  const once = await h.answerPrompt("once", () => h.ok(c, "nav.wait", { for: "fn", value: "true", timeout: 2000 }));
+  expect(once.prompt.sensitive.category).toBe("c");
   // devAllowSensitive passes a-e without prompting
   await h.trustFixtures({ devAllowSensitive: true });
-  await h.ok(c, "cookies.get");
+  await h.ok(c, "nav.wait", { for: "fn", value: "true", timeout: 2000 });
 });
 
 test("#14 kill switch: in-flight nav.wait returns KILLED, every call is KILLED until Resume, grants cleared", async ({ h }) => {

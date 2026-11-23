@@ -2,9 +2,8 @@
 
 **Let any AI agent drive your real Chrome.** TabAgent is an open-source Chrome extension plus a
 small local bridge that exposes your browser to Claude Code, Codex, Cursor, and any MCP or HTTP
-client. Agents can navigate, read pages, pull structured data, fill forms, upload and download
-files, and inspect network and console activity. They do it with your existing sign-ins, under
-permissions you control.
+client. Agents can navigate, read pages, pull structured data, fill forms, and upload and download
+files. They do it with your existing sign-ins, under permissions you control.
 
 > Status: **pre-alpha**, not yet published. See [docs/DESIGN.md](docs/DESIGN.md) and the
 > [roadmap](https://github.com/nolanmak/tabagent/issues).
@@ -35,15 +34,13 @@ permissions you control.
 3. **Pair**: open the TabAgent side panel (toolbar icon) and enter the code. `tabagent status`
    shows it again.
 
-4. **Connect your agent** (more in [examples/](examples)):
+4. **Connect your agent**:
 
    ```bash
    claude mcp add tabagent -- npx -y tabagent mcp
    codex  mcp add tabagent -- npx -y tabagent mcp
    tabagent skill install --claude --codex     # optional usage skill
    ```
-
-   Cursor: copy [examples/cursor/mcp.json](examples/cursor/mcp.json) to `.cursor/mcp.json`.
 
 5. Ask your agent to do something in the browser. It works in its own tab group; the first time it
    touches a site, TabAgent asks you in the side panel.
@@ -54,17 +51,8 @@ use `tabagent <tool> --json '{…}'`.
 
 ## Docs
 
-- [Tool reference](docs/tools.md) (generated from the registry)
 - [Security model](docs/SECURITY.md)
-- [Lite mode (no debugger) support matrix](docs/lite-mode.md)
 - [Design](docs/DESIGN.md)
-- [Benchmark](bench/README.md)
-- [Release checklist](docs/release.md)
-
-## Benchmark
-
-20 scripted tasks on the repo's fixture site, checked by end-state assertions
-([bench/](bench/README.md)). No published run yet.
 
 ## Layout
 
@@ -73,8 +61,6 @@ packages/protocol   tool registry, envelopes, error codes (zod)
 packages/extension  MV3 extension: service worker, content scripts, side panel
 packages/bridge     Node daemon: MCP server, REST API, CLI (npm: tabagent)
 e2e/                Playwright tests with the real extension and bridge
-bench/              benchmark tasks and runner
-examples/           Claude Code, Codex, Cursor configs
 ```
 
 ## Contributing

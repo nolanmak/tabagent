@@ -1,7 +1,7 @@
 // Extension settings (D32, contract §7). Persistent settings live in
 // chrome.storage.local (access level TRUSTED_CONTEXTS so content scripts can't
 // read the secret, D7). The paused flag is session state (chrome.storage.session, D11).
-import { hostMatches, hostOf, isBlank, originOf, type SiteEntry } from "./policy";
+import type { SiteEntry } from "./policy";
 import { migrateSettings, SEEDED_DENYLIST, type BeforeUnload, type OnSessionEnd } from "./settingsModel";
 
 export { SEEDED_DENYLIST, migrateSettings };
@@ -18,10 +18,6 @@ export interface Settings {
   showOverlay: boolean;
   /** Kill switch engaged (session state, not persisted across browser restarts). */
   paused: boolean;
-  /** Lite mode everywhere (debug aid; per-origin lite lives in `sites`). */
-  forceLite: boolean;
-  /** @deprecated host globs in lite mode; use sites[origin].lite. Still honoured by liteForUrl. */
-  liteSites: string[];
   /** @deprecated derived from beforeUnload === "accept"; read by older cdp.ts. */
   autoAcceptBeforeUnload: boolean;
   /** @deprecated derived: origins with any pre-approval. */
@@ -47,13 +43,7 @@ async function ensureAccessLevel() {
 function view(s: StoredSettings): Settings {
   const sensitiveAllowed: Record<string, boolean> = {};
   for (const [o, e] of Object.entries(s.sites)) if (e.preapproved && Object.keys(e.preapproved).length) sensitiveAllowed[o] = true;
-  // older driver code reads liteSites host globs: expose per-origin lite there too
-  const liteHosts = Object.entries(s.sites)
-    .filter(([, e]) => e.lite)
-    .map(([o]) => hostOf(o))
-    .filter(Boolean);
-  const liteSites = [...new Set([...s.liteSites, ...liteHosts])];
-  return { ...s, liteSites, paused: !!paused, autoAcceptBeforeUnload: s.beforeUnload === "accept", sensitiveAllowed };
+  return { ...s, paused: !!paused, autoAcceptBeforeUnload: s.beforeUnload === "accept", sensitiveAllowed };
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -88,22 +78,6 @@ export async function updateSettings(patch: Partial<Settings> & Record<string, u
 
 export async function isPaused(): Promise<boolean> {
   return (await getSettings()).paused;
-}
-
-/** Whether a URL should be driven in lite mode (no chrome.debugger). Used by driverFor. */
-export async function liteForUrl(url: string): Promise<boolean> {
-  const s = await getSettings();
-  if (s.forceLite) return true;
-  if (isBlank(url)) return false;
-  const o = originOf(url);
-  if (o && s.sites[o]?.lite) return true;
-  let host = "";
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    return false;
-  }
-  return !!host && s.liteSites.some((g) => hostMatches(g, host));
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {

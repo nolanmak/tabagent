@@ -7,21 +7,16 @@
 export type Level = "read" | "act" | "full";
 export type StoredPolicy = Level | "deny";
 /** D18 categories. a/b are detected dynamically by handlers; c-f are static per registry. */
-export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f" | "g";
-/** a-e pre-approve per origin; f (attach) never; g (auth) only per account via authAlways. */
-export type PreapprovableCategory = Exclude<SensitiveCategory, "f" | "g">;
+export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f";
+/** a-e pre-approve per origin; f (attach) never. */
+export type PreapprovableCategory = Exclude<SensitiveCategory, "f">;
 
 export const LEVELS: Level[] = ["read", "act", "full"];
 export const RANK: Record<StoredPolicy, number> = { deny: 0, read: 1, act: 2, full: 3 };
 
 export interface SiteEntry {
   policy?: StoredPolicy;
-  lite?: boolean;
   preapproved?: Partial<Record<PreapprovableCategory, true>>;
-  /** M6: sign-in (category g) is enabled for this origin. Off by default. */
-  auth?: boolean;
-  /** M6: account ids the user said "Always" to for sign-in on this origin. */
-  authAlways?: string[];
 }
 
 /** Per-session answers ("Allow once" / "Deny"), keyed by origin. */
@@ -52,8 +47,6 @@ export interface PolicyRequest {
   /** Required level; null = not site-scoped (still subject to paused + hard deny). */
   level: Level | null;
   sensitive?: SensitiveCategory;
-  /** Category g: the account being signed in with. */
-  accountId?: string;
 }
 
 export type DenyCode = "PERMISSION_DENIED" | "KILLED";
@@ -182,20 +175,9 @@ export function resolve(state: PolicyState, req: PolicyRequest): Decision {
   return sensitiveStep(state, req, origin);
 }
 
-/** Sign-in is never automated on banking / password-manager hosts, even if the user edits the denylist (M6). */
-export const AUTH_DENY_HOSTS = ["*.chase.com", "*.bankofamerica.com", "*.wellsfargo.com", "*.citi.com", "*.capitalone.com", "*.mercury.com", "*.paypal.com", "*.1password.com", "*.lastpass.com", "*.bitwarden.com", "*.dashlane.com", "*.keepersecurity.com", "accounts.google.com"];
-
 function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | null): Decision {
   const cat = req.sensitive;
   if (!cat) return { decision: "allow", origin };
-  if (cat === "g") {
-    if (!origin) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: "Sign-in needs an http(s) page" };
-    if (AUTH_DENY_HOSTS.some((g) => hostMatches(g, hostOf(req.url)))) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `TabAgent never signs in on ${hostOf(req.url)}` };
-    const e = state.sites[origin];
-    if (!e?.auth) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `Sign-in is not enabled for ${origin}`, hint: "The user can enable sign-in for this site in the TabAgent side panel." };
-    if (req.accountId && e.authAlways?.includes(req.accountId)) return { decision: "allow", origin };
-    return { decision: "ask", kind: "sensitive", origin, category: "g" };
-  }
   const key = origin ?? (isBlank(req.url) ? "about:blank" : req.url);
   if (cat !== "f") {
     if (state.devAllowSensitive) return { decision: "allow", origin };
@@ -227,14 +209,8 @@ export function applySiteAnswer(state: PolicyState, sessionId: string, origin: s
 }
 
 /** Sensitive prompt answer: only "always" changes state (per-origin per-category pre-approval, never f). */
-export function applySensitiveAnswer(state: PolicyState, origin: string, category: SensitiveCategory, answer: Answer, accountId?: string): PolicyState {
+export function applySensitiveAnswer(state: PolicyState, origin: string, category: SensitiveCategory, answer: Answer): PolicyState {
   if (answer !== "always" || category === "f" || !originOf(origin)) return state;
-  if (category === "g") {
-    if (!accountId) return state;
-    const e = state.sites[origin] ?? {};
-    const list = e.authAlways ?? [];
-    return list.includes(accountId) ? state : { ...state, sites: { ...state.sites, [origin]: { ...e, authAlways: [...list, accountId] } } };
-  }
   const e = state.sites[origin] ?? {};
   return { ...state, sites: { ...state.sites, [origin]: { ...e, preapproved: { ...e.preapproved, [category]: true } } } };
 }

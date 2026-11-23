@@ -1,6 +1,6 @@
 // Build the MV3 extension into dist/.
 import { build } from "esbuild";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,7 +12,7 @@ mkdirSync(out, { recursive: true });
 
 const common = { bundle: true, target: "chrome125", logLevel: "warning", sourcemap: false, legalComments: "none" };
 
-// pagelib first: it is both a file (lite mode) and an inlined string (CDP isolated worlds)
+// pagelib first: it is inlined as a string into CDP isolated worlds
 await build({ ...common, entryPoints: [join(here, "src/pagelib/index.ts")], outfile: join(out, "pagelib.js"), format: "iife" });
 const pagelibSrc = readFileSync(join(out, "pagelib.js"), "utf8");
 
@@ -24,7 +24,6 @@ await build({
   define: { PAGELIB_SRC: JSON.stringify(pagelibSrc) },
 });
 const uiEntries = { sidepanel: join(here, "src/ui/sidepanel.ts"), prompt: join(here, "src/ui/prompt.ts") };
-if (existsSync(join(here, "src/ui/authpanel.ts"))) uiEntries.authpanel = join(here, "src/ui/authpanel.ts"); // M6 handoff UI (optional)
 await build({ ...common, entryPoints: uiEntries, outdir: out, format: "iife" });
 
 cpSync(join(here, "static"), out, { recursive: true });

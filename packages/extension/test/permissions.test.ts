@@ -103,20 +103,6 @@ describe("gate: requireSensitive", () => {
     P.denyAllPrompts();
     await expect(p).rejects.toBeTruthy();
   });
-  it("category g needs the account; Always remembers the account; prompt text names it", async () => {
-    await expect(P.requireSensitive(meta(), `${A}/`, "g", "auth.login", "sign in", [])).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    const auth = { accountId: "acct1", accountMasked: "n•••@x.com", provider: "1Password" };
-    await expect(P.requireSensitive(meta(), `${A}/`, "g", "auth.login", "sign in", [], { auth })).rejects.toMatchObject({ message: expect.stringContaining("not enabled") });
-    await Set_.updateSettings({ sites: { [A]: { policy: "full", auth: true } } });
-    const p = P.requireSensitive(meta(), `${A}/`, "g", "auth.login", "sign in", [], { auth });
-    const pr = await nextPrompt();
-    expect(pr.summary).toBe(`sign in to ${A} as n•••@x.com with 1Password`);
-    expect(pr.auth).toEqual(auth);
-    P.answerPrompt(pr.promptId, "always");
-    await p;
-    expect((await Set_.getSettings()).sites[A].authAlways).toEqual(["acct1"]);
-    await P.requireSensitive(meta(), `${A}/`, "g", "auth.login", "sign in", [], { auth });
-  });
   it("effectivePolicy and preapprovalsFor", async () => {
     await Set_.updateSettings({ sites: { [A]: { policy: "act", preapproved: { a: true } } } });
     expect(await P.effectivePolicy(`${A}/`, meta())).toMatchObject({ origin: A, policy: "act" });
@@ -126,22 +112,12 @@ describe("gate: requireSensitive", () => {
 });
 
 describe("settings module", () => {
-  it("paused lives in storage.session; liteForUrl honours per-origin lite", async () => {
-    await Set_.updateSettings({ paused: true, sites: { [A]: { lite: true } } });
+  it("paused lives in storage.session", async () => {
+    await Set_.updateSettings({ paused: true });
     expect((await fake.chrome.storage.session.get("paused")).paused).toBe(true);
     expect((await fake.chrome.storage.local.get("settings")).settings.paused).toBeUndefined();
     expect(await Set_.isPaused()).toBe(true);
-    expect(await Set_.liteForUrl(`${A}/x`)).toBe(true);
-    expect(await Set_.liteForUrl("https://b.example/")).toBe(false);
-    expect(await Set_.liteForUrl("about:blank")).toBe(false);
-    const s = await Set_.getSettings();
-    expect(s.liteSites).toContain("a.example");
     await Set_.updateSettings({ paused: false, autoAcceptBeforeUnload: false });
     expect((await Set_.getSettings()).beforeUnload).toBe("dismiss");
-    await Set_.updateSettings({ forceLite: true });
-    expect(await Set_.liteForUrl("https://b.example/")).toBe(true);
-    await Set_.updateSettings({ forceLite: false, liteSites: ["*.c.example"] });
-    expect(await Set_.liteForUrl("https://x.c.example/")).toBe(true);
-    await Set_.updateSettings({ liteSites: [] });
   });
 });

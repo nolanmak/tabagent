@@ -8,12 +8,10 @@ import { CdpTab, getCdpTab, sleep, type FrameInfo } from "./cdp";
 import { staleRef, taErr } from "./errors";
 import { ancestry, contentOffset, translate, translateBox, splitKey, type Offset, type OwnerMetrics } from "./frames";
 import { editCommand, keyDef, MOD_BITS, parseChord } from "./keys";
-import { LiteDriver } from "./lite-driver";
-import { effectivePolicy } from "./permissions";
 import { baselines, refTable } from "./refstore";
 import type { RefTable, RefTarget } from "./refs";
 import { marksInView, planCapture, type Metrics, type Target } from "./screenshot-plan";
-import { getSettings, liteForUrl } from "./settings";
+import { getSettings } from "./settings";
 import { render, type FrameTree, type RefSource, type RenderResult, type AXNode } from "./snapshot";
 import { capMatches, type FindMatch, type FindSpec } from "./wait";
 
@@ -21,7 +19,6 @@ export interface SnapshotOpts {
   mode?: "interactive" | "full";
   root?: string;
   maxTokens?: number;
-  collapse?: boolean;
 }
 
 export interface ClickOpts {
@@ -60,9 +57,9 @@ export interface FrameCall {
   value: any;
 }
 
-/** D26: what tool handlers may ask of a tab. CDP is one implementation, lite (#21) the other. */
+/** D26: what tool handlers may ask of a tab. CDP is the only implementation in v1 M1-M3. */
 export interface Driver {
-  kind: "cdp" | "lite";
+  kind: "cdp";
   tabId: number;
   snapshot(o: SnapshotOpts): Promise<RenderResult>;
   find(spec: FindSpec): Promise<{ matches: FindMatch[]; truncated: boolean }>;
@@ -97,50 +94,22 @@ export interface Driver {
 }
 
 // ---------------------------------------------------------------------------
-// Extra masking (D18 + M6 auth): a hook returns true for nodes whose value must
-// render as •••• in snapshots and diffs (e.g. fields TabAgent autofilled).
+// driverFor: one CDP driver per tab
 // ---------------------------------------------------------------------------
-type MaskHook = (tabId: number, backendNodeId: number, frameKey: string) => boolean;
-const maskHooks: MaskHook[] = [];
-export function addMaskHook(fn: MaskHook): () => void {
-  maskHooks.push(fn);
-  return () => {
-    const i = maskHooks.indexOf(fn);
-    if (i >= 0) maskHooks.splice(i, 1);
-  };
-}
-export function maskedByHook(tabId: number, backendNodeId: number, frameKey: string): boolean {
-  return maskHooks.some((f) => {
-    try {
-      return f(tabId, backendNodeId, frameKey);
-    } catch {
-      return false;
-    }
-  });
-}
+const drivers = new Map<number, { cdp?: CdpDriver }>();
 
-// ---------------------------------------------------------------------------
-// driverFor: per-origin mode (D26/D32), never switches automatically
-// ---------------------------------------------------------------------------
-const drivers = new Map<number, { cdp?: CdpDriver; lite?: LiteDriver }>();
-
-export async function driverFor(tabId: number, url: string): Promise<Driver> {
-  const lite = await liteForUrl(url);
+export async function driverFor(tabId: number, _url: string): Promise<Driver> {
   let d = drivers.get(tabId);
   if (!d) drivers.set(tabId, (d = {}));
-  if (lite) return (d.lite ??= new LiteDriver(tabId, refTable));
   return (d.cdp ??= new CdpDriver(getCdpTab(tabId), refTable));
 }
 
 export function peekDriver(tabId: number): Driver | undefined {
-  const d = drivers.get(tabId);
-  return d?.cdp ?? d?.lite;
+  return drivers.get(tabId)?.cdp;
 }
 
 export function disposeDrivers(tabId: number) {
-  const d = drivers.get(tabId);
-  d?.cdp?.dispose();
-  d?.lite?.dispose();
+  drivers.get(tabId)?.cdp?.dispose();
   drivers.delete(tabId);
   refTable.dropTab(tabId);
   baselines.clearTab(tabId);
@@ -159,19 +128,6 @@ export function mapEls(v: unknown, refs: (string | null)[]): unknown {
     return o;
   }
   return v;
-}
-
-/** Frames whose origin is denied by site policy (D16): placeholder only, never touched. */
-export async function deniedOrigin(url: string): Promise<string | null> {
-  if (!url || /^(about|data|blob|javascript):/i.test(url)) return null;
-  try {
-    const e = (await effectivePolicy(url)) as unknown as { origin?: string | null; policy?: string; level?: string } | string;
-    const pol = typeof e === "string" ? e : (e?.policy ?? e?.level);
-    if (pol === "deny") return (typeof e === "object" && e?.origin) || new URL(url).origin;
-  } catch {
-    /* policy engine unavailable: treat as allowed (router already checked the tab) */
-  }
-  return null;
 }
 
 export function refSource(table: RefTable, tabId: number, loaderOf: (frameKey: string) => string): RefSource {
@@ -214,16 +170,7 @@ export class CdpDriver implements Driver {
     // main frame first
     const mk = this.tab.mainKey();
     frames.sort((a, b) => (a.key === mk ? -1 : b.key === mk ? 1 : 0));
-    const denied = new Map<string, string>();
-    for (const f of frames) {
-      if (!f.parentKey) continue;
-      const d = await deniedOrigin(f.url);
-      if (d) denied.set(f.key, d);
-    }
-    const blocked = (f: FrameInfo): boolean => denied.has(f.key) || (!!f.parentKey && frames.some((p) => p.key === f.parentKey && blocked(p)));
-    const allowed = frames.filter((f) => !blocked(f));
-    this.frameCache = { at: this.clock.now(), frames, allowed };
-    (this.frameCache as unknown as { denied: Map<string, string> }).denied = denied;
+    this.frameCache = { at: this.clock.now(), frames, allowed: frames };
     return this.frameCache;
   }
 
@@ -232,7 +179,7 @@ export class CdpDriver implements Driver {
     try {
       return this.refs.resolve(ref, this.tabId, (fk) => this.tab.loaders.get(fk));
     } catch (e) {
-      // The frame may simply not be in our loader map yet (late OOPIF): refresh once.
+      // The frame may simply not be in our loader map yet (late iframe): refresh once.
       const t = this.refs.get(ref);
       if (t && t.tabId === this.tabId && !this.tab.loaders.has(t.frameKey)) {
         await this.frames(true);
@@ -246,15 +193,9 @@ export class CdpDriver implements Driver {
     await this.tab.ensure();
     this.tab.assertNoDialog();
     const { frames } = await this.frames(true);
-    const denied = (this.frameCache as unknown as { denied: Map<string, string> }).denied;
     const trees: FrameTree[] = [];
     let total = 0;
     for (const f of frames) {
-      if (denied.has(f.key)) {
-        trees.push({ key: f.key, nodes: [], ownerBackendNodeId: f.ownerBackendNodeId, ownerFrameKey: f.parentKey, denied: denied.get(f.key) });
-        continue;
-      }
-      if (f.parentKey && !this.frameCache!.allowed.includes(f)) continue;
       try {
         const r = await this.tab.send<{ nodes: AXNode[] }>("Accessibility.getFullAXTree", { frameId: f.frameId }, f.sessionId);
         let sensitive: number[] = [];
@@ -264,7 +205,6 @@ export class CdpDriver implements Driver {
           /* frame busy: values still masked by the bullet heuristic */
         }
         total += r.nodes.length;
-        if (maskHooks.length) for (const n of r.nodes) if (n.backendDOMNodeId != null && maskedByHook(this.tabId, n.backendDOMNodeId, f.key)) sensitive.push(n.backendDOMNodeId);
         trees.push({ key: f.key, nodes: r.nodes, ownerBackendNodeId: f.ownerBackendNodeId, ownerFrameKey: f.parentKey, sensitive });
       } catch (e) {
         if (!f.parentKey) throw taErr("INTERNAL", `Could not read the accessibility tree: ${(e as Error).message}`);
@@ -276,7 +216,7 @@ export class CdpDriver implements Driver {
       root = { frameKey: t.frameKey, backendNodeId: t.backendNodeId };
     }
     await this.refs.reserve(total + 1);
-    return render(trees, { mode: o.mode, maxTokens: o.maxTokens, root, collapse: o.collapse, refs: refSource(this.refs, this.tabId, this.loaderOf) });
+    return render(trees, { mode: o.mode, maxTokens: o.maxTokens, root, refs: refSource(this.refs, this.tabId, this.loaderOf) });
   }
 
   private toRefs(frameKey: string, value: unknown, nodes: number[]) {
@@ -578,7 +518,7 @@ export class CdpDriver implements Driver {
     const { allowed } = await this.frames();
     let marked = false;
     if (o.marks) {
-      const snap = await this.snapshot({ mode: "interactive", maxTokens: 1_000_000, collapse: false });
+      const snap = await this.snapshot({ mode: "interactive", maxTokens: 1_000_000 });
       const byFrame = new Map<string, { ref: string; backendNodeId: number }[]>();
       for (const s of snap.shown) if (s.interactive) byFrame.set(s.frameKey, [...(byFrame.get(s.frameKey) ?? []), s]);
       const entries: { ref: string; box: { x: number; y: number; w: number; h: number } | null }[] = [];

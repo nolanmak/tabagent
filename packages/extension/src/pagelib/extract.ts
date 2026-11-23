@@ -1,5 +1,5 @@
 // pagelib extraction (#10, D33): tables, links, schema, markdown, text, next
-// control, web storage. Runs in the page's isolated world; unit-tested with happy-dom.
+// control. Runs in the page's isolated world; unit-tested with happy-dom.
 import { deepQueryAll, isDisabled, isVisible, lc, matchText, nameOf, norm, textOf, type El, type Ret } from "./index";
 
 export const MAX_TEXT = 20000;
@@ -693,18 +693,4 @@ export function text(el: El | null, maxChars?: number | null) {
   const out = tidy(render(root, { depth: 0, plain: true, root }));
   const truncated = out.length > maxChars;
   return { text: truncated ? out.slice(0, maxChars) : out, ...(truncated ? { truncated: true, totalChars: out.length } : {}) };
-}
-
-// ---------------------------------------------------------------------------
-// Web storage (storage.get)
-// ---------------------------------------------------------------------------
-export function storage(_self: unknown, kind: "local" | "session") {
-  const s = kind === "session" ? sessionStorage : localStorage;
-  const entries: Record<string, string> = {};
-  for (let i = 0; i < s.length; i++) {
-    const k = s.key(i)!;
-    const v = s.getItem(k) ?? "";
-    entries[k] = v.length > 5000 ? v.slice(0, 5000) + "…" : v;
-  }
-  return { origin: location.origin, kind, entries, count: s.length };
 }

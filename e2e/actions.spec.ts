@@ -136,8 +136,6 @@ test("an action that navigates reports navigation and no snapshotDiff", async ({
   expect(r.json.navigation.url).toContain("/form.html");
   expect(r.json.navigation.title).toBe("Sign up");
   expect(r.json.snapshotDiff).toBeUndefined();
-  // the baseline was cleared: the next diff=true snapshot is a full one
-  expect(view(await h.ok(c, "page.snapshot", { diff: true })).json.full).toBe(true);
 });
 
 test("D28: an action that opens a dialog returns dialogs; other commands get DIALOG_OPEN", async ({ h }) => {

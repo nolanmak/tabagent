@@ -32,8 +32,6 @@ export interface StoredShape {
   onSessionEnd: OnSessionEnd;
   beforeUnload: BeforeUnload;
   showOverlay: boolean;
-  forceLite: boolean;
-  liteSites: string[];
 }
 
 export const DEFAULTS: StoredShape = {
@@ -45,8 +43,6 @@ export const DEFAULTS: StoredShape = {
   onSessionEnd: "collapse",
   beforeUnload: "accept",
   showOverlay: true,
-  forceLite: false,
-  liteSites: [],
 };
 
 const POLICIES = new Set(["read", "act", "full", "deny"]);
@@ -57,16 +53,10 @@ function cleanEntry(e: unknown): SiteEntry | null {
   const x = e as Record<string, unknown>;
   const out: SiteEntry = {};
   if (typeof x.policy === "string" && POLICIES.has(x.policy)) out.policy = x.policy as StoredPolicy;
-  if (x.lite === true) out.lite = true;
   if (x.preapproved && typeof x.preapproved === "object") {
     const p: Partial<Record<PreapprovableCategory, true>> = {};
     for (const c of CATS) if ((x.preapproved as Record<string, unknown>)[c] === true) p[c] = true;
     if (Object.keys(p).length) out.preapproved = p;
-  }
-  if (x.auth === true) out.auth = true;
-  if (Array.isArray(x.authAlways)) {
-    const ids = x.authAlways.filter((v): v is string => typeof v === "string" && !!v);
-    if (ids.length) out.authAlways = [...new Set(ids)];
   }
   return Object.keys(out).length ? out : null;
 }
@@ -102,7 +92,5 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
     onSessionEnd: ["collapse", "close", "keep"].includes(r.onSessionEnd) ? r.onSessionEnd : DEFAULTS.onSessionEnd,
     beforeUnload,
     showOverlay: typeof r.showOverlay === "boolean" ? r.showOverlay : DEFAULTS.showOverlay,
-    forceLite: r.forceLite === true,
-    liteSites: Array.isArray(r.liteSites) ? r.liteSites.filter((x: unknown) => typeof x === "string") : [],
   };
 }

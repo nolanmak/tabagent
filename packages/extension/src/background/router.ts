@@ -120,16 +120,8 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
   switch (tool) {
     case "nav.goto":
       return `open ${p.url}`;
-    case "js.eval":
-      return `run JavaScript: ${String(p.expression ?? "").slice(0, 120)}`;
     case "nav.wait":
       return `wait for a JavaScript condition: ${String(p.value ?? "").slice(0, 120)}`;
-    case "cookies.get":
-      return "read cookies";
-    case "storage.get":
-      return `read ${p.kind ?? "web"}Storage`;
-    case "network.get":
-      return "read a network request body and headers";
     case "act.upload":
       return `upload ${Array.isArray(p.paths) ? p.paths.length : 0} local file(s)`;
     case "downloads.read":
@@ -204,9 +196,6 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         switch (req.urlSource) {
           case "param":
             url = tool.name === "nav.goto" ? normalizeNavUrl(String(params.url ?? "")) : String(params.url ?? "");
-            break;
-          case "tab-or-param":
-            if (params.url) url = String(params.url);
             break;
           case "download":
             url = deps.downloadUrl(Number(params.id), cmd.session.id) ?? "";

@@ -135,10 +135,10 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
   const core = await mk("core");
   const tools = (await core.listTools()).tools.map((t) => t.name);
   expect(tools).toContain("nav_goto");
-  expect(tools).not.toContain("js_eval");
+  expect(tools).not.toContain("form_describe");
   expect(tools.length).toBeLessThanOrEqual(15);
   const full = await mk("full");
-  expect((await full.listTools()).tools.length).toBeGreaterThan(40);
+  expect((await full.listTools()).tools.length).toBeGreaterThan(30);
   const r: any = await core.callTool({ name: "nav_goto", arguments: { url: `${h.A}/index.html` } });
   expect(r.content[0].text).toContain("Fixtures home");
   const groups = await h.sw.evaluate(async () => (await chrome.tabGroups.query({})).map((g) => g.title));
@@ -147,34 +147,4 @@ test("MCP over Streamable HTTP with bearer auth + profiles", async ({ h }) => {
   await full.close();
   const unauth = await fetch(`http://127.0.0.1:${h.port}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   expect(unauth.status).toBe(401);
-});
-
-test("lite mode (no debugger): snapshot, click, fill, form.fill", async ({ h }) => {
-  await h.trustFixtures({ sites: { [h.B]: { lite: true } } });
-  const c = await h.mcp();
-  await h.ok(c, "nav.goto", { url: `${h.B}/form.html` });
-  const info = await h.ok(c, "session.info");
-  expect(info.json.tabs.find((t: any) => t.active).mode).toBe("lite");
-  const s = await h.ok(c, "page.snapshot");
-  // D22: lite refs come from the same table as CDP refs
-  expect(s.text).toMatch(/\[ref=e\d+\]/);
-  const email = Harness.ref(s.text, /textbox "Email address"/);
-  await h.ok(c, "act.fill", { ref: email, value: "lite@example.com" });
-  await h.ok(c, "form.fill", { fields: { Country: "Mexico", "Subscribe to newsletter": true, Plan: "Free" } });
-  await h.ok(c, "act.click", { ref: Harness.ref(s.text, /button "Create account"/) });
-  const txt = (await h.ok(c, "page.text", {})).text;
-  expect(txt).toContain('"email":"lite@example.com"');
-  expect(txt).toContain('"country":"mx"');
-  expect(txt).toContain('"subscribe":true');
-  // #21: registry lite=unsupported tools return UNSUPPORTED without touching the page
-  const net = await h.call(c, "network.list");
-  expect(net.text).toContain("UNSUPPORTED");
-  // viewport capture needs the tab to be the visible one; TabAgent never focuses it (D10)
-  const shot = await h.call(c, "page.screenshot");
-  expect(!!shot.image || shot.text.includes("UNSUPPORTED")).toBe(true);
-  // no debugger attached to the lite tab
-  const liteTab = info.json.tabs.find((t: any) => t.active).tabId;
-  const attached: number[] = await h.sw.evaluate(() => (globalThis as any).__tabagent.attachedTabs());
-  expect(attached).not.toContain(liteTab);
-  await h.trustFixtures();
 });

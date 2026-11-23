@@ -48,7 +48,6 @@ describe("prompt reducer", () => {
     expect(promptTitle({ kind: "site", level: "full", origin: "https://a" })).toBe("An agent wants full access to https://a");
     expect(promptTitle({ kind: "sensitive", sessionLabel: "bot", origin: "https://a", summary: 'click "Pay"' })).toBe('bot wants to click "Pay"');
     expect(promptTitle({ kind: "sensitive", origin: "https://a" })).toContain("sensitive");
-    expect(promptTitle({ kind: "sensitive", origin: "https://a", sensitive: { category: "g" }, auth: { accountMasked: "n•••@x.com", provider: "1Password" } })).toBe("Sign in to https://a as n•••@x.com with 1Password?");
   });
   it("summarizeParams", () => {
     expect(summarizeParams({ a: "x", b: { c: 1 }, d: undefined, long: "y".repeat(100) }, 10)).toBe('a=x b={"c":1} long=yyyyyyyyy…');

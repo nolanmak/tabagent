@@ -4,7 +4,7 @@
 import { TabAgentError, type SessionMeta, type ToolDef } from "@tabagent/protocol";
 import { driverFor } from "./driver";
 import { effectivePolicy, preapprovalsFor } from "./permissions";
-import { addTab, endSession, inHandoff, isPrivateTab, newTab, ownerOf, resolveTab, selectTab, userActiveTab, type Session } from "./sessions";
+import { addTab, endSession, newTab, ownerOf, resolveTab, selectTab, userActiveTab, type Session } from "./sessions";
 import { getSettings } from "./settings";
 
 interface Ctx {
@@ -29,8 +29,6 @@ export async function attachTarget(meta: SessionMeta, tabId: number | undefined)
     if (!t?.id) throw new TabAgentError("NOT_FOUND", "No active tab in the last-focused window", "Ask the user to focus the tab to share, or pass tabId.");
     id = t.id;
   }
-  if (isPrivateTab(id)) throw new TabAgentError("PERMISSION_DENIED", `Tab ${id} is a private sign-in tab`);
-  if (inHandoff(id)) throw new TabAgentError("TAB_BUSY", `Tab ${id} is handed to the user`);
   const o = ownerOf(id);
   if (o && o !== meta.id) throw new TabAgentError("TAB_BUSY", `Tab ${id} belongs to another agent session`);
   let info: { url: string; title: string };
@@ -49,7 +47,6 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
       case "list": {
         const tabs = [];
         for (const id of c.s.tabIds) {
-          if (isPrivateTab(id)) continue;
           try {
             const t = await tabInfo(id);
             tabs.push({ tabId: id, ...t, active: id === c.s.active, attached: c.s.attached.includes(id) });
@@ -102,8 +99,7 @@ export const sessionHandlers: Record<string, (c: Ctx) => Promise<unknown>> = {
     for (const id of c.s.tabIds) {
       try {
         const t = await tabInfo(id);
-        const drv = await driverFor(id, t.url);
-        tabs.push({ tabId: id, ...t, mode: drv.kind, active: id === c.s.active, attached: c.s.attached.includes(id) });
+        tabs.push({ tabId: id, ...t, active: id === c.s.active, attached: c.s.attached.includes(id) });
       } catch {
         /* gone */
       }

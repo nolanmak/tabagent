@@ -1,15 +1,12 @@
-// Pure snapshot renderer: CDP accessibility trees (or the lite DOM walker's
-// AX-shaped nodes) -> compact, ref-annotated text. No chrome.*, no CDP.
+// Pure snapshot renderer: CDP accessibility trees -> compact, ref-annotated
+// text. No chrome.*, no CDP.
 //
 // D23: `interactive` (default) = interactive nodes with refs, plus landmarks and
 // headings as unreferenced structure. `full` = everything, including text.
-// Budget: maxTokens (default 6000), token = ceil(chars / 4). Over budget, the
-// longest runs of same-role siblings are collapsed first (#20: keep first 3 +
-// last 1, the container gets a ref); if still over, a hard stop with
-// `… truncated, N more nodes; narrow with root=<ref>`. Refs are minted only for
-// lines that are actually shown.
+// Budget: maxTokens (default 6000), token = ceil(chars / 4). Over budget, a
+// hard stop with `… truncated, N more nodes; narrow with root=<ref>` (D23, M1).
+// Refs are minted only for lines that are actually shown.
 // D18: password / card values render as `value="••••"`.
-// D16/#19: a frame whose origin is denied renders as a one-line placeholder.
 import { taErr } from "./errors";
 
 export interface AXNode {
@@ -30,8 +27,6 @@ export interface FrameTree {
   /** The <iframe> element hosting this frame, in the parent frame. */
   ownerBackendNodeId?: number;
   ownerFrameKey?: string;
-  /** Origin denied by site policy: render a placeholder, no nodes, no refs. */
-  denied?: string;
   /** backendNodeIds of password / card inputs in this frame (values masked). */
   sensitive?: number[];
 }
@@ -50,8 +45,6 @@ export interface RenderOpts {
   maxTokens?: number;
   root?: { frameKey: string; backendNodeId: number };
   refs: RefSource;
-  /** Smart collapsing (#20). Default true; false = M1 hard stop only. */
-  collapse?: boolean;
 }
 
 export interface ShownRef {
@@ -67,8 +60,6 @@ export interface RenderResult {
   refs: string[];
   shown: ShownRef[];
   truncated: boolean;
-  /** Number of collapsed runs. */
-  collapsed: number;
   /** Nodes dropped by the hard stop. */
   omitted: number;
   tokens: number;
@@ -134,8 +125,6 @@ interface TNode {
   /** Printed line, or a transparent node whose children are spliced in. */
   line?: { head: string; tail: string; refKey?: [string, number]; interactive: boolean };
   role: string;
-  /** For collapse: the node that can be passed as root=. */
-  key?: [string, number];
   children: TNode[];
 }
 
@@ -198,7 +187,7 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
       const kids = () => (n.childIds ?? []).flatMap(visit);
       const transparent = (): TNode[] => {
         const children = kids();
-        return children.length ? [{ role: rawRole || "generic", key, children }] : [];
+        return children.length ? [{ role: rawRole || "generic", children }] : [];
       };
 
       if (n.ignored) return transparent();
@@ -215,11 +204,8 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
       if ((rawRole === "Iframe" || rawRole === "IframePresentational") && n.backendDOMNodeId != null) {
         const cf = frameFor(f.key, n.backendDOMNodeId);
         const head = `- iframe${name ? " " + quote(name) : ""}`;
-        if (cf?.denied) {
-          return [{ role: "iframe", line: { head, tail: ` (content hidden: ${cf.denied} is denied by site policy)`, interactive: false }, children: [] }];
-        }
         const refKey: [string, number] | undefined = full ? key : undefined;
-        return [{ role: "iframe", key, line: { head, tail: "", refKey, interactive: false }, children: cf ? renderFrame(cf) : [] }];
+        return [{ role: "iframe", line: { head, tail: "", refKey, interactive: false }, children: cf ? renderFrame(cf) : [] }];
       }
 
       const interactive = isInteractiveNode(n, rawRole, name);
@@ -274,7 +260,7 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
       if (["Date", "DateTime", "InputTime"].includes(rawRole)) children = [];
       // empty landmarks carry no information in interactive mode
       if (!full && landmark && !interactive && !children.some(hasOutput)) return [];
-      return [{ role, key, line: { head, tail, refKey, interactive }, children }];
+      return [{ role, line: { head, tail, refKey, interactive }, children }];
     };
 
     if (startNodeId) return visit(startNodeId);
@@ -294,12 +280,11 @@ function build(frames: FrameTree[], opts: { mode: "interactive" | "full"; root?:
   }
   const main = frames[0];
   if (!main) return [];
-  if (main.denied) return [{ role: "document", line: { head: "- document", tail: ` (content hidden: ${main.denied} is denied by site policy)`, interactive: false }, children: [] }];
   return renderFrame(main);
 }
 
 // ---------------------------------------------------------------------------
-// Layout: collapse + budget
+// Layout: budget
 // ---------------------------------------------------------------------------
 interface OutLine {
   depth: number;
@@ -307,53 +292,21 @@ interface OutLine {
   tail: string;
   refKey?: [string, number];
   interactive: boolean;
-  /** Collapse marker: container to mint a ref for. */
-  marker?: { count: number; role: string; container: [string, number] };
-}
-
-interface Run {
-  container: TNode;
-  items: TNode[];
-  role: string;
 }
 
 function hasOutput(n: TNode): boolean {
   return !!n.line || n.children.some(hasOutput);
 }
 
-function findRuns(roots: TNode[]): Run[] {
-  const runs: Run[] = [];
-  const walk = (n: TNode) => {
-    if (n.key) {
-      const kids = n.children.filter(hasOutput);
-      let i = 0;
-      while (i < kids.length) {
-        let j = i;
-        while (j < kids.length && kids[j].role === kids[i].role) j++;
-        if (j - i >= 5) runs.push({ container: n, items: kids.slice(i, j), role: kids[i].role });
-        i = j;
-      }
-    }
-    n.children.forEach(walk);
-  };
-  roots.forEach(walk);
-  return runs;
-}
-
-function layout(roots: TNode[], hidden: Set<TNode>, markers: Map<TNode, Run & { hiddenCount: number }>): OutLine[] {
+function layout(roots: TNode[]): OutLine[] {
   const out: OutLine[] = [];
   const emit = (n: TNode, depth: number) => {
-    if (hidden.has(n)) return;
     let d = depth;
     if (n.line) {
       out.push({ depth, head: n.line.head, tail: n.line.tail, refKey: n.line.refKey, interactive: n.line.interactive });
       d = depth + 1;
     }
-    for (const c of n.children) {
-      emit(c, d);
-      const m = markers.get(c);
-      if (m) out.push({ depth: d, head: "", tail: "", interactive: false, marker: { count: m.hiddenCount, role: m.role, container: m.container.key! } });
-    }
+    for (const c of n.children) emit(c, d);
   };
   for (const r of roots) emit(r, 0);
   return out;
@@ -374,30 +327,11 @@ export function render(input: AXNode[] | FrameTree[], opts: RenderOpts): RenderR
   roots.forEach(count);
   const newRefLen = `e${opts.refs.nextNumber() + nodeCount + 1}`.length;
   const refLen = (k: [string, number]) => (opts.refs.peek(k[0], k[1]) ?? "e".padEnd(newRefLen, "9")).length;
-  const markerText = (m: NonNullable<OutLine["marker"]>, ref: string) => `- … ${m.count} more ${ROLE_ALIAS[m.role] ?? m.role} items, expand with root=${ref}`;
-  const lineLen = (l: OutLine) =>
-    2 * l.depth + 1 + (l.marker ? markerText(l.marker, "e".padEnd(Math.max(newRefLen, refLen(l.marker.container)), "9")).length : l.head.length + l.tail.length + (l.refKey ? 7 + refLen(l.refKey) : 0));
+  const lineLen = (l: OutLine) => 2 * l.depth + 1 + l.head.length + l.tail.length + (l.refKey ? 7 + refLen(l.refKey) : 0);
   const total = (ls: OutLine[]) => ls.reduce((a, l) => a + lineLen(l), 0);
 
-  const hidden = new Set<TNode>();
-  const markers = new Map<TNode, Run & { hiddenCount: number }>();
-  let lines = layout(roots, hidden, markers);
-  let collapsed = 0;
-  if (total(lines) > budget && opts.collapse !== false) {
-    const runs = findRuns(roots).sort((a, b) => b.items.length - a.items.length);
-    for (const run of runs) {
-      if (total(lines) <= budget) break;
-      const vis = run.items.filter((i) => !hidden.has(i));
-      if (vis.length < 5 || run.items.some((i) => hidden.has(i))) continue;
-      const mid = run.items.slice(3, run.items.length - 1);
-      mid.forEach((i) => hidden.add(i));
-      markers.set(run.items[2], { ...run, hiddenCount: mid.length });
-      collapsed++;
-      lines = layout(roots, hidden, markers);
-    }
-  }
-
-  let truncated = collapsed > 0;
+  let lines = layout(roots);
+  let truncated = false;
   let omitted = 0;
   if (total(lines) > budget) {
     // Hard stop: keep lines while they fit, leaving room for the note.
@@ -418,13 +352,6 @@ export function render(input: AXNode[] | FrameTree[], opts: RenderOpts): RenderR
   const text: string[] = [];
   for (const l of lines) {
     const ind = "  ".repeat(l.depth);
-    if (l.marker) {
-      const ref = opts.refs.mint(l.marker.container[0], l.marker.container[1]);
-      refs.push(ref);
-      shown.push({ ref, frameKey: l.marker.container[0], backendNodeId: l.marker.container[1], interactive: false });
-      text.push(ind + markerText(l.marker, ref));
-      continue;
-    }
     let s = ind + l.head;
     if (l.refKey) {
       const ref = opts.refs.mint(l.refKey[0], l.refKey[1]);
@@ -435,5 +362,5 @@ export function render(input: AXNode[] | FrameTree[], opts: RenderOpts): RenderR
     text.push(s + l.tail);
   }
   const joined = text.join("\n");
-  return { text: joined, lines: text, refs, shown, truncated, collapsed, omitted, tokens: tokensOf(joined) };
+  return { text: joined, lines: text, refs, shown, truncated, omitted, tokens: tokensOf(joined) };
 }

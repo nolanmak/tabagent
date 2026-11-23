@@ -34,7 +34,6 @@ describe("registry invariants", () => {
     expect(["none", "read", "act", "full"]).toContain(t.level);
     expect(Array.isArray(t.profiles)).toBe(true);
     expect(["extension", "bridge", "both"]).toContain(t.handledBy);
-    expect(["supported", "degraded", "unsupported"]).toContain(t.lite);
     expect(Array.isArray(t.pageContent)).toBe(true);
     expect(t.params).toBeInstanceOf(z.ZodObject);
     expect(t.result).toBeInstanceOf(z.ZodType);
@@ -85,23 +84,12 @@ const LEVELS: Record<string, string> = {
   "extract.schema": "read",
   "extract.paginate": "read",
   "dialog.handle": "act",
-  "js.eval": "full",
-  "console.list": "read",
-  "network.list": "read",
-  "network.get": "full",
-  "network.waitFor": "read",
-  "cookies.get": "full",
-  "storage.get": "full",
   "downloads.list": "none",
   "downloads.wait": "none",
   "downloads.read": "none",
   "session.info": "none",
   "session.permissions": "none",
   "session.end": "none",
-  "auth.status": "read",
-  "auth.login": "act",
-  "auth.code": "act",
-  "auth.handoff": "read",
 };
 
 describe("D16 level table", () => {
@@ -128,24 +116,19 @@ describe("D16 level table", () => {
 
 describe("D18 static sensitivity", () => {
   it.each([
-    ["js.eval", {}, "c"],
     ["nav.wait", { for: "fn" }, "c"],
     ["nav.wait", { for: "text" }, undefined],
-    ["cookies.get", {}, "d"],
-    ["storage.get", {}, "d"],
-    ["network.get", {}, "d"],
     ["act.upload", {}, "e"],
     ["downloads.read", {}, "e"],
     ["tabs", { action: "attach" }, "f"],
     ["tabs", { action: "new" }, undefined],
     ["act.click", {}, undefined],
-    ["network.list", {}, undefined],
   ] as const)("%s %j -> %s", (name, params, cat) => {
     expect(sensitiveFor(getTool(name)!, params as Record<string, unknown>)).toBe(cat);
   });
   it("no other tool is statically sensitive", () => {
     const statics = tools.filter((t) => t.sensitive || Object.values(t.actions ?? {}).some((a) => a.sensitive)).map((t) => t.name);
-    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "storage.get", "tabs"].sort());
+    expect(statics.sort()).toEqual(["act.upload", "downloads.read", "nav.wait", "tabs"].sort());
   });
 });
 
@@ -154,10 +137,9 @@ const D29: Record<string, string[]> = {
   core: CORE,
   forms: [...CORE, "form.describe", "form.submit", "act.fill", "act.check", "act.upload"],
   data: [...CORE, "page.text", "page.find", "extract.links", "extract.schema", "extract.paginate", "downloads.list", "downloads.wait", "downloads.read"],
-  dev: [...CORE, "js.eval", "console.list", "network.list", "network.get", "network.waitFor", "cookies.get", "storage.get"],
-  // DA10: full is everything except the opt-in auth group.
-  full: tools.filter((t) => t.group !== "auth").map((t) => t.name),
-  auth: [...CORE, "auth.status", "auth.login", "auth.code", "auth.handoff"],
+  // D29: a profile lists only registered tools; the dev group is not registered yet (M4).
+  dev: CORE,
+  full: tools.map((t) => t.name),
 };
 
 describe("D29 profiles", () => {
@@ -179,12 +161,12 @@ describe("D29 profiles", () => {
   });
   it("unknown profile throws with the valid list", () => {
     expect(() => toolsForProfiles("core,bogus")).toThrow(/bogus.*core, forms, data, dev, full/);
-    expect(PROFILES).toEqual(["core", "forms", "data", "dev", "full", "auth"]);
+    expect(PROFILES).toEqual(["core", "forms", "data", "dev", "full"]);
   });
   it("lists only registered tools (works on a smaller registry)", () => {
-    const small = tools.filter((t) => ["tabs", "nav.goto", "js.eval"].includes(t.name));
+    const small = tools.filter((t) => ["tabs", "nav.goto", "form.describe"].includes(t.name));
     expect(names(toolsForProfiles("core", small))).toEqual(["nav.goto", "tabs"]);
-    expect(names(toolsForProfiles("dev", small))).toEqual(["js.eval", "nav.goto", "tabs"]);
+    expect(names(toolsForProfiles("forms", small))).toEqual(["form.describe", "nav.goto", "tabs"]);
   });
 });
 
@@ -209,7 +191,7 @@ describe("D21 pageContent sweep", () => {
     expect(markedPaths(bad)).toEqual(["text"]);
   });
   it("tools with free-text page results are covered", () => {
-    for (const n of ["page.snapshot", "page.text", "page.markdown", "extract.table", "console.list", "tabs", "downloads.list", "dialog.handle"]) {
+    for (const n of ["page.snapshot", "page.text", "page.markdown", "extract.table", "tabs", "downloads.list", "dialog.handle"]) {
       expect(getTool(n)!.pageContent.length, n).toBeGreaterThan(0);
     }
   });
@@ -248,7 +230,6 @@ function minimal(t: ToolDef): Record<string, unknown> {
     "act.upload": { ref: "e1", paths: ["/x"] },
     "form.fill": { fields: {} },
     "extract.paginate": { extractor: "table" },
-    "js.eval": { expression: "1" },
   };
   return m[t.name] ?? (t.params.shape.ref ? { ref: "e1" } : {});
 }

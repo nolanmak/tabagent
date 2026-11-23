@@ -148,9 +148,6 @@ Usage:
   tabagent audit tail [-n 50] [--follow]
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
   tabagent config [show] | add-upload-dir <dir> | set port <n>
-  tabagent config auth.sms on|off      SMS/iMessage one-time codes for auth.code (macOS)
-  tabagent doctor                      Check sign-in prerequisites (Full Disk Access, op, bw)
-  tabagent bitwarden enable|disable|login|unlock|lock|status
   tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw] [--out file.png]
 
 Examples:
