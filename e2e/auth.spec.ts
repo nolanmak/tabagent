@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Harness } from "./harness";
 import { authServer, type AuthServer } from "./fixtures/auth/server";
-import { spkiOf } from "./spikes/pwm";
+import { seedPassword, spkiOf } from "./spikes/pwm";
 import { fakeCliDir, opItem, opScenario } from "../packages/bridge/test/auth-fakes";
 
 const HOST = "tabagent-fixture.com";
@@ -15,6 +15,7 @@ const EVIL = "tabagent-fixture.com.evil-example.com";
 const PASSWORD = `pw-marker-${Math.random().toString(36).slice(2, 12)}`;
 const USERNAME = "alice@example.com";
 const ITEM = "abcdefghijklmnopqrstuvwxyz";
+const CHROME_PW = `chrome-pw-${Math.random().toString(36).slice(2, 12)}`;
 const CODE = String(100000 + Math.floor(Math.random() * 899999));
 
 interface W {
@@ -230,4 +231,22 @@ test("auth.handoff: debugger detached and tab busy while waiting; user clicks th
   expect(stale.text).toContain("REF_STALE");
   const after = await w.h.ok(c, "page.snapshot");
   expect(after.text).toContain("Signed in");
+});
+
+test("chrome-autofill (#32): Chrome pre-fills its saved password on the https page; auth.login asks, submits, and never sees it", async ({ w }) => {
+  await seedPassword(w.h.ctx, w.site, "carol@example.com", CHROME_PW);
+  await enable(w);
+  w.srv.received.length = 0;
+  const c = await w.h.mcp({ profile: "core,auth" });
+  await w.h.ok(c, "nav.goto", { url: `${w.site}/login.html` });
+  const st = await call(w, c, "auth.status");
+  await expect.poll(async () => JSON.stringify((await call(w, c, "auth.status")).json.providers), { timeout: 5000 }).toContain("chrome-autofill");
+  expect(st.isError).toBe(false);
+  const { result, title } = await w.h.answerPrompt("once", () => call(w, c, "auth.login", { account: "chrome-autofill:saved" }));
+  const r = result as any;
+  expect(r.isError, r.text).toBe(false);
+  expect(r.json).toMatchObject({ filled: true, account: "c•••@example.com", source: "chrome-autofill", submitted: true, next: "done" });
+  expect(title ?? "").toContain("chrome-autofill");
+  expect(w.srv.received.find((x) => x.path === "/auth/login")?.fields).toEqual({ username: "carol@example.com", password: CHROME_PW });
+  noLeak(w, CHROME_PW);
 });
