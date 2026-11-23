@@ -97,29 +97,6 @@ export interface Driver {
 }
 
 // ---------------------------------------------------------------------------
-// Extra masking (D18 + M6 auth): a hook returns true for nodes whose value must
-// render as •••• in snapshots and diffs (e.g. fields TabAgent autofilled).
-// ---------------------------------------------------------------------------
-type MaskHook = (tabId: number, backendNodeId: number, frameKey: string) => boolean;
-const maskHooks: MaskHook[] = [];
-export function addMaskHook(fn: MaskHook): () => void {
-  maskHooks.push(fn);
-  return () => {
-    const i = maskHooks.indexOf(fn);
-    if (i >= 0) maskHooks.splice(i, 1);
-  };
-}
-export function maskedByHook(tabId: number, backendNodeId: number, frameKey: string): boolean {
-  return maskHooks.some((f) => {
-    try {
-      return f(tabId, backendNodeId, frameKey);
-    } catch {
-      return false;
-    }
-  });
-}
-
-// ---------------------------------------------------------------------------
 // driverFor: per-origin mode (D26/D32), never switches automatically
 // ---------------------------------------------------------------------------
 const drivers = new Map<number, { cdp?: CdpDriver; lite?: LiteDriver }>();
@@ -264,7 +241,6 @@ export class CdpDriver implements Driver {
           /* frame busy: values still masked by the bullet heuristic */
         }
         total += r.nodes.length;
-        if (maskHooks.length) for (const n of r.nodes) if (n.backendDOMNodeId != null && maskedByHook(this.tabId, n.backendDOMNodeId, f.key)) sensitive.push(n.backendDOMNodeId);
         trees.push({ key: f.key, nodes: r.nodes, ownerBackendNodeId: f.ownerBackendNodeId, ownerFrameKey: f.parentKey, sensitive });
       } catch (e) {
         if (!f.parentKey) throw taErr("INTERNAL", `Could not read the accessibility tree: ${(e as Error).message}`);

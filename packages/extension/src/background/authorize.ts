@@ -33,7 +33,7 @@ const TABS_ACTIONS: Record<string, { level: Level | "none"; sensitive?: Sensitiv
   attach: { level: "read", sensitive: "f" },
 };
 
-const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f", "g"]);
+const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f"]);
 
 /** Where the URL being authorized comes from. */
 export type UrlSource = "tab" | "param" | "tab-or-param" | "download" | "attach-target" | "none";
@@ -66,8 +66,6 @@ export function requirementsFor(tool: ToolLike, params: Record<string, unknown>)
   let sensitive: SensitiveCategory | undefined = normalizeCat(tool.sensitive) ?? STATIC_SENSITIVE[tool.name];
   const when = tool.sensitiveWhen ?? (tool.name === "nav.wait" ? { param: "for", values: ["fn"] } : undefined);
   if (sensitive && when && !when.values.includes(String(params[when.param]))) sensitive = undefined;
-  // g (auth) needs the account, so the auth handler gates it with requireSensitive(..., "g", ..., {auth}).
-  if (sensitive === "g") sensitive = undefined;
   if (tool.name === "nav.goto") return { level: level ?? "act", sensitive, urlSource: "param", needsTab: false, tabOptional: true };
   if (tool.name === "downloads.read") return { level: null, sensitive: sensitive ?? "e", urlSource: "download", needsTab: false };
   if (NO_TAB.has(tool.name)) return { level: null, sensitive, urlSource: "none", needsTab: false };

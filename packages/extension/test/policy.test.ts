@@ -178,34 +178,6 @@ describe("sensitive gate (D18)", () => {
   });
 });
 
-describe("auth category g (M6)", () => {
-  const on = (extra = {}) => base({ sites: { [A]: { policy: "full", auth: true, ...extra } } });
-  it("is denied unless sign-in is enabled for the origin", () => {
-    expect(resolve(base({ sites: { [A]: { policy: "full" } } }), req({ sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("not enabled") });
-  });
-  it("asks when enabled, and Always remembers that account only", () => {
-    expect(resolve(on(), req({ sensitive: "g", accountId: "acct1" }))).toMatchObject({ decision: "ask", category: "g" });
-    const st = applySensitiveAnswer(on(), A, "g", "always", "acct1");
-    expect(st.sites[A].authAlways).toEqual(["acct1"]);
-    expect(resolve(st, req({ sensitive: "g", accountId: "acct1" })).decision).toBe("allow");
-    expect(resolve(st, req({ sensitive: "g", accountId: "acct2" })).decision).toBe("ask");
-    expect(applySensitiveAnswer(st, A, "g", "always", "acct1")).toBe(st);
-    expect(applySensitiveAnswer(st, A, "g", "always")).toBe(st);
-  });
-  it("pre-approving a does not cover g, devAllowSensitive does not skip it", () => {
-    const st = applySensitiveAnswer(on(), A, "a", "always");
-    expect(resolve({ ...st, devAllowSensitive: true }, req({ sensitive: "g", accountId: "x" })).decision).toBe("ask");
-  });
-  it("banking hosts stay denied for auth even when enabled and removed from the denylist", () => {
-    const o = "https://www.chase.com";
-    const st = base({ denylist: [], sites: { [o]: { policy: "full", auth: true } } });
-    expect(resolve(st, req({ url: `${o}/login`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("never signs in") });
-  });
-  it("needs an http(s) page", () => {
-    expect(resolve(base(), req({ url: "about:blank", level: null, sensitive: "g" }))).toMatchObject({ decision: "deny" });
-  });
-});
-
 describe("effectiveLevel (session.permissions)", () => {
   it("reports stored, once, denylist, token cap", () => {
     expect(effectiveLevel(base(), { sessionId: "s1", cap: "full", sites: [], url: `${A}/` })).toMatchObject({ level: "ask" });

@@ -5,17 +5,15 @@ import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionM
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
-import { onAuthBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
 import { disposeDrivers, driverFor } from "./driver";
 import { getDownload } from "./downloads";
-import { extraHandlers, fireKilled } from "./handlerRegistry";
 import { broadcast, feedAll, feedPush } from "./feed";
 import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
 import type { PromptInfo } from "./prompts";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
-import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
+import { endSession, getSession, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { handlers } from "./tools";
 
@@ -49,7 +47,6 @@ const bridge = createBridgeClient({
   clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 });
 setFilesSender((m) => bridge.send(m));
-setAuthSender((m) => bridge.send(m));
 
 function sendEvent(event: string, data: Record<string, unknown> = {}) {
   bridge.send({ type: "event", event, data });
@@ -65,10 +62,6 @@ function onBridgeMessage(msg: any) {
       break;
     case "files.resolved":
       onFilesResolved(msg);
-      break;
-    case "auth.accounts.result":
-    case "secret":
-      onAuthBridgeMessage(msg);
       break;
   }
 }
@@ -104,7 +97,7 @@ export const router = createRouter<Session>({
   },
   authorize: (r) => authorize({ meta: r.meta, url: r.url, level: r.level, sensitive: r.sensitive, tool: r.action ? `${r.tool} ${r.action}` : r.tool, summary: r.summary, reasons: r.reasons, tabId: r.tabId }),
   holdApproval,
-  handler: (name) => (extraHandlers[name] ?? sessionHandlers[name] ?? (handlers as Record<string, any>)[name]) as any,
+  handler: (name) => (sessionHandlers[name] ?? (handlers as Record<string, any>)[name]) as any,
   sensitivePaths: async (tool, p, tabId, url) => {
     if (tabId == null) return [];
     const out: string[] = [];
@@ -215,8 +208,6 @@ async function kill() {
   router.abortAll();
   prompts.dropAll("killed");
   rejectAllFiles(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
-  fireKilled();
-  endAllHandoffs();
   for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
   await clearGrants();
@@ -254,7 +245,7 @@ function stoppedTabs() {
 
 async function uiState() {
   const s = await getSettings();
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), stoppedTabs: stoppedTabs(), version: VERSION, extensionId: chrome.runtime.id };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -288,8 +279,6 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return { ok: answerPrompt(msg.promptId ?? msg.id, msg.answer) };
       case "ui.prompt.get":
         return pendingPrompts().find((p) => p.promptId === msg.id) ?? null;
-      case "ui.handoff":
-        return { ok: endHandoff(Number(msg.tabId), msg.result === "done" ? "done" : "cancel") };
       case "ui.resumeTab": {
         const t = peekCdpTab(Number(msg.tabId));
         if (t) t.userDetached = false;

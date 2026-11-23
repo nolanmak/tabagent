@@ -20,7 +20,7 @@ vi.mock("../src/background/refstore", async () => {
 });
 vi.mock("../src/background/cdp", () => ({ getCdpTab: () => null, peekCdpTab: () => null, sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)) }));
 
-const { CdpDriver, addMaskHook, mapEls, refSource } = await import("../src/background/driver");
+const { CdpDriver, mapEls, refSource } = await import("../src/background/driver");
 
 const OK: Observation = { attached: true, visible: true, enabled: true, editable: true, box: { x: 10, y: 10, w: 100, h: 20 }, box2: { x: 10, y: 10, w: 100, h: 20 }, inView: true, point: { x: 60, y: 20 }, hit: { ok: true } };
 
@@ -267,19 +267,6 @@ describe("CdpDriver frames (#19) and find (#26)", () => {
     const ref = await refOf(f.drv, /Click me/);
     const r = await f.drv.find({ by: "role", value: "button", name: "Click me" });
     expect(r).toEqual({ matches: [{ ref, role: "button", name: "Click me" }], truncated: false });
-  });
-
-  it("mask hooks mask extra nodes", async () => {
-    const f = fake("index");
-    const search = loadAx("index").nodes.find((n) => n.name?.value === "Search")!;
-    search.value = { value: "secret" };
-    const origSend = f.tab.send;
-    f.tab.send = async (m: string, p: any, sid?: string) => (m === "Accessibility.getFullAXTree" ? { nodes: loadAx("index").nodes.map((n) => (n.nodeId === search.nodeId ? search : n)) } : origSend(m, p, sid));
-    const off = addMaskHook((_t, id) => id === search.backendDOMNodeId);
-    const s = await f.drv.snapshot({});
-    expect(s.text).toMatch(/searchbox "Search" \[ref=e\d+\] value="••••"/);
-    off();
-    expect((await f.drv.snapshot({})).text).toContain('value="secret"');
   });
 
   it("mapEls and refSource helpers", () => {

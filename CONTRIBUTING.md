@@ -15,17 +15,13 @@ build has a fixed extension ID; the Web Store build (`TABAGENT_STORE_BUILD=1`) d
 
 | Script | What it does | CI job |
 |---|---|---|
-| `npm run lint` | ESLint, and checks `docs/tools.md` / `docs/lite-mode.md` are current | lint |
+| `npm run lint` | ESLint | lint |
 | `npm run typecheck` | `tsc --noEmit` over packages, tests and e2e | typecheck |
-| `npm test` | Vitest unit tests (`packages/*/test`, `bench/test`, `scripts/test`) | |
+| `npm test` | Vitest unit tests (`packages/*/test`) | |
 | `npm run test:coverage` | unit tests with coverage floors | unit |
 | `npm run build` | extension then bridge | build |
-| `npm run test:release` | tests against the build: `--version`, MV3 manifest, permission justifications, example configs, `npm pack` install | build |
 | `npm run e2e` | Playwright with the real extension, bridge and an MCP client | e2e |
 | `npm run tool-budget` | MCP `tools/list` size per profile (core ≤ 2000, full ≤ 8000 tokens) | tool-budget |
-| `npm run docs:gen` | regenerate the tool reference and lite-mode matrix from the registry | |
-| `npm run check-versions` | npm and extension versions agree | build |
-| `npm run bench -- --dry-run` | benchmark with a scripted fake agent | (in `npm test`) |
 
 CI order: lint → typecheck → unit → build → e2e and tool-budget. Branch protection on `main`
 requires all of them.
@@ -54,6 +50,5 @@ Read the roadmap (#28) and [docs/DESIGN.md](docs/DESIGN.md) first. The rules:
 
 A new tool needs a registry entry in `packages/protocol` (params, result, level, sensitive
 category, `pageContent`, profiles, `lite`, `handledBy`), an extension handler, an e2e test against
-a fixture page, and `npm run docs:gen`. The registry drives the MCP list, REST routes and CLI. If it
-pushes the `core` or `full` profile over budget, `npm run tool-budget` fails. A new Chrome
-permission must be justified in [docs/store/permissions.md](docs/store/permissions.md).
+a fixture page. The registry drives the MCP list, REST routes and CLI. If it
+pushes the `core` or `full` profile over budget, `npm run tool-budget` fails.

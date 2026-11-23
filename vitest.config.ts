@@ -1,10 +1,7 @@
 // Root Vitest config (#25).
 //
-// Two projects:
+// Project:
 //   unit  - pure modules, no build needed. `npm test` / `npm run test:coverage`.
-//   release - checks against built artifacts (packages/*/dist): bridge --version,
-//           extension manifest, permission justifications, example MCP configs,
-//           npm packaging. `npm run test:release`, run after `npm run build`.
 //
 // Coverage floors are the TDD rules in roadmap #28: protocol 90% lines,
 // bridge 80%, extension *pure modules* 80%. Adapters (chrome.*, CDP, sockets)
@@ -36,19 +33,7 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["packages/*/test/**/*.test.ts", "bench/test/**/*.test.ts", "scripts/test/**/*.test.ts", "test/unit/**/*.test.ts"],
-        },
-      },
-      {
-        resolve: { alias },
-        test: {
-          name: "release",
-          environment: "node",
-          include: ["test/release/**/*.test.ts"],
-          testTimeout: 120_000,
-          hookTimeout: 120_000,
-          // Spawns bridges on temp ports; keep it serial to make failures readable.
-          fileParallelism: false,
+          include: ["packages/*/test/**/*.test.ts", "scripts/test/**/*.test.ts", "test/unit/**/*.test.ts"],
         },
       },
     ],
@@ -57,7 +42,7 @@ export default defineConfig({
       reporter: ["text-summary", "text", "json-summary"],
       include: ["packages/protocol/src/**/*.ts", "packages/bridge/src/**/*.ts", ...EXTENSION_PURE],
       // cli.ts is the process entry point; it is exercised by spawning the built
-      // binary (test/release, e2e), which v8 coverage in this process cannot see.
+      // binary (e2e), which v8 coverage in this process cannot see.
       exclude: ["packages/bridge/src/cli.ts", "**/*.d.ts", "**/test/**"],
       thresholds: {
         "packages/protocol/src/**/*.ts": { lines: 90 },

@@ -7,8 +7,6 @@
 import { clickGateInfo, clickSensitivity, comboOptions, describeFields, fieldInfo, isFormControl, keyGateInfo, keySensitivity, requestSubmit, resolveFileInput, submitInfo } from "./forms";
 import { extractLinks, extractSchema, extractTable, markdown, nextControl, storage, text } from "./extract";
 
-import { authApi } from "./auth";
-
 export type El = Element;
 export interface Ret<T = unknown> {
   value: T;
@@ -1028,7 +1026,6 @@ async function callLite(_self: unknown, name: string, id: number | null, docId: 
 }
 
 const api = {
-  ...authApi, // M6 auth (pagelib/auth.ts)
   invoke: (self: El | null, name: string, args: unknown[]) => invoke(self, name, args),
   callLite,
   // lite registry

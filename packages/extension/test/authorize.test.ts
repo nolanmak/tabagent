@@ -26,9 +26,6 @@ describe("requirementsFor: every D18 static path reaches the gate", () => {
     expect(requirementsFor({ name: "nav.wait", level: "read", sensitive: true }, { for: "fn" }).sensitive).toBe("c");
     expect(requirementsFor({ name: "tabs", level: "none" }, { action: "attach" })).toMatchObject({ level: "read", sensitive: "f" });
   });
-  it("category g is left to the auth handler", () => {
-    expect(requirementsFor({ name: "auth.login", level: "act", sensitive: "g" }, {}).sensitive).toBeUndefined();
-  });
 });
 
 describe("requirementsFor: levels and tab resolution", () => {

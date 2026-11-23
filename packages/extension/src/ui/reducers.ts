@@ -60,9 +60,8 @@ export function summarizeParams(params: unknown, max = 60): string {
   return parts.join(" ");
 }
 
-export function promptTitle(p: { kind: string; sessionLabel?: string; label?: string; level?: string; origin: string; summary?: string; sensitive?: { category: string }; auth?: { accountMasked: string; provider: string } }): string {
+export function promptTitle(p: { kind: string; sessionLabel?: string; label?: string; level?: string; origin: string; summary?: string; sensitive?: { category: string } }): string {
   const who = p.sessionLabel ?? p.label ?? "An agent";
-  if (p.sensitive?.category === "g" && p.auth) return `Sign in to ${p.origin} as ${p.auth.accountMasked} with ${p.auth.provider}?`;
   if (p.kind === "site") return `${who} wants ${p.level === "read" ? "to read" : p.level === "act" ? "to act on" : "full access to"} ${p.origin}`;
   return `${who} wants to ${p.summary ?? "do something sensitive"}`;
 }

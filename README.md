@@ -21,29 +21,26 @@ permissions you control.
 
 ## Quick start
 
-1. **Install the bridge** (Node 20+):
+1. **Build and start the bridge** (Node 20+):
 
    ```bash
-   npm i -g tabagent
-   tabagent serve            # prints a pairing code
+   npm install && npm run build
+   node packages/bridge/dist/cli.js serve    # prints a pairing code
    ```
 
-2. **Install the extension** from the Chrome Web Store, or load it unpacked: run
-   `chrome://extensions` → Developer mode → Load unpacked → the copy shipped in the npm package,
-   `$(npm root -g)/tabagent/dist/extension`.
+2. **Load the extension unpacked**: `chrome://extensions` → Developer mode → Load unpacked →
+   `packages/extension/dist`.
 
 3. **Pair**: open the TabAgent side panel (toolbar icon) and enter the code. `tabagent status`
    shows it again.
 
-4. **Connect your agent** (more in [examples/](examples)):
+4. **Connect your agent**:
 
    ```bash
    claude mcp add tabagent -- npx -y tabagent mcp
    codex  mcp add tabagent -- npx -y tabagent mcp
    tabagent skill install --claude --codex     # optional usage skill
    ```
-
-   Cursor: copy [examples/cursor/mcp.json](examples/cursor/mcp.json) to `.cursor/mcp.json`.
 
 5. Ask your agent to do something in the browser. It works in its own tab group; the first time it
    touches a site, TabAgent asks you in the side panel.
@@ -54,17 +51,8 @@ use `tabagent <tool> --json '{…}'`.
 
 ## Docs
 
-- [Tool reference](docs/tools.md) (generated from the registry)
 - [Security model](docs/SECURITY.md)
-- [Lite mode (no debugger) support matrix](docs/lite-mode.md)
 - [Design](docs/DESIGN.md)
-- [Benchmark](bench/README.md)
-- [Release checklist](docs/release.md)
-
-## Benchmark
-
-20 scripted tasks on the repo's fixture site, checked by end-state assertions
-([bench/](bench/README.md)). No published run yet.
 
 ## Layout
 
@@ -73,8 +61,6 @@ packages/protocol   tool registry, envelopes, error codes (zod)
 packages/extension  MV3 extension: service worker, content scripts, side panel
 packages/bridge     Node daemon: MCP server, REST API, CLI (npm: tabagent)
 e2e/                Playwright tests with the real extension and bridge
-bench/              benchmark tasks and runner
-examples/           Claude Code, Codex, Cursor configs
 ```
 
 ## Contributing
