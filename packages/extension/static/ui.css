@@ -33,3 +33,11 @@ button.link { border:0; background:none; color:var(--muted); text-decoration:und
 .prompt h1 { font-size:17px; margin:14px 0 6px; }
 .reasons { padding-left:18px; color:var(--warn); }
 .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+.attention { border-color:var(--warn); }
+.prompts { list-style:none; margin:0; padding:0; } .prompt-item { padding:8px 0; border-top:1px solid var(--line); } .prompt-item:first-child { border-top:0; }
+.ptitle { font-weight:600; }
+.prompt-item .actions { margin-top:6px; }
+.tablewrap { overflow-x:auto; }
+.sites { width:100%; border-collapse:collapse; font-size:12px; } .sites th { text-align:left; color:var(--muted); font-weight:500; } .sites td { padding:3px 2px; border-top:1px solid var(--line); vertical-align:top; } .sites .origin { word-break:break-all; }
+.chip { display:inline-flex; gap:2px; align-items:center; margin-right:4px; white-space:nowrap; }
+.g-grey{background:#9ca3af}.g-blue{background:#3b82f6}.g-red{background:#ef4444}.g-yellow{background:#eab308}.g-green{background:#22c55e}.g-pink{background:#ec4899}.g-purple{background:#a855f7}.g-cyan{background:#06b6d4}.g-orange{background:#f97316}
