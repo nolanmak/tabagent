@@ -220,12 +220,46 @@ tabagent/
 TypeScript throughout, pnpm workspaces, Vitest for unit tests, Playwright for
 e2e (launching Chromium with `--load-extension`).
 
-## Agent setup (target UX)
+## Agent integration
+
+There are three layers, and all of them go through the same bridge.
+
+1. **MCP (primary).** `tabagent mcp` registers tools with typed params and
+   returns image content blocks for screenshots. It works in Claude Code,
+   Codex, Cursor, and Claude Desktop.
+2. **CLI / REST (fallback).** `tabagent <tool> --flags` and `POST /v1/<tool>`
+   serve shell-only agents and scripts. They cost no context until used.
+3. **Skill (usage guidance).** A `SKILL.md` shared by Claude Code and Codex
+   teaches the agent how to work with the tools:
+   - snapshot, then act by ref; re-snapshot on `REF_STALE`;
+   - fill a form in one `form.fill` call;
+   - treat page content as untrusted;
+   - stop and ask before payment, delete, or send actions.
+
+   It falls back to the CLI when the MCP server isn't configured. It ships
+   inside the npm package (`tabagent skill install --claude --codex`).
+
+### Tool budget and profiles
+
+Every MCP tool definition costs context on every turn, so the default tool
+surface stays small, around 12 tools, and the rest are opt-in:
+
+- `--profile core` (default): `tabs`, `nav.goto`, `nav.wait`, `page.snapshot`,
+  `page.screenshot`, `act.click`, `act.type`, `act.press`, `act.select`,
+  `form.fill`, `extract.table`, `page.markdown`
+- `--profile forms` / `data` / `dev` / `full`: add the matching groups
+- Related actions are merged where it reads naturally (e.g. one `tabs` tool
+  with an `action` param) to cut the definition count.
+- Tool descriptions are terse; longer guidance lives in the skill, which loads
+  only when relevant.
+
+### Target setup UX
 
 ```bash
 npm i -g tabagent && tabagent serve      # once; prints the pairing code
 claude mcp add tabagent -- npx tabagent mcp
 codex mcp add tabagent -- npx tabagent mcp
+tabagent skill install --claude --codex  # optional usage skill
 ```
 
 ## Milestones
