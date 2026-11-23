@@ -679,7 +679,7 @@ export function markdown(_self: unknown, maxChars = MAX_TEXT) {
   const root = mainRoot();
   const out = tidy(render(root, { depth: 0, plain: false, root }));
   const truncated = out.length > maxChars;
-  return { title: document.title, url: location.href, markdown: truncated ? out.slice(0, maxChars) : out, ...(truncated ? { truncated: true, totalChars: out.length } : {}) };
+  return { title: document.title, markdown: truncated ? out.slice(0, maxChars) : out, ...(truncated ? { truncated: true, totalChars: out.length } : {}) };
 }
 
 /** page.text: visible text of the main content (or of `el`), no markup. */

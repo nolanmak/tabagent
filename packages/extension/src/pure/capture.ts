@@ -229,8 +229,11 @@ export class Capture {
       throw new TabAgentError("NOT_FOUND", `Response body no longer available for ${id}`, "Chrome keeps bodies for a limited time; repeat the request and call network.get sooner.");
     }
     const truncated = body.length > BODY_MAX_CHARS;
+    const { url: _url, method: _m, ...meta } = this.item(e);
+    void _url;
+    void _m;
     return {
-      ...this.item(e),
+      ...meta,
       request: { url: e.url, method: e.method, headers: e.requestHeaders ?? {}, ...(e.postData ? { postData: e.postData } : {}) },
       response: e.status != null ? { status: e.status, statusText: e.statusText ?? "", mimeType: e.mimeType ?? "", headers: e.responseHeaders ?? {} } : null,
       ...(e.failed ? { failed: e.failed } : {}),
