@@ -95,7 +95,8 @@ function tablesIn(root: El | Document): El[] {
   return deepQueryAll(root as ParentNode, sel).filter((t) => !t.parentElement?.closest(sel));
 }
 
-export function extractTable(root: El | null, index?: number, cap = TABLE_ROW_CAP) {
+export function extractTable(root: El | null, index?: number | null, cap?: number | null) {
+  cap ??= TABLE_ROW_CAP;
   const tables = tablesIn(root ?? document);
   if (!tables.length) return { error: "No tables found" };
   let pickIndex = 0;
@@ -144,7 +145,8 @@ export function extractTable(root: El | null, index?: number, cap = TABLE_ROW_CA
 // ---------------------------------------------------------------------------
 // Links
 // ---------------------------------------------------------------------------
-export function extractLinks(root: El | null, filter?: string, limit = 500) {
+export function extractLinks(root: El | null, filter?: string | null, limit?: number | null) {
+  limit ??= 500;
   const seen = new Set<string>();
   const out: { text: string; href: string }[] = [];
   let truncated = false;
@@ -675,7 +677,9 @@ function tidy(s: string): string {
     .trim();
 }
 
-export function markdown(_self: unknown, maxChars = MAX_TEXT) {
+// Arguments cross CDP as JSON, so an omitted argument arrives as null: default with ??.
+export function markdown(_self: unknown, maxChars?: number | null) {
+  maxChars ??= MAX_TEXT;
   const root = mainRoot();
   const out = tidy(render(root, { depth: 0, plain: false, root }));
   const truncated = out.length > maxChars;
@@ -683,7 +687,8 @@ export function markdown(_self: unknown, maxChars = MAX_TEXT) {
 }
 
 /** page.text: visible text of the main content (or of `el`), no markup. */
-export function text(el: El | null, maxChars = MAX_TEXT) {
+export function text(el: El | null, maxChars?: number | null) {
+  maxChars ??= MAX_TEXT;
   const root = el ?? mainRoot();
   const out = tidy(render(root, { depth: 0, plain: true, root }));
   const truncated = out.length > maxChars;

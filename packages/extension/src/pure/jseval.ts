@@ -37,7 +37,6 @@ export async function runEval(send: Send, o: { expression: string; world: "main"
         awaitPromise: true,
         returnByValue: true,
         userGesture: true,
-        replMode: true,
         timeout,
       });
     } catch (e) {

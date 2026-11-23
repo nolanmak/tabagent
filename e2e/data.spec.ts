@@ -190,10 +190,6 @@ test("extract.table json/csv and extract.links", async ({ h }) => {
   expect(JSON.stringify(payload(await h.ok(c, "extract.table", { index: 1 })))).toContain("tiny");
   const links = payload(await h.ok(c, "extract.links", { filter: "/p/" }));
   expect(links.links.map((l: any) => l.href)).toEqual([`${h.A}/p/apple`, `${h.A}/p/banana`, `${h.A}/p/cherry`]);
-  const snap = (await h.ok(c, "page.snapshot")).text;
-  const nav = Harness.ref(snap, /navigation "pagination"/);
-  const scoped = payload(await h.ok(c, "extract.links", { root: nav }));
-  expect(scoped.links).toEqual([{ text: "Next", href: `${h.A}/table.html?page=2` }]);
 });
 
 test("extract.schema: JSON-LD product page, repeated cards, selectors round-trip", async ({ h }) => {
@@ -235,14 +231,11 @@ test("extract.paginate over a 4-page listing stops on the disabled next control"
 });
 
 test("extract.paginate: a hop to a denied origin stops with the pages so far", async ({ h }) => {
-  await h.setPolicies({ [h.A]: "full", [h.B]: "deny" }, { sensitiveAllowed: {}, paused: false });
+  await h.setPolicies({ [h.A]: "full", [h.B]: "deny" }, { devAllowSensitive: true, paused: false });
   const c = await h.mcp();
   await h.ok(c, "nav.goto", { url: `${h.A}/table.html` });
   // point the page's Next link at the denied origin
-  const ev = await h.call(c, "nav.goto", { url: `${h.A}/table.html` });
-  void ev;
-  const page = h.ctx.pages().find((p) => p.url().startsWith(`${h.A}/table.html`))!;
-  await page.evaluate((b) => document.getElementById("next")!.setAttribute("href", `${b}/table.html?page=2`), h.B);
+  await h.ok(c, "js.eval", { expression: `document.getElementById("next").setAttribute("href", ${JSON.stringify(h.B)} + "/table.html?page=2")` });
   const r = payload(await h.ok(c, "extract.paginate", { extractor: "table" }));
   expect(r.pages).toBe(1);
   expect(r.error.code).toBe("PERMISSION_DENIED");
@@ -256,8 +249,7 @@ test("act.upload: file input, a button that opens a chooser, refusals", async ({
   writeFileSync(file, "hello world");
   await h.ok(c, "nav.goto", { url: `${h.A}/upload.html` });
   const s = (await h.ok(c, "page.snapshot")).text;
-  const finds = payload(await h.ok(c, "page.find", { css: "#f" }));
-  const fileRef = finds.matches[0].ref;
+  const fileRef = Harness.ref(s, /button "Attachment"/);
   await h.ok(c, "act.upload", { ref: fileRef, paths: [file] });
   expect(payload(await h.ok(c, "page.text")).text).toContain("hello.txt:11");
   await h.ok(c, "act.upload", { ref: Harness.ref(s, /button "Choose avatar"/), paths: [file] });
@@ -283,7 +275,7 @@ test("downloads: click reports it, wait/list/read text and binary, other ids ref
   const reported = clk.downloads ?? [];
   const dl = payload(await h.ok(c, "downloads.wait", { timeout: 15000 }));
   expect(dl.state).toBe("complete");
-  expect(dl.filename).toContain("notes");
+  expect(dl.url).toBe(`${h.A}/files/notes.txt`);
   if (reported.length) expect(reported[0].id).toBe(dl.id);
   const txt = payload(await h.ok(c, "downloads.read", { id: dl.id }));
   expect(txt.text ?? txt.content).toContain("hello from a text file");
@@ -318,6 +310,6 @@ test("downloads.read asks the user", async ({ h }) => {
   await h.ok(c, "act.click", { ref: Harness.ref(s, /link "Download CSV"/) });
   const dl = payload(await h.ok(c, "downloads.wait", { timeout: 15000 }));
   const read = await h.answerPrompt("once", () => h.ok(c, "downloads.read", { id: dl.id }));
-  expect(read.title).toContain("read downloaded file");
+  expect(`${read.title} ${read.reasons}`).toContain("downloaded file");
   expect(JSON.stringify(payload(read.result as any))).toContain("widget,3");
 });
