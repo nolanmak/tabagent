@@ -217,7 +217,7 @@ describe("Bitwarden provider (bw, #37)", () => {
   });
 
   it("a slow bw is killed after the timeout → TIMEOUT", async () => {
-    const slowRunner: Runner = { run: (b, a, o) => nodeRunner().run(b, a, { ...o, timeoutMs: 300 }) };
+    const slowRunner: Runner = { run: (b, a, o) => nodeRunner().run(b, a, a[0] === "list" ? { ...o, timeoutMs: 1500 } : o) };
     const p = bw({ key: KEY, items: [gh()], slowList: 5_000 }, { runner: slowRunner });
     await p.setSession(KEY); // its sync times out, swallowed
     await expect(p.sync()).rejects.toMatchObject({ code: "TIMEOUT" });

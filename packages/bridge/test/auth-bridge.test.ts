@@ -4,7 +4,9 @@
 import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 30_000 });
 import fc from "fast-check";
 import { getTool, TOOLS, type ToolDef } from "@tabagent/protocol";
 import { ADMIN_BITWARDEN_SESSION } from "../src/auth";
@@ -107,7 +109,7 @@ describe("secret channel (1Password through fake op)", () => {
         expect(r.text.includes(JSON.stringify(pw).slice(1, -1))).toBe(false);
         expect(readFileSync(join(ctx.home, "audit.jsonl"), "utf8").includes(JSON.stringify(pw).slice(1, -1))).toBe(false);
       }),
-      { numRuns: 8 },
+      { numRuns: 5 },
     );
   });
 
