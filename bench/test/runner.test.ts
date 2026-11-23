@@ -52,7 +52,7 @@ describe("bench dry run", () => {
     const { rows } = await main(["--dry-run", "--tasks", "link-url"], quiet);
     expect(rows.map((r: any) => r.task)).toEqual(["link-url"]);
     await expect(main(["--dry-run", "--fail", "bogus"], quiet)).rejects.toThrow(/unknown task/);
-    await expect(main([], quiet)).rejects.toThrow(/--agent claude-code/);
+    await expect(main([], quiet)).rejects.toThrow(/--agent claude-code or --agent codex/);
   });
 
   it("an agent or env error fails the task instead of the run", async () => {

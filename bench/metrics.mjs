@@ -98,3 +98,37 @@ function usageOf(u) {
     output: u.output_tokens ?? 0,
   };
 }
+
+/**
+ * Codex `exec --json` → normalised events. MCP calls arrive as completed
+ * `mcp_tool_call` items (named `mcp__<server>__<tool>` so the TabAgent filter
+ * applies), the last `agent_message` is the final answer, and every
+ * `turn.completed` carries usage. Codex follows the OpenAI convention:
+ * `cached_input_tokens` is a subset of `input_tokens` and reasoning tokens are
+ * a subset of `output_tokens`, so neither is added again.
+ */
+export function fromCodexJson(text) {
+  const events = [];
+  let final = null;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let j;
+    try {
+      j = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const it = j.item;
+    if (j.type === "item.completed" && it?.type === "mcp_tool_call") {
+      events.push({ type: "tool_call", name: `mcp__${it.server}__${it.tool}`, id: it.id });
+      const body = it.result ? blockText(it.result.content) : it.error ? String(it.error.message ?? JSON.stringify(it.error)) : "";
+      events.push({ type: "tool_result", text: body, id: it.id });
+    } else if (j.type === "item.completed" && it?.type === "agent_message" && typeof it.text === "string") {
+      final = it.text;
+    } else if (j.type === "turn.completed" && j.usage) {
+      events.push({ type: "usage", input: j.usage.input_tokens ?? 0, output: j.usage.output_tokens ?? 0 });
+    }
+  }
+  if (final !== null) events.push({ type: "final", text: final });
+  return events;
+}

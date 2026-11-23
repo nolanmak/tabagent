@@ -3,7 +3,7 @@
 //
 //   node bench/run.mjs --dry-run [--fail id,id] [--tasks id,id] [--out file.md]
 //       Scripted fake agent + recorded end states. No browser, no model. Runs in CI.
-//   node bench/run.mjs --agent claude-code --model <model> [--tasks ...] [--max-steps 30] [--out file.md]
+//   node bench/run.mjs --agent claude-code|codex --model <model> [--tasks ...] [--max-steps 30] [--out file.md]
 //       Real run: e2e harness browser + bridge, real agent. Needs model credentials
 //       (manual `bench` workflow, never a required check).
 import { writeFileSync } from "node:fs";
@@ -38,11 +38,12 @@ export async function main(argv, { log = console.log } = {}) {
     env = recordedEnv({ failing: list(f.fail) });
     agent = fakeAgent({ answers: env.answers });
   } else {
-    if (f.agent !== "claude-code") throw new Error("Real runs need --agent claude-code (or use --dry-run)");
+    if (f.agent !== "claude-code" && f.agent !== "codex") throw new Error("Real runs need --agent claude-code or --agent codex (or use --dry-run)");
     const { liveEnv, CLI } = await import("./live-env.mjs");
-    const { claudeCodeAgent } = await import("./agents/claude-code.mjs");
+    const model = typeof f.model === "string" ? f.model : undefined;
+    const make = f.agent === "codex" ? (await import("./agents/codex.mjs")).codexAgent : (await import("./agents/claude-code.mjs")).claudeCodeAgent;
     env = await liveEnv();
-    agent = claudeCodeAgent({ model: typeof f.model === "string" ? f.model : undefined, cli: CLI, tabagentHome: env.home });
+    agent = make({ model, cli: CLI, tabagentHome: env.home });
   }
   let rows;
   try {
