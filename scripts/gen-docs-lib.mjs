@@ -38,6 +38,19 @@ export function sensitiveLabel(s) {
   return String(s);
 }
 
+/** Static category, qualified by `sensitiveWhen` when the gate depends on a param. */
+export function toolSensitiveLabel(tool) {
+  const base = sensitiveLabel(tool.sensitive);
+  const w = tool.sensitiveWhen;
+  if (base && w && w.param) return `${base} (when ${w.param}=${(w.values ?? []).join("/")})`;
+  return base;
+}
+
+export function profilesLabel(tool) {
+  const ps = (tool.profiles ?? []).filter((p) => p !== "full");
+  return ps.length ? ps.join(", ") : "full only";
+}
+
 export function pageContentLabel(pc) {
   if (Array.isArray(pc)) return pc.length ? pc.map((f) => `\`${f}\``).join(", ") : "";
   if (pc === true) return "yes";
@@ -121,9 +134,9 @@ export function renderToolsDoc(tools, toJSONSchema) {
     const acts = actionsOf(t);
     const sens = acts?.some((a) => a.sensitive)
       ? acts.filter((a) => a.sensitive).map((a) => `${a.name}: ${a.sensitive}`).join("<br>")
-      : sensitiveLabel(t.sensitive);
+      : toolSensitiveLabel(t);
     out.push(
-      `| [\`${toolName(t)}\`](#${anchor(toolName(t))}) | \`${mcpName(toolName(t))}\` | ${levelLabel(t)} | ${esc(sens) || "—"} | ${(t.profiles ?? []).join(", ") || "—"} | ${liteOf(t)} | ${t.handledBy ?? "—"} |`,
+      `| [\`${toolName(t)}\`](#${anchor(toolName(t))}) | \`${mcpName(toolName(t))}\` | ${levelLabel(t)} | ${esc(sens) || "—"} | ${profilesLabel(t)} | ${liteOf(t)} | ${t.handledBy ?? "—"} |`,
     );
   }
   out.push("");
@@ -134,10 +147,10 @@ export function renderToolsDoc(tools, toJSONSchema) {
       const meta = [
         `MCP name \`${mcpName(toolName(t))}\``,
         `level ${levelLabel(t).replace(/<br>/g, ", ")}`,
-        `profiles ${(t.profiles ?? []).join(", ") || "—"}`,
+        `profiles ${profilesLabel(t)}`,
         `lite ${liteOf(t)}`,
       ];
-      const sens = sensitiveLabel(t.sensitive);
+      const sens = toolSensitiveLabel(t);
       if (sens) meta.push(`sensitive ${sens}`);
       if (t.handledBy) meta.push(`handled by ${t.handledBy}`);
       const pc = pageContentLabel(t.pageContent);

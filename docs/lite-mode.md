@@ -9,50 +9,50 @@ per origin in the extension settings and never switches on its own; `session.inf
 - **degraded**: works, with a documented difference (for example synthetic events with `isTrusted=false`).
 - **unsupported**: returns `UNSUPPORTED` without touching the page.
 
-Totals: 0 supported, 0 degraded, 0 unsupported, 43 not yet declared in the registry.
+Totals: 30 supported, 4 degraded, 9 unsupported.
 
 | Tool | Lite mode | Notes |
 |---|---|---|
-| `tabs` | unspecified |  |
-| `nav.goto` | unspecified |  |
-| `nav.back` | unspecified |  |
-| `nav.forward` | unspecified |  |
-| `nav.reload` | unspecified |  |
-| `nav.wait` | unspecified |  |
-| `page.snapshot` | unspecified |  |
-| `page.screenshot` | unspecified |  |
-| `page.text` | unspecified |  |
-| `page.markdown` | unspecified |  |
-| `page.find` | unspecified |  |
-| `act.click` | unspecified |  |
-| `act.dblclick` | unspecified |  |
-| `act.hover` | unspecified |  |
-| `act.type` | unspecified |  |
-| `act.fill` | unspecified |  |
-| `act.press` | unspecified |  |
-| `act.select` | unspecified |  |
-| `act.check` | unspecified |  |
-| `act.scroll` | unspecified |  |
-| `act.drag` | unspecified |  |
-| `act.upload` | unspecified |  |
-| `form.describe` | unspecified |  |
-| `form.fill` | unspecified |  |
-| `form.submit` | unspecified |  |
-| `extract.table` | unspecified |  |
-| `extract.links` | unspecified |  |
-| `extract.schema` | unspecified |  |
-| `extract.paginate` | unspecified |  |
-| `js.eval` | unspecified |  |
-| `console.list` | unspecified |  |
-| `network.list` | unspecified |  |
-| `network.get` | unspecified |  |
-| `network.waitFor` | unspecified |  |
-| `dialog.handle` | unspecified |  |
-| `cookies.get` | unspecified |  |
-| `storage.get` | unspecified |  |
-| `downloads.list` | unspecified |  |
-| `downloads.wait` | unspecified |  |
-| `downloads.read` | unspecified |  |
-| `session.info` | unspecified |  |
-| `session.permissions` | unspecified |  |
-| `session.end` | unspecified |  |
+| `tabs` | supported |  |
+| `nav.goto` | supported |  |
+| `nav.back` | supported |  |
+| `nav.forward` | supported |  |
+| `nav.reload` | supported |  |
+| `nav.wait` | supported |  |
+| `page.snapshot` | supported |  |
+| `page.screenshot` | degraded |  |
+| `page.text` | supported |  |
+| `page.markdown` | supported |  |
+| `page.find` | supported |  |
+| `act.click` | supported |  |
+| `act.dblclick` | degraded |  |
+| `act.hover` | degraded |  |
+| `act.type` | supported |  |
+| `act.fill` | supported |  |
+| `act.press` | supported |  |
+| `act.select` | supported |  |
+| `act.check` | supported |  |
+| `act.scroll` | supported |  |
+| `act.drag` | degraded |  |
+| `act.upload` | unsupported |  |
+| `form.describe` | supported |  |
+| `form.fill` | supported |  |
+| `form.submit` | supported |  |
+| `extract.table` | supported |  |
+| `extract.links` | supported |  |
+| `extract.schema` | supported |  |
+| `extract.paginate` | supported |  |
+| `dialog.handle` | unsupported |  |
+| `js.eval` | unsupported |  |
+| `console.list` | unsupported |  |
+| `network.list` | unsupported |  |
+| `network.get` | unsupported |  |
+| `network.waitFor` | unsupported |  |
+| `cookies.get` | unsupported |  |
+| `storage.get` | unsupported |  |
+| `downloads.list` | supported |  |
+| `downloads.wait` | supported |  |
+| `downloads.read` | supported |  |
+| `session.info` | supported |  |
+| `session.permissions` | supported |  |
+| `session.end` | supported |  |

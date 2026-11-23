@@ -12,62 +12,62 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 
 | Tool | MCP name | Level | Sensitive | Profiles | Lite | Handled by |
 |---|---|---|---|---|---|---|
-| [`tabs`](#tabs) | `tabs` | none | — | core | unspecified | — |
-| [`nav.goto`](#navgoto) | `nav_goto` | read | — | core | unspecified | — |
-| [`nav.back`](#navback) | `nav_back` | read | — | full | unspecified | — |
-| [`nav.forward`](#navforward) | `nav_forward` | read | — | full | unspecified | — |
-| [`nav.reload`](#navreload) | `nav_reload` | read | — | full | unspecified | — |
-| [`nav.wait`](#navwait) | `nav_wait` | read | — | core | unspecified | — |
-| [`page.snapshot`](#pagesnapshot) | `page_snapshot` | read | — | core | unspecified | — |
-| [`page.screenshot`](#pagescreenshot) | `page_screenshot` | read | — | core | unspecified | — |
-| [`page.text`](#pagetext) | `page_text` | read | — | data | unspecified | — |
-| [`page.markdown`](#pagemarkdown) | `page_markdown` | read | — | core | unspecified | — |
-| [`page.find`](#pagefind) | `page_find` | read | — | data, forms | unspecified | — |
-| [`act.click`](#actclick) | `act_click` | act | — | core | unspecified | — |
-| [`act.dblclick`](#actdblclick) | `act_dblclick` | act | — | full | unspecified | — |
-| [`act.hover`](#acthover) | `act_hover` | act | — | full | unspecified | — |
-| [`act.type`](#acttype) | `act_type` | act | — | core | unspecified | — |
-| [`act.fill`](#actfill) | `act_fill` | act | — | forms | unspecified | — |
-| [`act.press`](#actpress) | `act_press` | act | — | core | unspecified | — |
-| [`act.select`](#actselect) | `act_select` | act | — | core | unspecified | — |
-| [`act.check`](#actcheck) | `act_check` | act | — | forms | unspecified | — |
-| [`act.scroll`](#actscroll) | `act_scroll` | read | — | full | unspecified | — |
-| [`act.drag`](#actdrag) | `act_drag` | act | — | full | unspecified | — |
-| [`act.upload`](#actupload) | `act_upload` | act | — | forms | unspecified | — |
-| [`form.describe`](#formdescribe) | `form_describe` | read | — | core | unspecified | — |
-| [`form.fill`](#formfill) | `form_fill` | act | — | core | unspecified | — |
-| [`form.submit`](#formsubmit) | `form_submit` | act | — | forms | unspecified | — |
-| [`extract.table`](#extracttable) | `extract_table` | read | — | core | unspecified | — |
-| [`extract.links`](#extractlinks) | `extract_links` | read | — | data | unspecified | — |
-| [`extract.schema`](#extractschema) | `extract_schema` | read | — | data | unspecified | — |
-| [`extract.paginate`](#extractpaginate) | `extract_paginate` | read | — | data | unspecified | — |
-| [`js.eval`](#jseval) | `js_eval` | full | yes | dev | unspecified | — |
-| [`console.list`](#consolelist) | `console_list` | read | — | dev | unspecified | — |
-| [`network.list`](#networklist) | `network_list` | read | — | dev | unspecified | — |
-| [`network.get`](#networkget) | `network_get` | full | — | dev | unspecified | — |
-| [`network.waitFor`](#networkwaitfor) | `network_waitFor` | read | — | dev | unspecified | — |
-| [`dialog.handle`](#dialoghandle) | `dialog_handle` | act | — | core | unspecified | — |
-| [`cookies.get`](#cookiesget) | `cookies_get` | full | yes | dev | unspecified | — |
-| [`storage.get`](#storageget) | `storage_get` | full | yes | dev | unspecified | — |
-| [`downloads.list`](#downloadslist) | `downloads_list` | none | — | forms, data | unspecified | — |
-| [`downloads.wait`](#downloadswait) | `downloads_wait` | none | — | forms, data | unspecified | — |
-| [`downloads.read`](#downloadsread) | `downloads_read` | none | yes | data | unspecified | — |
-| [`session.info`](#sessioninfo) | `session_info` | none | — | full | unspecified | — |
-| [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full | unspecified | — |
-| [`session.end`](#sessionend) | `session_end` | none | — | full | unspecified | — |
+| [`tabs`](#tabs) | `tabs` | list: none<br>new: act<br>select: none<br>close: none<br>attach: read | attach: f | core | supported | extension |
+| [`nav.goto`](#navgoto) | `nav_goto` | act | — | core | supported | extension |
+| [`nav.back`](#navback) | `nav_back` | act | — | full only | supported | extension |
+| [`nav.forward`](#navforward) | `nav_forward` | act | — | full only | supported | extension |
+| [`nav.reload`](#navreload) | `nav_reload` | act | — | full only | supported | extension |
+| [`nav.wait`](#navwait) | `nav_wait` | read | c (when for=fn) | core | supported | extension |
+| [`page.snapshot`](#pagesnapshot) | `page_snapshot` | read | — | core | supported | extension |
+| [`page.screenshot`](#pagescreenshot) | `page_screenshot` | read | — | core | degraded | extension |
+| [`page.text`](#pagetext) | `page_text` | read | — | data | supported | extension |
+| [`page.markdown`](#pagemarkdown) | `page_markdown` | read | — | core | supported | extension |
+| [`page.find`](#pagefind) | `page_find` | read | — | data | supported | extension |
+| [`act.click`](#actclick) | `act_click` | act | — | core | supported | extension |
+| [`act.dblclick`](#actdblclick) | `act_dblclick` | act | — | full only | degraded | extension |
+| [`act.hover`](#acthover) | `act_hover` | act | — | full only | degraded | extension |
+| [`act.type`](#acttype) | `act_type` | act | — | core | supported | extension |
+| [`act.fill`](#actfill) | `act_fill` | act | — | forms | supported | extension |
+| [`act.press`](#actpress) | `act_press` | act | — | core | supported | extension |
+| [`act.select`](#actselect) | `act_select` | act | — | core | supported | extension |
+| [`act.check`](#actcheck) | `act_check` | act | — | forms | supported | extension |
+| [`act.scroll`](#actscroll) | `act_scroll` | read | — | full only | supported | extension |
+| [`act.drag`](#actdrag) | `act_drag` | act | — | full only | degraded | extension |
+| [`act.upload`](#actupload) | `act_upload` | act | e | forms | unsupported | both |
+| [`form.describe`](#formdescribe) | `form_describe` | read | — | forms | supported | extension |
+| [`form.fill`](#formfill) | `form_fill` | act | — | core | supported | extension |
+| [`form.submit`](#formsubmit) | `form_submit` | act | — | forms | supported | extension |
+| [`extract.table`](#extracttable) | `extract_table` | read | — | core | supported | extension |
+| [`extract.links`](#extractlinks) | `extract_links` | read | — | data | supported | extension |
+| [`extract.schema`](#extractschema) | `extract_schema` | read | — | data | supported | extension |
+| [`extract.paginate`](#extractpaginate) | `extract_paginate` | read | — | data | supported | extension |
+| [`dialog.handle`](#dialoghandle) | `dialog_handle` | act | — | core | unsupported | extension |
+| [`js.eval`](#jseval) | `js_eval` | full | c | dev | unsupported | extension |
+| [`console.list`](#consolelist) | `console_list` | read | — | dev | unsupported | extension |
+| [`network.list`](#networklist) | `network_list` | read | — | dev | unsupported | extension |
+| [`network.get`](#networkget) | `network_get` | full | d | dev | unsupported | extension |
+| [`network.waitFor`](#networkwaitfor) | `network_waitFor` | read | — | dev | unsupported | extension |
+| [`cookies.get`](#cookiesget) | `cookies_get` | full | d | dev | unsupported | extension |
+| [`storage.get`](#storageget) | `storage_get` | full | d | dev | unsupported | extension |
+| [`downloads.list`](#downloadslist) | `downloads_list` | none | — | data | supported | extension |
+| [`downloads.wait`](#downloadswait) | `downloads_wait` | none | — | data | supported | extension |
+| [`downloads.read`](#downloadsread) | `downloads_read` | none | e | data | supported | both |
+| [`session.info`](#sessioninfo) | `session_info` | none | — | full only | supported | extension |
+| [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
+| [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
 
 ## tabs
 
 ### tabs
 
-Manage this session's tabs. action=list\|new\|select\|close\|attach. 'attach' adopts a user tab (asks the user).
+Manage this session's tabs. action=list\|new\|select\|close\|attach. attach adopts the user's active tab (always asks).
 
-MCP name `tabs` · level none · profiles core · lite unspecified
+MCP name `tabs` · level list: none, new: act, select: none, close: none, attach: read · profiles core · lite supported · handled by extension · page content `tabs[].url`, `tabs[].title`, `url`, `title`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `action` | "list" \| "new" \| "select" \| "close" \| "attach" | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `url` | string |  | For new |
 
 ## nav
@@ -76,57 +76,60 @@ MCP name `tabs` · level none · profiles core · lite unspecified
 
 Navigate the tab to a URL and wait for load.
 
-MCP name `nav_goto` · level read · profiles core · lite unspecified
+MCP name `nav_goto` · level act · profiles core · lite supported · handled by extension · page content `url`, `title`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `url` | string | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `waitUntil` | "load" \| "domcontentloaded" \| "networkidle" \| "none" |  |  |
-| `timeout` | integer |  | ms, default 5000 |
+| `timeout` | integer |  | ms, default 30000 |
 
 ### nav.back
 
 Go back in history.
 
-MCP name `nav_back` · level read · profiles full · lite unspecified
+MCP name `nav_back` · level act · profiles full only · lite supported · handled by extension · page content `url`, `title`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 30000 |
 
 ### nav.forward
 
 Go forward in history.
 
-MCP name `nav_forward` · level read · profiles full · lite unspecified
+MCP name `nav_forward` · level act · profiles full only · lite supported · handled by extension · page content `url`, `title`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 30000 |
 
 ### nav.reload
 
 Reload the tab.
 
-MCP name `nav_reload` · level read · profiles full · lite unspecified
+MCP name `nav_reload` · level act · profiles full only · lite supported · handled by extension · page content `url`, `title`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 30000 |
 
 ### nav.wait
 
-Wait for: load \| networkidle \| selector (CSS) \| text \| url (substring or /regex/) \| fn (JS predicate). 
+Wait for: load \| networkidle \| selector (CSS) \| text \| url (substring or /regex/) \| fn (JS predicate; asks the user).
 
-MCP name `nav_wait` · level read · profiles core · lite unspecified
+MCP name `nav_wait` · level read · profiles core · lite supported · sensitive c (when for=fn) · handled by extension · page content `url`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `for` | "load" \| "networkidle" \| "selector" \| "text" \| "url" \| "fn" | yes |  |
 | `value` | string |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 30000 |
 
 ## page
 
@@ -134,11 +137,11 @@ MCP name `nav_wait` · level read · profiles core · lite unspecified
 
 Accessibility snapshot with [ref=eN] on interactive nodes. Act on refs. diff=true returns only changes.
 
-MCP name `page_snapshot` · level read · profiles core · lite unspecified · page content yes
+MCP name `page_snapshot` · level read · profiles core · lite supported · handled by extension · page content `snapshot`, `title`, `url`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `mode` | "interactive" \| "full" |  |  |
 | `root` | string |  | Element ref from page.snapshot, e.g. e12 |
 | `maxTokens` | integer |  |  |
@@ -146,56 +149,55 @@ MCP name `page_snapshot` · level read · profiles core · lite unspecified · p
 
 ### page.screenshot
 
-Screenshot viewport, full page, or an element ref. marks=true labels refs on the image.
+Screenshot the viewport, full page, or an element ref. marks=true labels refs on the image.
 
-MCP name `page_screenshot` · level read · profiles core · lite unspecified
+MCP name `page_screenshot` · level read · profiles core · lite degraded · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
-| `fullPage` | boolean |  |  |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `target` | "viewport" \| "full" \| "ref" |  | default viewport |
 | `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `marks` | boolean |  |  |
 | `format` | "png" \| "jpeg" |  |  |
+| `quality` | integer |  |  |
+| `marks` | boolean |  |  |
 
 ### page.text
 
 Visible text of the page (or of a ref).
 
-MCP name `page_text` · level read · profiles data · lite unspecified · page content yes
+MCP name `page_text` · level read · profiles data · lite supported · handled by extension · page content `text`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
 
 ### page.markdown
 
 Main readable content as Markdown.
 
-MCP name `page_markdown` · level read · profiles core · lite unspecified · page content yes
+MCP name `page_markdown` · level read · profiles core · lite supported · handled by extension · page content `markdown`, `title`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `maxChars` | integer |  |  |
 
 ### page.find
 
-Find elements by text, role(+name), label, css, or xpath. Returns refs.
+Find elements by text, role (+name), label, css or xpath. Returns refs.
 
-MCP name `page_find` · level read · profiles data, forms · lite unspecified · page content yes
+MCP name `page_find` · level read · profiles data · lite supported · handled by extension · page content `matches`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
-| `text` | string |  |  |
-| `role` | string |  |  |
-| `name` | string |  |  |
-| `label` | string |  |  |
-| `css` | string |  |  |
-| `xpath` | string |  |  |
-| `limit` | integer |  |  |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `by` | "text" \| "role" \| "label" \| "css" \| "xpath" | yes |  |
+| `value` | string | yes |  |
+| `name` | string |  | Accessible name, with by=role |
+| `root` | string |  | Element ref from page.snapshot, e.g. e12 |
+| `timeout` | integer |  | ms, default 5000 |
 
 ## act
 
@@ -203,12 +205,12 @@ MCP name `page_find` · level read · profiles data, forms · lite unspecified �
 
 Click an element (auto-waits until actionable).
 
-MCP name `act_click` · level act · profiles core · lite unspecified
+MCP name `act_click` · level act · profiles core · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `button` | "left" \| "right" \| "middle" |  |  |
 | `clickCount` | integer |  |  |
 | `modifiers` | "Alt" \| "Control" \| "Meta" \| "Shift"[] |  |  |
@@ -218,37 +220,37 @@ MCP name `act_click` · level act · profiles core · lite unspecified
 
 Double-click an element.
 
-MCP name `act_dblclick` · level act · profiles full · lite unspecified
+MCP name `act_dblclick` · level act · profiles full only · lite degraded · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `timeout` | integer |  | ms, default 5000 |
 
 ### act.hover
 
 Hover an element.
 
-MCP name `act_hover` · level act · profiles full · lite unspecified
+MCP name `act_hover` · level act · profiles full only · lite degraded · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `timeout` | integer |  | ms, default 5000 |
 
 ### act.type
 
-Type text with real key events (into ref if given, else focused element). submit=true presses Enter.
+Type text with real key events (into ref if given, else the focused element). submit=true presses Enter.
 
-MCP name `act_type` · level act · profiles core · lite unspecified
+MCP name `act_type` · level act · profiles core · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `text` | string | yes |  |
 | `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `submit` | boolean |  |  |
 | `clear` | boolean |  |  |
 | `timeout` | integer |  | ms, default 5000 |
@@ -257,90 +259,92 @@ MCP name `act_type` · level act · profiles core · lite unspecified
 
 Set an input/textarea/contenteditable value (clears first; React-safe).
 
-MCP name `act_fill` · level act · profiles forms · lite unspecified
+MCP name `act_fill` · level act · profiles forms · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
 | `value` | string | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `timeout` | integer |  | ms, default 5000 |
 
 ### act.press
 
 Press a key or chord, e.g. Enter, Tab, Escape, ArrowDown, Control+a, Meta+Shift+k.
 
-MCP name `act_press` · level act · profiles core · lite unspecified
+MCP name `act_press` · level act · profiles core · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `key` | string | yes |  |
 | `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 5000 |
 
 ### act.select
 
-Select option(s) in a <select> or ARIA combobox/listbox by value or label.
+Select option(s) in a <select> or ARIA combobox/listbox by label or value.
 
-MCP name `act_select` · level act · profiles core · lite unspecified
+MCP name `act_select` · level act · profiles core · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
 | `values` | string[] | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `timeout` | integer |  | ms, default 5000 |
 
 ### act.check
 
 Set a checkbox/radio/switch to checked or unchecked.
 
-MCP name `act_check` · level act · profiles forms · lite unspecified
+MCP name `act_check` · level act · profiles forms · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
 | `checked` | boolean |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `timeout` | integer |  | ms, default 5000 |
 
 ### act.scroll
 
 Scroll a ref into view, or scroll the page/ref by dx,dy pixels.
 
-MCP name `act_scroll` · level read · profiles full · lite unspecified
+MCP name `act_scroll` · level read · profiles full only · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
 | `dx` | number |  |  |
 | `dy` | number |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 
 ### act.drag
 
 Drag from one ref to another.
 
-MCP name `act_drag` · level act · profiles full · lite unspecified
+MCP name `act_drag` · level act · profiles full only · lite degraded · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `from` | string | yes | Element ref from page.snapshot, e.g. e12 |
 | `to` | string | yes | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `timeout` | integer |  | ms, default 5000 |
 
 ### act.upload
 
-Set files on a file input. Paths must be inside the bridge's allowed upload dirs.
+Set files on a file input. Paths must be inside the bridge's upload dirs (default ~/.tabagent/uploads). Asks the user.
 
-MCP name `act_upload` · level act · profiles forms · lite unspecified
+MCP name `act_upload` · level act · profiles forms · lite unsupported · sensitive e · handled by both
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string | yes | Element ref from page.snapshot, e.g. e12 |
 | `paths` | string[] | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 5000 |
 
 ## form
 
@@ -348,35 +352,37 @@ MCP name `act_upload` · level act · profiles forms · lite unspecified
 
 List form fields: ref, label, type, required, options, current value.
 
-MCP name `form_describe` · level read · profiles core · lite unspecified · page content yes
+MCP name `form_describe` · level read · profiles forms · lite supported · handled by extension · page content `fields`, `forms`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `ref` | string |  | A form or container ref; default: all forms |
 
 ### form.fill
 
-Fill many fields in one call. fields maps label/name/placeholder/ref -> value (string, boolean for checkboxes, string[] for multi-select).
+Fill many fields in one call: fields maps label or ref -> value (string; boolean for checkboxes; string[] for multi-select).
 
-MCP name `form_fill` · level act · profiles core · lite unspecified
+MCP name `form_fill` · level act · profiles core · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `fields` | object | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `ref` | string |  | Limit to this form/container |
+| `timeout` | integer |  | ms per field, default 5000 |
 
 ### form.submit
 
-Submit a form (by form ref, or the form containing ref). Sensitive forms ask the user.
+Submit a form (by form ref, or the form containing ref). Password/card forms ask the user.
 
-MCP name `form_submit` · level act · profiles forms · lite unspecified
+MCP name `form_submit` · level act · profiles forms · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 5000 |
 
 ## extract
 
@@ -384,54 +390,70 @@ MCP name `form_submit` · level act · profiles forms · lite unspecified
 
 Extract an HTML/ARIA table to rows. Picks the largest table unless ref/index given.
 
-MCP name `extract_table` · level read · profiles core · lite unspecified · page content yes
+MCP name `extract_table` · level read · profiles core · lite supported · handled by extension · page content `headers`, `rows`, `csv`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `ref` | string |  | Element ref from page.snapshot, e.g. e12 |
 | `index` | integer |  |  |
 | `format` | "json" \| "csv" |  |  |
 
 ### extract.links
 
-All links (text, href), optionally filtered by substring/regex on text or href.
+All links (text, href), optionally filtered by substring or /regex/ on text or href.
 
-MCP name `extract_links` · level read · profiles data · lite unspecified · page content yes
+MCP name `extract_links` · level read · profiles data · lite supported · handled by extension · page content `links`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `root` | string |  | Element ref from page.snapshot, e.g. e12 |
 | `filter` | string |  |  |
 | `limit` | integer |  |  |
 
 ### extract.schema
 
-Extract data matching a JSON Schema (object or array of objects). Returns data plus the selectors used. hint = CSS selector of repeated items.
+Extract structured data (JSON-LD, microdata, then repeated items). Returns data plus selectors; pass selectors back to skip detection.
 
-MCP name `extract_schema` · level read · profiles data · lite unspecified · page content yes
+MCP name `extract_schema` · level read · profiles data · lite supported · handled by extension · page content `data`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `schema` | object | yes |  |
+| `schema` | object |  |  |
 | `hint` | string |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `selectors` | object |  |  |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 
 ### extract.paginate
 
-Run an extractor (table\|links\|schema) across pages, following a next link (nextText, default 'Next') up to maxPages. Dedupes rows.
+Run an extractor (table\|links\|schema) across pages, following next (ref or CSS; default: a Next control) up to maxPages (5).
 
-MCP name `extract_paginate` · level read · profiles data · lite unspecified · page content yes
+MCP name `extract_paginate` · level read · profiles data · lite supported · handled by extension · page content `rows`, `links`, `data`, `headers`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `extractor` | "table" \| "links" \| "schema" | yes |  |
-| `schema` | object |  |  |
-| `hint` | string |  |  |
-| `nextText` | string |  |  |
-| `nextSelector` | string |  |  |
+| `next` | string |  |  |
 | `maxPages` | integer |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `schema` | object |  |  |
+| `selectors` | object |  |  |
+| `timeout` | integer |  | ms per page, default 5000 |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+
+## dialog
+
+### dialog.handle
+
+Accept or dismiss the open alert/confirm/prompt/beforeunload dialog.
+
+MCP name `dialog_handle` · level act · profiles core · lite unsupported · handled by extension · page content `dialog`
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `action` | "accept" \| "dismiss" | yes |  |
+| `promptText` | string |  |  |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 
 ## dev
 
@@ -439,145 +461,135 @@ MCP name `extract_paginate` · level read · profiles data · lite unspecified �
 
 Evaluate a JS expression (awaits promises, returns JSON). world=main\|isolated. Asks the user.
 
-MCP name `js_eval` · level full · profiles dev · lite unspecified · sensitive yes · page content yes
+MCP name `js_eval` · level full · profiles dev · lite unsupported · sensitive c · handled by extension · page content `value`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `expression` | string | yes |  |
 | `world` | "main" \| "isolated" |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 5000 |
 
 ### console.list
 
 Recent console messages and errors for the tab.
 
-MCP name `console_list` · level read · profiles dev · lite unspecified · page content yes
+MCP name `console_list` · level read · profiles dev · lite unsupported · handled by extension · page content `messages`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `level` | string |  |  |
 | `limit` | integer |  |  |
 
 ### network.list
 
-Recent network requests. Filter by url substring, method, status, resourceType.
+Recent requests of the top-level page (no headers or bodies). Filter by url substring, method, status, type.
 
-MCP name `network_list` · level read · profiles dev · lite unspecified
+MCP name `network_list` · level read · profiles dev · lite unsupported · handled by extension · page content `requests`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 | `url` | string |  |  |
 | `method` | string |  |  |
 | `status` | integer |  |  |
-| `resourceType` | string |  |  |
+| `type` | string |  |  |
 | `limit` | integer |  |  |
 
 ### network.get
 
-Full request/response for a requestId, including response body.
+Full request/response for a request id, including headers and body. Asks the user.
 
-MCP name `network_get` · level full · profiles dev · lite unspecified · page content yes
+MCP name `network_get` · level full · profiles dev · lite unsupported · sensitive d · handled by extension · page content `request`, `response`, `body`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `requestId` | string | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `id` | string | yes |  |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 
 ### network.waitFor
 
-Wait for a response whose URL contains the pattern (or /regex/).
+Wait for a request completing after this call that matches url (substring or /regex/), method, status.
 
-MCP name `network_waitFor` · level read · profiles dev · lite unspecified
-
-| Param | Type | Required | Description |
-|---|---|---|---|
-| `url` | string | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
-| `timeout` | integer |  | ms, default 5000 |
-
-### dialog.handle
-
-Accept or dismiss the open alert/confirm/prompt/beforeunload dialog.
-
-MCP name `dialog_handle` · level act · profiles core · lite unspecified
-
-| Param | Type | Required | Description |
-|---|---|---|---|
-| `accept` | boolean | yes |  |
-| `promptText` | string |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
-
-### cookies.get
-
-Cookies for the tab's URL (or url). Asks the user.
-
-MCP name `cookies_get` · level full · profiles dev · lite unspecified · sensitive yes
+MCP name `network_waitFor` · level read · profiles dev · lite unsupported · handled by extension · page content `request`, `url`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `url` | string |  |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `method` | string |  |  |
+| `status` | integer |  |  |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `timeout` | integer |  | ms, default 5000 |
+
+### cookies.get
+
+Cookies for the tab's current origin. Asks the user.
+
+MCP name `cookies_get` · level full · profiles dev · lite unsupported · sensitive d · handled by extension · page content `cookies`
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `url` | string |  |  |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 
 ### storage.get
 
 Read localStorage or sessionStorage for the tab's origin. Asks the user.
 
-MCP name `storage_get` · level full · profiles dev · lite unspecified · sensitive yes · page content yes
+MCP name `storage_get` · level full · profiles dev · lite unsupported · sensitive d · handled by extension · page content `entries`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `kind` | "local" \| "session" | yes |  |
-| `tabId` | integer |  | Tab id; defaults to the session's active tab |
+| `tabId` | integer |  | Tab id; default: the session's active tab |
 
 ## files
 
 ### downloads.list
 
-Downloads started by this session.
+Downloads started by this session's tabs.
 
-MCP name `downloads_list` · level none · profiles forms, data · lite unspecified
+MCP name `downloads_list` · level none · profiles data · lite supported · handled by extension · page content `downloads[].filename`, `downloads[].url`
 
 No parameters.
 
 ### downloads.wait
 
-Wait for the next (or a given) download to complete.
+Wait for the next (or a given) download of this session to complete.
 
-MCP name `downloads_wait` · level none · profiles forms, data · lite unspecified
+MCP name `downloads_wait` · level none · profiles data · lite supported · handled by extension · page content `filename`, `url`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `id` | integer |  |  |
-| `timeout` | integer |  | ms, default 5000 |
+| `timeout` | integer |  | ms, default 30000 |
 
 ### downloads.read
 
-Read a completed download's contents (text or base64). Asks the user.
+Read a completed download of this session (UTF-8 text or base64; max 5 MB). Asks the user.
 
-MCP name `downloads_read` · level none · profiles data · lite unspecified · sensitive yes · page content yes
+MCP name `downloads_read` · level none · profiles data · lite supported · sensitive e · handled by both · page content `filename`, `text`, `data`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `id` | integer | yes |  |
-| `maxBytes` | integer |  |  |
 
 ## session
 
 ### session.info
 
-This session's id, label, tabs, mode, and connection state.
+This session's id, label, tabs, mode and connection state.
 
-MCP name `session_info` · level none · profiles full · lite unspecified
+MCP name `session_info` · level none · profiles full only · lite supported · handled by extension · page content `tabs[].url`, `tabs[].title`
 
 No parameters.
 
 ### session.permissions
 
-Effective permission level for the current tab's site (or url).
+Effective permission level for the current tab's site (or url) and this session's token scope.
 
-MCP name `session_permissions` · level none · profiles full · lite unspecified
+MCP name `session_permissions` · level none · profiles full only · lite supported · handled by extension
 
 | Param | Type | Required | Description |
 |---|---|---|---|
@@ -587,6 +599,6 @@ MCP name `session_permissions` · level none · profiles full · lite unspecifie
 
 End this session and release its tabs.
 
-MCP name `session_end` · level none · profiles full · lite unspecified
+MCP name `session_end` · level none · profiles full only · lite supported · handled by extension
 
 No parameters.
