@@ -351,9 +351,10 @@ export const handlers: Record<string, Handler> = {
     const url = await tabUrl(tabId);
     await requireSite(c.meta, url, "act", c.tool.name, "answer a dialog");
     const drv = await driverFor(tabId, url);
-    const d = await drv.handleDialog(c.p.accept, c.p.promptText);
+    const accept = c.p.action ? c.p.action === "accept" : !!c.p.accept; // registry: action=accept|dismiss
+    const d = await drv.handleDialog(accept, c.p.promptText);
     await sleep(100);
-    return { handled: d, accepted: c.p.accept };
+    return { handled: d, accepted: accept };
   },
   async "cookies.get"(c) {
     return onTab(c, "full", async (t) => {
