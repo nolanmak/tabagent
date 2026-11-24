@@ -238,7 +238,7 @@ describe("lite driver specifics", () => {
     const exec = vi.fn(env.exec);
     const drv = new LiteDriver(7, new RefTable(memoryStore()), { ...env, exec });
     await expect(drv.upload()).rejects.toMatchObject({ code: "UNSUPPORTED" });
-    await expect(drv.evaluate()).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(drv.evaluator()("1")).rejects.toMatchObject({ code: "UNSUPPORTED" });
     await expect(drv.handleDialog()).rejects.toMatchObject({ code: "UNSUPPORTED" });
     await expect(drv.screenshot({ target: "ref", ref: "e1" })).rejects.toMatchObject({ code: "UNSUPPORTED" });
     await expect(drv.screenshot({ target: "full" })).rejects.toMatchObject({ code: "UNSUPPORTED" });

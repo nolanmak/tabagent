@@ -217,6 +217,24 @@ describe("redaction in feed + audit", () => {
   });
 });
 
+describe("nav.wait for=fn is held to js.eval's level (security review H2)", () => {
+  const readTok = { id: "s1", label: "ci", cap: "read" as const, sites: [] as string[] };
+  it("a read-capped token cannot run a JS predicate, even under YOLO", async () => {
+    const w = world({}, { yolo: true });
+    const fn = await w.router.handle({ type: "command", id: "c1", session: readTok, tool: "nav.wait", params: { for: "fn", value: "fetch('/api/x',{method:'DELETE'}).then(()=>1)", tabId: 1 } });
+    expect(fn.error?.code).toBe("PERMISSION_DENIED");
+    expect(fn.error?.message).toContain('limited to "read"');
+    expect(w.handlers["nav.wait"]).not.toHaveBeenCalled();
+    expect(w.authorize.mock.calls[0][0]).toMatchObject({ level: "full", sensitive: "c" });
+  });
+  it("a site set to read does not cover for=fn", async () => {
+    const w = world({}, { sites: { "https://a.example": { policy: "read", preapproved: { c: true } } } });
+    const r = await w.router.handle(cmd("nav.wait", { for: "fn", value: "true", tabId: 1 }));
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(r.error?.message).toContain("would ask (site)");
+  });
+});
+
 describe("DA1 credential readback (security review H1)", () => {
   const taintedWorld = async (over: Partial<RouterDeps<{ tabs: number[] }>> = {}) => {
     const { AuthTaint, credentialGuard } = await import("../src/background/authTaint");

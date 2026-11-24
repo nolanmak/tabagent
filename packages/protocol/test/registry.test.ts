@@ -124,6 +124,11 @@ describe("D16 level table", () => {
     expect(levelFor(getTool("act.click")!)).toBe("act");
     expect(levelFor(getTool("tabs")!, { action: "bogus" })).toBe("none");
   });
+  it("nav.wait for=fn is arbitrary JS and needs full, like js.eval; the other waits stay read (review H2)", () => {
+    expect(levelFor(getTool("nav.wait")!, { for: "fn", value: "true" })).toBe("full");
+    expect(levelFor(getTool("nav.wait")!, { for: "fn" })).toBe(levelFor(getTool("js.eval")!, {}));
+    for (const f of ["load", "networkidle", "selector", "text", "url"]) expect(levelFor(getTool("nav.wait")!, { for: f })).toBe("read");
+  });
 });
 
 describe("D18 static sensitivity", () => {

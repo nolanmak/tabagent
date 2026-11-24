@@ -3,11 +3,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TOOLS, TabAgentError } from "@tabagent/protocol";
 
-const state = vi.hoisted(() => ({ dialog: null as any, drv: null as any, sensitive: [] as any[], url: "http://x.test/a" }));
+const state = vi.hoisted(() => ({ dialog: null as any, drv: null as any, sensitive: [] as any[], site: [] as any[], url: "http://x.test/a" }));
 
 vi.mock("../src/background/sessions", () => ({ resolveTab: async (_s: unknown, id?: number) => id ?? 1 }));
 vi.mock("../src/background/permissions", () => ({
-  requireSite: async () => {},
+  requireSite: async (...a: unknown[]) => {
+    state.site.push(a);
+  },
   requireSensitive: async (...a: unknown[]) => {
     state.sensitive.push(a);
   },
@@ -28,6 +30,7 @@ const { pageHandlers } = await import("../src/background/handlers/page");
 const { navHandlers } = await import("../src/background/handlers/nav");
 const { assertLiteSupport, assertNoDialog, levelOf } = await import("../src/background/tabctx");
 const { baselines } = await import("../src/background/refstore");
+const { authTaint } = await import("../src/background/authTaint");
 
 function fakeDriver(kind: "cdp" | "lite" = "cdp") {
   const log: string[] = [];
@@ -73,6 +76,14 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     currentUrl: async () => d.url,
     dialog: () => d.dlg,
     evaluate: async () => true,
+    evals: [] as string[],
+    fnResult: false as unknown,
+    onEval: undefined as undefined | (() => void),
+    evaluator: () => async (expr: string) => {
+      d.evals.push(expr);
+      d.onEval?.();
+      return d.fnResult;
+    },
   };
   return d;
 }
@@ -82,6 +93,7 @@ const ctx = (tool: string, p: Record<string, unknown> = {}) => ({ s: {} as any, 
 beforeEach(() => {
   state.dialog = null;
   state.sensitive = [];
+  state.site = [];
   state.drv = fakeDriver();
   baselines.clearTab(1);
 });
@@ -221,5 +233,39 @@ describe("page / nav handlers", () => {
   it("levelOf follows the registry (nav tools are act, D16)", () => {
     expect(levelOf(ctx("nav.goto") as any, "read")).toBe("act");
     expect(levelOf(ctx("page.snapshot") as any, "act")).toBe("read");
+  });
+});
+
+describe("nav.wait for=fn (security review H2)", () => {
+  beforeEach(() => authTaint.closed(1));
+
+  it("checks the site at full, other waits at read", async () => {
+    state.drv.fnResult = true;
+    await navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "1", timeout: 500 }));
+    expect(state.site.at(-1)[2]).toBe("full");
+    await navHandlers["nav.wait"](ctx("nav.wait", { for: "load" }));
+    expect(state.site.at(-1)[2]).toBe("read");
+  });
+
+  it("evaluates through the driver's fresh-world evaluator, never pagelib's world", async () => {
+    state.drv.fnResult = true;
+    state.drv.evaluate = async () => {
+      throw new Error("pagelib world used");
+    };
+    expect(await navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "document.title", timeout: 500 }))).toMatchObject({ ok: true });
+    expect(state.drv.evals).toEqual(["!!(document.title)"]);
+  });
+
+  it("stops with PERMISSION_DENIED as soon as the tab leaves the authorized origin, without evaluating there", async () => {
+    state.drv.onEval = () => (state.drv.url = "https://bank.example/");
+    await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "0", timeout: 2000 }))).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(state.drv.evals).toHaveLength(1);
+  });
+
+  it("stops when TabAgent types a credential into the tab mid-wait, and marks the document as touched by agent JS", async () => {
+    state.drv.onEval = () => authTaint.filled(1, "password", "hunter2-secret");
+    await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "0", timeout: 2000 }))).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(state.drv.evals).toHaveLength(1);
+    expect(authTaint.scriptDirty(1)).toBe(true);
   });
 });
