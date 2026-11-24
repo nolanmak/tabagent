@@ -193,3 +193,110 @@ describe("bridge client", () => {
     expect(n).toBe(2);
   });
 });
+
+// Reload race (Legion, 2026-11-23): after chrome://extensions -> reload the new worker called connect()
+// twice (onInstalled + the startup IIFE). Both passed the "no socket yet" guard before loadConfig
+// resolved, so two sockets came up; the replaced one's onclose then cleared the live one's welcome and
+// heartbeat, the bridge heard nothing for 45s, and commands in that window failed NO_EXTENSION.
+describe("single-flight connect (reload race)", () => {
+  const live = () => FakeWs.all.filter((w) => w.readyState <= 1);
+
+  it("two near-simultaneous connect() calls open exactly one socket", async () => {
+    const { c } = client();
+    await Promise.all([c.connect(), c.connect()]);
+    expect(FakeWs.all).toHaveLength(1);
+  });
+
+  it("the alarm tick and a manual reconnect join an in-flight connect instead of opening another", async () => {
+    const { c } = client();
+    const first = c.connect();
+    c.tick();
+    void c.reconnect();
+    await first;
+    await flush();
+    expect(FakeWs.all).toHaveLength(1);
+  });
+
+  it("never has two sockets open or connecting at once across startup, tick and backoff", async () => {
+    const { c } = client();
+    let maxLive = 0;
+    const watch = () => (maxLive = Math.max(maxLive, live().length));
+    const starts = [c.connect(), c.connect(), c.reconnect()];
+    c.tick();
+    await Promise.all(starts);
+    await flush();
+    watch();
+    // The socket drops (bridge restart); backoff and the alarm both try to reconnect.
+    FakeWs.all[0].close();
+    c.tick();
+    vi.advanceTimersByTime(500);
+    await flush();
+    watch();
+    c.tick();
+    await flush();
+    watch();
+    expect(maxLive).toBe(1);
+    expect(live()).toHaveLength(1);
+  });
+
+  it("after a reload double-connect the surviving socket keeps pinging and can send", async () => {
+    const { c } = client();
+    await Promise.all([c.connect(), c.connect()]);
+    for (const w of FakeWs.all) w.open();
+    for (const w of FakeWs.all) w.msg({ type: "welcome", protocolVersion: 1, bridgeVersion: "x" });
+    await flush();
+    // The bridge keeps the newest socket and closes the others with 4002.
+    for (const w of FakeWs.all.slice(0, -1)) {
+      w.readyState = 3;
+      w.onclose?.({ code: 4002, reason: "replaced by a newer connection" });
+    }
+    const survivor = FakeWs.all[FakeWs.all.length - 1];
+    expect(c.status()).toBe("connected");
+    expect(c.send({ type: "result", id: "r1" })).toBe(true);
+    vi.advanceTimersByTime(PING_MS);
+    expect(survivor.sent.filter((m) => m.type === "ping")).toHaveLength(1);
+  });
+
+  it("a late close from a socket that is no longer current leaves the live one alone", async () => {
+    const { c } = client();
+    await c.connect();
+    const old = FakeWs.all[0];
+    old.open();
+    old.msg({ type: "welcome", protocolVersion: 1, bridgeVersion: "x" });
+    await flush();
+    await c.pair("ab1-cd2");
+    const fresh = FakeWs.all[1];
+    fresh.open();
+    fresh.msg({ type: "welcome", protocolVersion: 1, bridgeVersion: "x", secret: "s4" });
+    await flush();
+    old.onclose?.({ code: 1006, reason: "late" });
+    expect(c.status()).toBe("connected");
+    expect(c.send({ type: "x" })).toBe(true);
+    vi.advanceTimersByTime(PING_MS);
+    expect(fresh.sent.filter((m) => m.type === "ping")).toHaveLength(1);
+    vi.advanceTimersByTime(10_000);
+    await flush();
+    expect(FakeWs.all).toHaveLength(2);
+  });
+
+  it("disconnect() while a connect is in flight does not open a socket afterwards", async () => {
+    const { c } = client();
+    const p = c.connect();
+    c.disconnect();
+    await p;
+    await flush();
+    expect(FakeWs.all).toHaveLength(0);
+    expect(c.status()).toBe("unpaired");
+  });
+
+  it("pair() during an in-flight connect opens one socket that carries the code", async () => {
+    const { c } = client({ port: 1, secret: null });
+    const p = c.connect();
+    const q = c.pair("zz9-yy8");
+    await Promise.all([p, q]);
+    await flush();
+    expect(FakeWs.all).toHaveLength(1);
+    FakeWs.all[0].open();
+    expect(FakeWs.all[0].sent[0].pairCode).toBe("ZZ9-YY8");
+  });
+});

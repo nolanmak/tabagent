@@ -6,8 +6,8 @@
 **Let any AI agent drive your real Chrome.** TabAgent is an open-source Chrome extension plus a
 small local bridge that exposes your browser to Claude Code, Codex, Cursor, and any MCP or HTTP
 client. Agents can navigate, read pages, pull structured data, fill forms, upload and download
-files, and inspect network and console activity. They do it with your existing sign-ins, under
-permissions you control.
+files, inspect network and console activity, and get through sign-in and 2FA. They do it with
+your existing sign-ins, under permissions you control.
 
 > Status: **pre-alpha**, not yet published. See [docs/DESIGN.md](docs/DESIGN.md) and the
 > [roadmap](https://github.com/nolanmak/tabagent/issues).
@@ -16,6 +16,10 @@ permissions you control.
 
 - **Agent-agnostic**: one install, every agent. MCP (stdio + Streamable HTTP), REST, and a CLI.
 - **Your real browser**: works in your everyday profile, where you are already logged in.
+- **Sign-in and 2FA**: agents can log in with your password manager (1Password, Bitwarden, or
+  Chrome's own autofill) and enter one-time codes from an authenticator, Gmail or SMS on macOS.
+  Passwords and codes go straight into the page and never reach the agent; passkeys, CAPTCHAs and
+  phone approvals are handed to you. See the `auth` tools in [docs/tools.md](docs/tools.md).
 - **Token-efficient**: compact accessibility snapshots with stable element refs instead of HTML.
 - **Reliable**: trusted CDP input, auto-waiting, and actionable errors.
 - **Safe by default**: per-site permissions, prompts for sensitive actions, a tab group per agent,

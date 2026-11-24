@@ -79,6 +79,35 @@ export interface DaemonOpts {
   auth?: Auth;
 }
 
+/**
+ * Commands that only read, so re-running one is harmless. When a newer socket from the same extension
+ * replaces the current one (a reload, or a worker reconnecting), these are re-sent to the new socket
+ * instead of failing; anything that may have changed a page or a tab fails fast instead, because the
+ * old worker may already have run it.
+ */
+const RETRY_SAFE = new Set([
+  "page.snapshot",
+  "page.screenshot",
+  "page.text",
+  "page.markdown",
+  "page.find",
+  "form.describe",
+  "extract.table",
+  "extract.links",
+  "extract.schema",
+  "console.list",
+  "network.list",
+  "downloads.list",
+  "session.info",
+  "session.permissions",
+]);
+export function retrySafe(tool: string, params: Record<string, unknown>): boolean {
+  return RETRY_SAFE.has(tool) || (tool === "tabs" && params.action === "list");
+}
+
+/** How long a replaced socket gets to finish its close handshake before it is terminated. */
+const REPLACED_CLOSE_GRACE_MS = 1_000;
+
 const STATUS: Partial<Record<ErrorCode, number>> = {
   BAD_REQUEST: 400,
   UNAUTHORIZED: 401,
@@ -287,15 +316,36 @@ export class Daemon {
 
   private attachExt(ws: WebSocket, id: string, version: string, features: string[] = []) {
     const old = this.ext;
-    if (old && old.ws !== ws) {
-      // Same ID reconnecting: the new socket replaces the old one; its in-flight commands fail.
-      this.failPending(old.ws, "The TabAgent extension reconnected; the command was lost");
-      old.ws.close(4002, "replaced by a newer connection");
-    }
     this.ext = { ws, id, version, features: new Set(features), lastSeen: this.now() };
     this.log(`Extension connected (v${version})`);
+    if (old && old.ws !== ws) {
+      // Same ID reconnecting (D4): the newest socket wins and the old one is closed at once. Its
+      // read-only in-flight commands move to the new socket; the rest fail fast rather than wait 45s.
+      this.handOver(old.ws, ws);
+      old.ws.close(4002, "replaced by a newer connection");
+      const t = setTimeout(() => old.ws.readyState !== 3 && old.ws.terminate(), REPLACED_CLOSE_GRACE_MS);
+      t.unref?.();
+    }
     for (const w of this.extWaiters) w();
     this.extWaiters.clear();
+  }
+
+  /** Move retry-safe in-flight commands from a replaced socket to its successor; fail the others now. */
+  private handOver(from: WebSocket, to: WebSocket) {
+    for (const [id, p] of this.pending) {
+      if (p.ws !== from) continue;
+      if (!retrySafe(p.tool, p.params)) {
+        clearTimeout(p.timer);
+        this.pending.delete(id);
+        p.resolve({
+          ok: false,
+          error: { code: "NO_EXTENSION", message: "The TabAgent extension reconnected while the command was running; it was not re-sent because it may have already run", hint: "Check the page state, then retry." },
+        });
+        continue;
+      }
+      p.ws = to;
+      this.sendTo(to, { type: "command", id, session: p.meta, tool: p.tool, params: p.params });
+    }
   }
 
   private failPending(ws: WebSocket, message: string) {
@@ -406,6 +456,8 @@ export class Daemon {
     try {
       if (!tool) throw new TabAgentError("BAD_REQUEST", `Unknown tool "${toolName}"`, "GET /v1/tools lists tools.");
       const params = validateParams(tool, rawParams);
+      // Never route to a socket already past the silence limit: drop it now and wait for the reconnect.
+      this.checkSilent();
       if (!this.extensionConnected && !(await this.waitForExtension(this.opts.extWaitMs ?? 3000))) {
         throw new TabAgentError("NO_EXTENSION", "The TabAgent Chrome extension is not connected", PAIRING_HINT);
       }
