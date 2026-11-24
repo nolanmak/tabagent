@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign up (Turnstile)</title>
+    <!-- #61: Cloudflare's published Turnstile test site key 3x...FF forces an interactive challenge;
+         1x00000000000000000000AA always passes. -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <script>
+      window.onTurnstile = function (token) {
+        document.getElementById("status").textContent = "captcha ok (" + String(token).length + " chars)";
+      };
+    </script>
+  </head>
+  <body>
+    <h1>Create your account</h1>
+    <form id="signup" onsubmit="event.preventDefault(); document.getElementById('status').textContent = 'submitted';">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" />
+      <div class="cf-turnstile" data-sitekey="3x00000000000000000000FF" data-callback="onTurnstile" data-action="signup"></div>
+      <button id="submit" type="submit">Create account</button>
+    </form>
+    <p id="status"></p>
+  </body>
+</html>

@@ -8,6 +8,7 @@ import { clickGateInfo, clickSensitivity, comboOptions, describeFields, fieldInf
 import { extractLinks, extractSchema, extractTable, markdown, nextControl, storage, text } from "./extract";
 
 import { authApi } from "./auth";
+import { captchaApi } from "./captcha";
 
 export type El = Element;
 export interface Ret<T = unknown> {
@@ -1102,6 +1103,7 @@ async function callLite(_self: unknown, name: string, id: number | null, docId: 
 
 const api = {
   ...authApi, // M6 auth (pagelib/auth.ts)
+  ...captchaApi, // #61 CAPTCHA (pagelib/captcha.ts)
   invoke: (self: El | null, name: string, args: unknown[]) => invoke(self, name, args),
   callLite,
   // lite registry

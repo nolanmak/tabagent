@@ -6,6 +6,7 @@ import { checkClickGate, checkKeyGate } from "./gates";
 import { pollUntil } from "../wait";
 import { textSubmits } from "../../pure/sensitive";
 import { setCheckState } from "./check";
+import { autoCaptcha } from "../captcha/hook";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 
@@ -64,7 +65,11 @@ export const actHandlers: Record<string, Handler> = {
       await checkClickGate(c, t, c.p.ref);
       // A hidden native checkbox/radio (custom control): click what a user would, its label (Jarvis#2522).
       const alt = (await t.drv.call("toggleTarget", [], { ref: c.p.ref })) as { ref: string | null } | null;
-      return t.drv.click(alt?.ref ?? c.p.ref, { button: c.p.button, clickCount: c.p.clickCount, modifiers: c.p.modifiers, timeout: c.p.timeout });
+      // #61: with autoCaptcha on, a blocking CAPTCHA is solved before the click and after it.
+      await autoCaptcha(c, t, "before");
+      const r = await t.drv.click(alt?.ref ?? c.p.ref, { button: c.p.button, clickCount: c.p.clickCount, modifiers: c.p.modifiers, timeout: c.p.timeout });
+      if (!r.dialog) await autoCaptcha(c, t, "after");
+      return r;
     });
   },
   async "act.dblclick"(c) {
