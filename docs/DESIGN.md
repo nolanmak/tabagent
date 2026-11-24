@@ -96,8 +96,15 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
     `welcome {protocolVersion, bridgeVersion, secret}`.
   - **Paired:** hello must carry the secret and come from a recorded extension ID.
   - One extension connection: a reconnect from the same ID replaces the old
-    socket; a different ID while one is connected is refused with a message
+    socket, which is closed at once (terminated if it has not closed within
+    1s). Its read-only in-flight commands (snapshot, text, extract, list...)
+    are re-sent to the new socket; anything that may have changed a page or
+    tab fails fast with `NO_EXTENSION`, since the old worker may already have
+    run it. A different ID while one is connected is refused with a message
     naming the cause. Incognito is off.
+  - The extension keeps a single-flight connect: at most one socket is open or
+    connecting, however many of onInstalled, startup, the alarm and the backoff
+    timer fire together, and only the current socket may change its state.
 - `protocolVersion` is in hello/welcome; a mismatch returns `VERSION_MISMATCH`
   with a hint saying which side to update (npm and the Web Store update on
   different schedules).
@@ -117,7 +124,8 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
 
 - Heartbeat: the extension sends `ping` every 20s, the bridge answers `pong`,
   and closes a socket silent for 45s, failing its in-flight commands with
-  `NO_EXTENSION`.
+  `NO_EXTENSION`. A new command is never routed to a socket already past that
+  limit; it is dropped first and the call waits for the reconnect.
 - With no socket open the worker can be evicted, so reconnect is driven by a
   `chrome.alarms` alarm every 30s, not only by `setTimeout` backoff.
 - `chrome.storage.session`: sessions, tab ownership, allow-once grants, paused
