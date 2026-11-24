@@ -56,7 +56,7 @@ export class AuditWriter {
     });
   }
 
-  /** prompt, decision, killed, resumed, session.ended (D20). */
+  /** prompt, decision, killed, resumed, session.ended (D20), settings.changed (YOLO / devAllowSensitive toggles). */
   event(event: string, data: Record<string, unknown> | undefined, who?: Caller): void {
     this.write({ ts: this.now().toISOString(), event, ...(who ? { caller: who.caller } : {}), ...(data ? { data } : {}) });
   }

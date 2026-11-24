@@ -60,6 +60,8 @@ export function pageContentLabel(pc) {
 export function levelLabel(tool) {
   const acts = actionsOf(tool);
   if (acts && acts.some((a) => a.level)) return acts.map((a) => `${a.name}: ${a.level ?? tool.level ?? "?"}`).join("<br>");
+  const w = tool.levelWhen;
+  if (w && w.param && w.level) return `${tool.level ?? "?"} (${w.level} when ${w.param}=${(w.values ?? []).join("/")})`;
   return String(tool.level ?? "?");
 }
 

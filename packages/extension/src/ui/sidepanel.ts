@@ -102,6 +102,7 @@ function renderSettings() {
   ($("forceLite") as HTMLInputElement).checked = s.forceLite;
   ($("devAllowSensitive") as HTMLInputElement).checked = s.devAllowSensitive;
   ($("yolo") as HTMLInputElement).checked = !!s.yolo;
+  $("yoloBanner").hidden = !s.yolo;
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
   const rows = Object.entries(s.sites as Record<string, any>);
   $("sites").innerHTML =

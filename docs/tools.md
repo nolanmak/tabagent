@@ -17,7 +17,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`nav.back`](#navback) | `nav_back` | act | — | full only | supported | extension |
 | [`nav.forward`](#navforward) | `nav_forward` | act | — | full only | supported | extension |
 | [`nav.reload`](#navreload) | `nav_reload` | act | — | full only | supported | extension |
-| [`nav.wait`](#navwait) | `nav_wait` | read | c (when for=fn) | core | supported | extension |
+| [`nav.wait`](#navwait) | `nav_wait` | read (full when for=fn) | c (when for=fn) | core | supported | extension |
 | [`page.snapshot`](#pagesnapshot) | `page_snapshot` | read | — | core | supported | extension |
 | [`page.screenshot`](#pagescreenshot) | `page_screenshot` | read | — | core | degraded | extension |
 | [`page.text`](#pagetext) | `page_text` | read | — | data | supported | extension |
@@ -126,7 +126,7 @@ MCP name `nav_reload` · level act · profiles full only · lite supported · ha
 
 Wait for: load \| networkidle \| selector (CSS) \| text \| url (substring or /regex/) \| fn (JS predicate, re-run every 100ms; needs full access, asks the user).
 
-MCP name `nav_wait` · level read · profiles core · lite supported · sensitive c (when for=fn) · handled by extension · page content `url`
+MCP name `nav_wait` · level read (full when for=fn) · profiles core · lite supported · sensitive c (when for=fn) · handled by extension · page content `url`
 
 | Param | Type | Required | Description |
 |---|---|---|---|

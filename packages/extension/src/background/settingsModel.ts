@@ -110,3 +110,13 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
     liteSites: Array.isArray(r.liteSites) ? r.liteSites.filter((x: unknown) => typeof x === "string") : [],
   };
 }
+
+/** Settings whose change is written to the bridge audit log (review M1). */
+const AUDITED = ["devAllowSensitive", "yolo"] as const;
+
+/** Audit events for a settings change: one settings.changed with the new value of each risky toggle that moved. */
+export function settingsAuditEvents(before: Partial<StoredShape>, after: Partial<StoredShape>): { event: "settings.changed"; data: Record<string, boolean> }[] {
+  const data: Record<string, boolean> = {};
+  for (const k of AUDITED) if (!!before[k] !== !!after[k]) data[k] = !!after[k];
+  return Object.keys(data).length ? [{ event: "settings.changed", data }] : [];
+}

@@ -18,6 +18,7 @@ import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
+import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
 
 const VERSION = chrome.runtime.getManifest().version;
@@ -129,7 +130,8 @@ export const router = createRouter<Session>({
 // ---------------------------------------------------------------------------
 let lastBadge = "";
 async function refreshBadge() {
-  const st = badgeState({ connected: bridge.connected(), paused: await isPaused().catch(() => false), pendingPrompts: prompts.size, inflight: router?.inflightCount?.() ?? 0 });
+  const yolo = await getSettings().then((s) => !!s.yolo, () => false);
+  const st = badgeState({ connected: bridge.connected(), paused: await isPaused().catch(() => false), pendingPrompts: prompts.size, inflight: router?.inflightCount?.() ?? 0, yolo });
   if (st === lastBadge) return;
   lastBadge = st;
   const b = BADGE[st];
@@ -138,6 +140,15 @@ async function refreshBadge() {
   chrome.action.setTitle({ title: b.title }).catch(() => {});
 }
 onSessionsChanged(() => refreshBadge());
+
+// Review M1: YOLO / devAllowSensitive toggles are audited and the badge follows, whatever wrote them.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.settings) return;
+  const before = migrateSettings(changes.settings.oldValue as Record<string, unknown> | undefined);
+  const after = migrateSettings(changes.settings.newValue as Record<string, unknown> | undefined);
+  for (const e of settingsAuditEvents(before, after)) sendEvent(e.event, e.data);
+  refreshBadge();
+});
 
 // ---------------------------------------------------------------------------
 // Prompt delivery (D19): badge "!", notification, informational in-tab banner.
