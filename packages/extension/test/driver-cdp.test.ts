@@ -238,6 +238,34 @@ describe("CdpDriver actions (#7)", () => {
     await expect(f.drv.snapshot({})).rejects.toMatchObject({ code: "DEBUGGER_DETACHED" });
   });
 
+  // nolanmak/Jarvis#2522: Chrome drops CDP mouse events sent to a hidden (background)
+  // tab; dispatchMouseEvent still resolves, so a label click "succeeded" but did nothing.
+  it("click, hover and drag wake a background tab (focus emulation) before the first mouse event", async () => {
+    for (const act of ["click", "hover", "drag"] as const) {
+      const f = fake();
+      const ref = await refOf(f.drv, /Click me/);
+      f.calls.length = 0;
+      if (act === "drag") await f.drv.drag(ref, ref);
+      else await f.drv[act](ref);
+      const seq = f.calls.map((c) => c.m).filter((m) => m.startsWith("Input.") || m.startsWith("Emulation."));
+      expect(seq[0], act).toBe("Emulation.setFocusEmulationEnabled");
+      expect(seq.filter((m) => m === "Input.dispatchMouseEvent").length, act).toBeGreaterThan(0);
+    }
+  });
+
+  it("wakes the tab again after the debugger re-attaches (emulation does not survive a detach)", async () => {
+    const f = fake();
+    f.tab.attachSeq = 1;
+    const ref = await refOf(f.drv, /Click me/);
+    await f.drv.click(ref);
+    await f.drv.press("Space");
+    const wakes = () => f.calls.filter((c) => c.m === "Emulation.setFocusEmulationEnabled").length;
+    expect(wakes()).toBe(1);
+    f.tab.attachSeq = 2;
+    await f.drv.press("Space");
+    expect(wakes()).toBe(2);
+  });
+
   it("an action that opens a dialog returns at once with the dialog (D28)", async () => {
     const f = fake();
     const ref = await refOf(f.drv, /Click me/);

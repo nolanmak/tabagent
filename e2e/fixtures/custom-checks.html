@@ -1,0 +1,76 @@
+<!doctype html><html><head><title>Partner form</title>
+<style>
+  /* Mirrors openai.com/form/openworks-partner (nolanmak/Jarvis#2522): the native input
+     sits at opacity:0 inside a 12px box, a pointer-events:none fake box draws the state,
+     and the wrapping label[for] spans the full row. */
+  .opt { display: flex; align-items: flex-start; width: 600px; cursor: pointer; }
+  .box { position: relative; display: flex; width: 12px; height: 12px; }
+  .ghost { position: absolute; inset: 0; margin: 0; border: none; opacity: 0; }
+  .fake { pointer-events: none; width: 12px; height: 12px; border: 1px solid #333; box-sizing: border-box; }
+  .ghost:checked + .fake { background: #333; }
+  .txt { padding-inline-start: 12px; user-select: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .nodisplay { display: none; }
+  .switch { display: inline-block; padding: 4px 8px; border: 1px solid #333; cursor: pointer; }
+  [role=checkbox][aria-checked=true], [role=radio][aria-checked=true] { background: #333; color: #fff; }
+</style></head><body>
+<main>
+<h1>Become a partner</h1>
+<form id="partner" onsubmit="event.preventDefault()">
+  <div role="radiogroup" aria-labelledby="loc-q">
+    <p id="loc-q">Can you help in the same location?</p>
+    <label for="loc-0" class="opt"><div class="box"><input type="radio" id="loc-0" class="ghost" name="loc[]" value="Yes" required data-controlled><div class="fake"></div></div><span class="txt">Yes</span></label>
+    <label for="loc-1" class="opt"><div class="box"><input type="radio" id="loc-1" class="ghost" name="loc[]" value="No" required data-controlled><div class="fake"></div></div><span class="txt">No</span></label>
+  </div>
+  <div>
+    <p>Which areas do you have hands-on experience with?</p>
+    <label for="area-0" class="opt"><div class="box"><input type="checkbox" id="area-0" class="ghost" name="areas" value="Research" data-controlled><div class="fake"></div></div><span class="txt">AI-powered research and analysis</span></label>
+    <label for="area-1" class="opt"><div class="box"><input type="checkbox" id="area-1" class="ghost" name="areas" value="Automation" data-controlled><div class="fake"></div></div><span class="txt">Workflow automation</span></label>
+  </div>
+  <!-- display:none input, sibling label[for] (not wrapping) -->
+  <input type="checkbox" id="terms" class="nodisplay" name="terms"><label for="terms" class="switch">I agree to the terms</label>
+  <!-- wrapping label, clipped sr-only input -->
+  <p><label><input type="checkbox" class="sr-only" name="news" id="news"> <span>Email me product news</span></label></p>
+  <!-- input named by aria-labelledby; the page toggles it when its caption is clicked -->
+  <p><input type="checkbox" id="beta" class="sr-only" aria-labelledby="beta-cap"><span id="beta-cap" class="switch">Join the beta</span></p>
+  <!-- ARIA widgets -->
+  <div role="checkbox" aria-checked="false" tabindex="0" id="remember" class="switch">Remember me</div>
+  <div role="radiogroup" aria-label="Size">
+    <div role="radio" aria-checked="false" tabindex="0" class="switch">Small</div>
+    <div role="radio" aria-checked="false" tabindex="-1" class="switch">Large</div>
+  </div>
+  <button type="submit">Submit application</button>
+</form>
+<p>State: <span id="state"></span></p>
+</main>
+<script>
+// React-style controlled inputs: state changes only through the change event
+// (React's onChange), and every render forces the DOM back to state, so setting
+// .checked from script without an event never sticks.
+const state = {};
+const controlled = [...document.querySelectorAll('input[data-controlled]')];
+for (const i of controlled) state[i.id] = false;
+function render() {
+  for (const i of controlled) i.checked = state[i.id];
+  const on = Object.keys(state).filter((k) => state[k]);
+  const aria = [...document.querySelectorAll('[role=checkbox],[role=radio]')].filter((e) => e.getAttribute('aria-checked') === 'true').map((e) => e.textContent.trim());
+  const nat = ['terms', 'news', 'beta'].filter((id) => document.getElementById(id).checked);
+  document.getElementById('state').textContent = [...on, ...nat, ...aria].join(',') || 'none';
+}
+for (const i of controlled) {
+  i.addEventListener('change', () => {
+    if (i.type === 'radio') for (const o of controlled) if (o.name === i.name) state[o.id] = o === i;
+    if (i.type === 'checkbox') state[i.id] = i.checked;
+    render();
+  });
+  // React restores a controlled input after the event if state did not change.
+  i.addEventListener('click', () => setTimeout(render, 0));
+}
+document.getElementById('beta-cap').addEventListener('click', () => { const b = document.getElementById('beta'); b.checked = !b.checked; render(); });
+document.getElementById('terms').addEventListener('change', render);
+document.getElementById('news').addEventListener('change', render);
+for (const el of document.querySelectorAll('[role=checkbox]')) el.addEventListener('click', () => { el.setAttribute('aria-checked', String(el.getAttribute('aria-checked') !== 'true')); render(); });
+for (const el of document.querySelectorAll('[role=radio]')) el.addEventListener('click', () => { for (const r of el.parentElement.querySelectorAll('[role=radio]')) r.setAttribute('aria-checked', String(r === el)); render(); });
+setInterval(render, 100);
+render();
+</script></body></html>
