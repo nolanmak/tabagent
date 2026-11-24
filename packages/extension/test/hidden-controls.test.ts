@@ -8,9 +8,11 @@ import { submitInfo } from "../src/pagelib/forms";
 import { findNodes, hiddenReason } from "../src/pagelib/index";
 
 const FIX = join(__dirname, "../../../e2e/fixtures");
+/** happy-dom has no UA stylesheet: give [hidden] its display:none like Chrome does. */
+const UA = "<style>[hidden]{display:none}</style>";
 function load(html: string) {
   document.open();
-  document.write(html.replace(/<script[\s\S]*?<\/script>/gi, ""));
+  document.write(UA + html.replace(/<script[\s\S]*?<\/script>/gi, ""));
   document.close();
 }
 
@@ -53,7 +55,7 @@ describe("page.find prefers the rendered duplicate", () => {
   it("pierces open shadow roots and still prefers the rendered instance", () => {
     document.body.innerHTML = "<x-host></x-host>";
     const root = document.querySelector("x-host")!.attachShadow({ mode: "open" });
-    root.innerHTML = '<div hidden><button>Go</button></div><button id="real">Go</button>';
+    root.innerHTML = UA + '<div hidden><button>Go</button></div><button id="real">Go</button>';
     const r = findNodes(null, { by: "role", value: "button", name: "Go" });
     expect(r.elements.length).toBe(2);
     expect((r.elements[0] as Element).id).toBe("real");
@@ -76,7 +78,7 @@ describe("a React form with a display:none mirror (live openai.com Request Daybr
     expect(v.submit).toBeNull();
     expect(v.blocked).toEqual({ control: "Submit and start verification", why: "disabled and hidden (display:none (hidden attribute))" });
     // a form whose only submit is enabled and rendered is not blocked
-    document.body.innerHTML = '<form><input name="q"><button>Go</button></form>';
+    document.body.innerHTML = UA + '<form><input name="q"><button>Go</button></form>';
     expect((submitInfo(null).value as any).blocked).toBeUndefined();
   });
 });

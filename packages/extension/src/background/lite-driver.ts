@@ -8,7 +8,7 @@ import { staleRef, taErr } from "./errors";
 import type { ClickOpts, DialogInfo, Driver, FrameCall, Screenshot, ScreenshotOpts, SnapshotOpts } from "./driver";
 import type { RefTable, RefTarget } from "./refs";
 import { render, type AXNode, type RenderResult } from "./snapshot";
-import { capMatches, type FindSpec } from "./wait";
+import { capMatches, toMatches, type FindSpec } from "./wait";
 
 export const LITE_FRAME = "lite|0";
 
@@ -168,8 +168,8 @@ export class LiteDriver implements Driver {
   }
 
   async find(spec: FindSpec) {
-    const v = (await this.call("findNodes", [{ by: spec.by, value: spec.value, name: spec.name, limit: 20 }], spec.root ? { ref: spec.root } : {})) as { matches: { ref: string | null; role: string; name: string }[] };
-    return capMatches([v.matches.filter((m) => m.ref).map((m) => ({ ref: m.ref!, role: m.role, name: m.name }))]);
+    const v = (await this.call("findNodes", [{ by: spec.by, value: spec.value, name: spec.name, limit: 20 }], spec.root ? { ref: spec.root } : {})) as { matches: Parameters<typeof toMatches>[0] };
+    return capMatches([toMatches(v.matches)]);
   }
 
   private async wait(ref: string, timeout?: number, needEditable = false) {

@@ -277,6 +277,36 @@ export function isVisible(el: El): boolean {
   return r.width > 0 && r.height > 0;
 }
 
+const tagId = (el: El) => {
+  const id = el.id ? "#" + el.id : "";
+  const cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
+  return `<${el.tagName.toLowerCase()}${id}${cls}>`;
+};
+
+/**
+ * Why `el` has no rendered box, or null when it has one (nolanmak/Jarvis#2524). Names the
+ * display:none ancestor, since a found control is often a hidden copy of the real one, or
+ * a React streaming boundary (<div hidden id="S:n">) that has not been revealed yet.
+ */
+export function hiddenReason(el: El): string | null {
+  if (!el.isConnected) return "detached";
+  for (let a: El | null = el; a; a = parentOf(a)) {
+    if (getComputedStyle(a).display !== "none") continue;
+    const how = a.hasAttribute("hidden") ? "display:none (hidden attribute)" : "display:none";
+    if (a === el) return how;
+    const react = a.hasAttribute("hidden") && /^S:\d+$/.test(a.id) ? " (a React streaming Suspense boundary that has not been revealed yet)" : "";
+    return `inside ${tagId(a)} which is display:none${react}`;
+  }
+  const s = getComputedStyle(el);
+  if (s.visibility === "hidden" || s.visibility === "collapse") return `visibility:${s.visibility}`;
+  if (!isVisible(el)) {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return `zero-size box (${Math.round(r.width)}x${Math.round(r.height)})`;
+    return "opacity:0";
+  }
+  return null;
+}
+
 export function isDisabled(el: El): boolean {
   if ((el as HTMLInputElement).disabled) return true;
   if (el.getAttribute("aria-disabled") === "true") return true;
@@ -766,7 +796,8 @@ async function observe(el: El, opts: { scroll?: boolean } = {}) {
   const y = r.top + Math.min(r.height / 2, Math.max(1, r.height - 1));
   const inView = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
   const box = (q: DOMRect) => ({ x: q.left, y: q.top, w: q.width, h: q.height });
-  return { attached: true, visible, enabled, editable, box: box(a), box2: box(b), inView, point: { x, y }, hit: inView && visible ? hitTest(el, x, y) : undefined };
+  const why = visible && a.width > 0 && a.height > 0 ? undefined : (hiddenReason(el) ?? `zero-size box (${Math.round(a.width)}x${Math.round(a.height)})`);
+  return { attached: true, visible, enabled, editable, box: box(a), box2: box(b), inView, point: { x, y }, hit: inView && visible ? hitTest(el, x, y) : undefined, ...(why ? { why } : {}) };
 }
 
 interface FindSpec2 {
@@ -777,7 +808,7 @@ interface FindSpec2 {
 }
 
 /** page.find: document order, up to limit+1 so the caller can flag truncation. */
-function findNodes(self: El | null, q: FindSpec2): Ret {
+export function findNodes(self: El | null, q: FindSpec2): Ret {
   const root = (self ?? document) as Node;
   const limit = (q.limit ?? 20) + 1;
   let cands: El[];
@@ -807,8 +838,21 @@ function findNodes(self: El | null, q: FindSpec2): Ret {
     }
   }
   if (q.name) cands = cands.filter((e) => lc(nameOf(e)).includes(lc(q.name)));
+  // #2524: rendered instances first (document order otherwise), so the first ref is the
+  // control a user sees; boxless copies say why, matching what the snapshot leaves out.
+  const why = new Map(cands.map((e) => [e, isVisible(e) ? null : (hiddenReason(e) ?? "not rendered")]));
+  cands = [...cands.filter((e) => !why.get(e)), ...cands.filter((e) => why.get(e))];
   const els = cands.slice(0, limit);
-  return { value: { total: cands.length, matches: els.map((e, i) => ({ el: i, role: roleOf(e), name: nameOf(e).slice(0, 120) })) }, elements: els };
+  return {
+    value: {
+      total: cands.length,
+      matches: els.map((e, i) => {
+        const hidden = why.get(e);
+        return { el: i, role: roleOf(e), name: nameOf(e).slice(0, 120), ...(hidden ? { hidden } : {}) };
+      }),
+    },
+    elements: els,
+  };
 }
 
 /** D24: resolve once the DOM has been quiet for `quiet` ms (max `max` ms). Timers, not rAF: works in background tabs. */

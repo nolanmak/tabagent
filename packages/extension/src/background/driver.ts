@@ -15,7 +15,7 @@ import type { RefTable, RefTarget } from "./refs";
 import { marksInView, planCapture, type Metrics, type Target } from "./screenshot-plan";
 import { getSettings, liteForUrl } from "./settings";
 import { render, type FrameTree, type RefSource, type RenderResult, type AXNode } from "./snapshot";
-import { capMatches, type FindMatch, type FindSpec } from "./wait";
+import { capMatches, toMatches, type FindMatch, type FindSpec } from "./wait";
 
 export interface SnapshotOpts {
   mode?: "interactive" | "full";
@@ -190,6 +190,8 @@ export function refSource(table: RefTable, tabId: number, loaderOf: (frameKey: s
 // ===========================================================================
 // CDP driver
 // ===========================================================================
+/** Resolves after the next animation frame plus a task (so rAF-queued DOM work has run), or after 500ms. */
+const NEXT_FRAME = "new Promise((r) => { const t = setTimeout(r, 500); requestAnimationFrame(() => setTimeout(() => { clearTimeout(t); r(0); }, 0)); })";
 export class CdpDriver implements Driver {
   kind = "cdp" as const;
   tabId: number;
@@ -250,6 +252,7 @@ export class CdpDriver implements Driver {
   async snapshot(o: SnapshotOpts): Promise<RenderResult> {
     await this.tab.ensure();
     this.tab.assertNoDialog();
+    await this.wake();
     const { frames } = await this.frames(true);
     const denied = (this.frameCache as unknown as { denied: Map<string, string> }).denied;
     const trees: FrameTree[] = [];
@@ -293,11 +296,12 @@ export class CdpDriver implements Driver {
   async find(spec: FindSpec) {
     await this.tab.ensure();
     this.tab.assertNoDialog();
+    await this.wake();
     const per: FindMatch[][] = [];
     const run = async (frameKey: string, self?: number) => {
       const r = await this.tab.pagelib(frameKey, "findNodes", [{ by: spec.by, value: spec.value, name: spec.name, limit: 20 }], self);
-      const v = this.toRefs(frameKey, r.value, r.nodes) as { matches: { ref: string | null; role: string; name: string }[] };
-      per.push(v.matches.filter((m) => m.ref).map((m) => ({ ref: m.ref!, role: m.role, name: m.name })));
+      const v = this.toRefs(frameKey, r.value, r.nodes) as { matches: Parameters<typeof toMatches>[0] };
+      per.push(toMatches(v.matches));
     };
     if (spec.root) {
       const t = await this.resolveRef(spec.root);
@@ -360,6 +364,7 @@ export class CdpDriver implements Driver {
   /** Auto-wait (#7) then return the top-level viewport point to act on. */
   async actionPoint(ref: string, opts: { timeout?: number; needEditable?: boolean } = {}) {
     const t = await this.resolveRef(ref);
+    await this.wake();
     const local = await this.tab.guard(
       autoWait(
         ref,
@@ -405,7 +410,7 @@ export class CdpDriver implements Driver {
 
   async click(ref: string, o: ClickOpts = {}) {
     const { x, y } = await this.actionPoint(ref, { timeout: o.timeout });
-    await this.wakeInput();
+    await this.wake();
     await this.overlay(ref);
     const button = o.button ?? "left";
     const clickCount = o.clickCount ?? 1;
@@ -423,7 +428,7 @@ export class CdpDriver implements Driver {
 
   async hover(ref: string, timeout?: number) {
     const { x, y } = await this.actionPoint(ref, { timeout });
-    await this.wakeInput();
+    await this.wake();
     await this.tab.guard(this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }));
   }
 
@@ -455,7 +460,7 @@ export class CdpDriver implements Driver {
     await this.tab.ensure();
     this.tab.assertNoDialog();
     const seq = (async () => {
-      await this.wakeInput();
+      await this.wake();
       const held: string[] = [];
       for (const m of parsed.mods) {
         held.push(m);
@@ -477,7 +482,7 @@ export class CdpDriver implements Driver {
     await this.tab.ensure();
     this.tab.assertNoDialog();
     const seq = (async () => {
-      await this.wakeInput();
+      await this.wake();
       const parts = text.split("\n");
       for (let i = 0; i < parts.length; i++) {
         if (parts[i]) await this.tab.send("Input.insertText", { text: parts[i] });
@@ -494,13 +499,21 @@ export class CdpDriver implements Driver {
    * dispatchMouseEvent still resolves (nolanmak/Jarvis#2522). Focus emulation
    * makes the page visible and focused without bringing the tab to the front
    * (D10). It belongs to the debugger session, so it is re-sent after a re-attach.
+   *
+   * Reads wake the tab too (nolanmak/Jarvis#2524): a hidden page runs no
+   * requestAnimationFrame callbacks, and React 19's streaming SSR reveals
+   * completed Suspense boundaries from one, so a page loaded in the background
+   * keeps its real content in <div hidden id="S:0"> until a frame runs. After
+   * waking, wait (bounded) for one frame so that pending work lands first.
    */
   private wokeSeq: number | null = null;
-  private async wakeInput() {
+  private async wake() {
     const seq = this.tab.attachSeq ?? 0;
     if (this.wokeSeq === seq) return;
     this.wokeSeq = seq;
     await this.tab.send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+    // Not evalMain: that grants a user gesture, which a read must never hand the page.
+    await this.tab.send("Runtime.evaluate", { expression: NEXT_FRAME, awaitPromise: true, returnByValue: true }).catch(() => {});
   }
 
   /** #7: act.fill clears, then sets through the native value setter and fires input + change. */
@@ -513,6 +526,7 @@ export class CdpDriver implements Driver {
   async scroll(ref: string | undefined, dx: number, dy: number) {
     await this.tab.ensure();
     this.tab.assertNoDialog();
+    await this.wake();
     if (ref && !dx && !dy) return this.call("scrollIntoView", [], { ref });
     if (ref) {
       await this.call("scrollBy", [dx, dy], { ref });
@@ -525,7 +539,7 @@ export class CdpDriver implements Driver {
   async drag(from: string, to: string, timeout?: number) {
     const a = await this.actionPoint(from, { timeout });
     const b = await this.actionPoint(to, { timeout });
-    await this.wakeInput();
+    await this.wake();
     this.tab.dragData = null;
     await this.tab.send("Input.setInterceptDrags", { enabled: true });
     try {

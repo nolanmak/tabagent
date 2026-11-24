@@ -243,8 +243,8 @@ describe("CdpDriver actions (#7)", () => {
   it("click, hover and drag wake a background tab (focus emulation) before the first mouse event", async () => {
     for (const act of ["click", "hover", "drag"] as const) {
       const f = fake();
-      const ref = await refOf(f.drv, /Click me/);
-      f.calls.length = 0;
+      // a ref minted without a snapshot (which wakes the tab too, #2524)
+      const ref = (f.drv as any).refs.mint({ tabId: 1, frameKey: "|main", backendNodeId: 5, loaderId: "L1" });
       if (act === "drag") await f.drv.drag(ref, ref);
       else await f.drv[act](ref);
       const seq = f.calls.map((c) => c.m).filter((m) => m.startsWith("Input.") || m.startsWith("Emulation."));
@@ -357,9 +357,8 @@ describe("CdpDriver frames (#19) and find (#26)", () => {
       const f = fake();
       const order: string[] = [];
       const send = f.tab.send;
-      f.tab.send = async (m: string, p: any, sid?: string) => (order.push(m), send(m, p, sid));
-      const evalMain = f.tab.evalMain;
-      f.tab.evalMain = async (e: string) => (order.push(/requestAnimationFrame/.test(e) ? "frame" : "eval"), evalMain(e));
+      // the frame wait is a plain Runtime.evaluate (no user gesture, unlike evalMain)
+      f.tab.send = async (m: string, p: any, sid?: string) => (order.push(m === "Runtime.evaluate" && /requestAnimationFrame/.test(p?.expression) && !p.userGesture ? "frame" : m), send(m, p, sid));
       const pagelib = f.tab.pagelib;
       f.tab.pagelib = async (...a: any[]) => (order.push(`pagelib:${a[1]}`), pagelib(...a));
       if (read === "snapshot") await f.drv.snapshot({});
@@ -378,7 +377,7 @@ describe("CdpDriver frames (#19) and find (#26)", () => {
 
   it("find passes through why a match has no box", async () => {
     const f = fake();
-    const id = loadAx("index").nodes.find((n) => n.name?.value === "Click me")!.backendDOMNodeId;
+    const id = loadAx("index").nodes.find((n) => n.name?.value === "Click me")!.backendDOMNodeId!;
     const pagelib = f.tab.pagelib;
     f.tab.pagelib = async (fk: string, name: string, ...rest: any[]) =>
       name === "findNodes" ? { value: { total: 2, matches: [{ el: 0, role: "button", name: "Go" }, { el: 1, role: "button", name: "Go", hidden: "display:none" }] }, nodes: [id, id + 1000] } : pagelib(fk, name, ...rest);

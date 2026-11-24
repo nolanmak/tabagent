@@ -1,7 +1,7 @@
 // pagelib forms (#9, #13): field descriptors, form identification, gate inputs.
 // Decisions (matching, coercion, sensitivity) live in ../pure; this file only reads the DOM.
 import { formSensitivity, maskValue, submitSensitivity, keySensitivity as keyDetect, type FieldLike } from "../pure/sensitive";
-import { closestDeep, deepActive, deepQueryAll, getChecked, isDisabled, isVisible, nameOf, norm, roleOf, valueOf, walk, type El, type Ret } from "./index";
+import { closestDeep, deepActive, deepQueryAll, getChecked, hiddenReason, isDisabled, isVisible, nameOf, norm, roleOf, valueOf, walk, type El, type Ret } from "./index";
 import { hiddenDeep } from "./extract";
 
 const FORM_SEL = "form,[role=form]";
@@ -179,10 +179,16 @@ export function submitInfo(self: El | null): Ret {
   if ("several" in r) return severalError(r.several);
   if (!r.form) return { value: null, elements: [] };
   const form = r.form;
-  const submit = Array.from(form.querySelectorAll("button,input[type=submit],input[type=image]")).find((b) => isSubmitControl(b) && !isDisabled(b) && !hiddenDeep(b)) ?? null;
+  const submits = Array.from(form.querySelectorAll("button,input[type=submit],input[type=image]")).filter(isSubmitControl);
+  const submit = submits.find((b) => !isDisabled(b) && !hiddenDeep(b)) ?? null;
   const elements: El[] = [form];
   if (submit) elements.push(submit);
-  return { value: { el: 0, submit: submit ? 1 : null, control: submit ? nameOf(submit) : formLabel(form), fields: fieldsWithValues(form) }, elements };
+  // #2524: the form has its own submit control but the page keeps it disabled or hidden (an
+  // incomplete multi-step form). requestSubmit would go around the page's own gate and the
+  // page ignores it, so report why instead of "submitting".
+  const gated = !submit && submits[0];
+  const blocked = gated ? { control: nameOf(gated).slice(0, 120), why: [isDisabled(gated) && "disabled", hiddenDeep(gated) && `hidden (${hiddenReason(gated) ?? "not rendered"})`].filter(Boolean).join(" and ") } : undefined;
+  return { value: { el: 0, submit: submit ? 1 : null, control: submit ? nameOf(submit) : formLabel(form), fields: fieldsWithValues(form), ...(blocked ? { blocked } : {}) }, elements };
 }
 
 export function requestSubmit(form: El, submitter?: El) {
