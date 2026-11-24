@@ -104,6 +104,38 @@ test("auth.login classic: prompt (Allow once) → filled from fake op, submitted
   noLeak(w, PASSWORD);
 });
 
+test("DA1 (review H1): even in YOLO mode the typed password cannot be read back with js.eval, nav.wait fn or network.get", async ({ w }) => {
+  await enable(w, { [`https://${HOST}:${w.srv.port}`]: { auth: true, authAlways: [`1password:${ITEM}`] } });
+  await w.h.sw.evaluate(() => (globalThis as any).__tabagent.updateSettings({ yolo: true }));
+  try {
+    w.srv.received.length = 0;
+    const c = await w.h.mcp({ profile: "full,auth" });
+    await w.h.ok(c, "nav.goto", { url: `${w.site}/login.html` });
+    await w.h.ok(c, "network.list");
+    const fill = await call(w, c, "auth.login", { submit: false });
+    expect(fill.isError, fill.text).toBe(false);
+    const ev = await call(w, c, "js.eval", { expression: "document.querySelector('input[type=password]').value" });
+    expect(ev.isError).toBe(true);
+    expect(ev.text).toContain("PERMISSION_DENIED");
+    const fn = await call(w, c, "nav.wait", { for: "fn", value: "document.querySelector('input[type=password]').value === ''", timeout: 2000 });
+    expect(fn.isError).toBe(true);
+    expect(fn.text).toContain("PERMISSION_DENIED");
+    // No agent JS ran, so auth may still submit; the login POST it makes stays unreadable.
+    const sub = await call(w, c, "auth.login");
+    expect(sub.isError, sub.text).toBe(false);
+    expect(w.srv.received.find((x) => x.path === "/auth/login")?.fields.password).toBe(PASSWORD);
+    const list = await call(w, c, "network.list", { method: "POST" });
+    const id = String(list.text.match(/id\W+(n\d+)/)?.[1] ?? "");
+    expect(id, list.text).not.toBe("");
+    const got = await call(w, c, "network.get", { id });
+    expect(got.isError).toBe(true);
+    expect(got.text).toContain("PERMISSION_DENIED");
+    noLeak(w, PASSWORD);
+  } finally {
+    await w.h.sw.evaluate(() => (globalThis as any).__tabagent.updateSettings({ yolo: false }));
+  }
+});
+
 test("auth.login two-step: first call fills the username, second the password (Always for this account)", async ({ w }) => {
   await enable(w, { [`https://${HOST}:${w.srv.port}`]: { auth: true, authAlways: [`1password:${ITEM}`] } });
   w.srv.received.length = 0;
