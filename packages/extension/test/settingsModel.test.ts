@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULTS, migrateSettings, SEEDED_DENYLIST } from "../src/background/settingsModel";
+import { DEFAULTS, migrateSettings, SEEDED_DENYLIST, settingsAuditEvents } from "../src/background/settingsModel";
 
 describe("settings model (D32, contract §7)", () => {
   it("defaults", () => {
@@ -40,5 +40,18 @@ describe("yolo setting", () => {
     expect(migrateSettings(undefined).yolo).toBe(false);
     expect(migrateSettings({ yolo: "yes" }).yolo).toBe(false);
     expect(migrateSettings({ yolo: true }).yolo).toBe(true);
+  });
+});
+
+describe("risky settings are audited when toggled (review M1)", () => {
+  const d = migrateSettings(undefined);
+  it("turning YOLO on or off, and devAllowSensitive, sends settings.changed with the new values", () => {
+    expect(settingsAuditEvents(d, { ...d, yolo: true })).toEqual([{ event: "settings.changed", data: { yolo: true } }]);
+    expect(settingsAuditEvents({ ...d, yolo: true }, d)).toEqual([{ event: "settings.changed", data: { yolo: false } }]);
+    expect(settingsAuditEvents(d, { ...d, devAllowSensitive: true, yolo: true })).toEqual([{ event: "settings.changed", data: { devAllowSensitive: true, yolo: true } }]);
+  });
+  it("other changes, and no change, send nothing", () => {
+    expect(settingsAuditEvents(d, { ...d, showOverlay: false })).toEqual([]);
+    expect(settingsAuditEvents({ ...d, yolo: true }, { ...d, yolo: true })).toEqual([]);
   });
 });
