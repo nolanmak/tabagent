@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync, watchFile } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getTool, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
+import { getTool, TIMEOUTS, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
 import { parseFlags, toolParamsFromArgs, type Flags } from "./args";
 import { api, ensureDaemon, health, restCall } from "./client";
 import { auditPath, configPath, loadConfig } from "./config";
@@ -40,7 +40,7 @@ async function cmdServe(f: Flags) {
     die(`Could not listen on 127.0.0.1:${cfg.port}: ${(e as Error).message}`);
   }
   console.log(`TabAgent bridge v${BRIDGE_VERSION} on http://127.0.0.1:${d.port}  (MCP: /mcp, REST: /v1, config: ${configPath()})`);
-  console.log(`\n  TabAgent pairing code: ${d.pairCode}   (valid 10 min; \`tabagent pair\` mints a new one)\n  Open the TabAgent side panel in Chrome and enter it. Port ${d.port}.\n`);
+  console.log(`\n  TabAgent pairing code: ${d.pairCode}   (valid ${TIMEOUTS.pairCode / 60_000} min; \`tabagent pair\` mints a new one)\n  Open the TabAgent side panel in Chrome and enter it. Port ${d.port}.\n`);
   const stop = async () => {
     await d.stop();
     process.exit(0);

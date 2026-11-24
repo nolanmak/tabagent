@@ -90,7 +90,7 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
   extension's pairing screen has a port field.
 - The extension opens the WebSocket and sends
   `hello {protocolVersion, extensionVersion, secret?, pairCode?}`.
-  - **Unpaired:** a valid pair code (one-time, 10-minute TTL, invalidated after
+  - **Unpaired:** a valid pair code (one-time, 30-minute TTL, invalidated after
     5 wrong attempts; `tabagent pair` mints a new one) is accepted; the bridge
     records the extension ID in `config.json.extensionIds` and replies
     `welcome {protocolVersion, bridgeVersion, secret}`.
