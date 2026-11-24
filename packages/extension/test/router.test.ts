@@ -262,6 +262,25 @@ describe("DA1 credential readback (security review H1)", () => {
     expect(w.authorize).not.toHaveBeenCalled(); // refused before any prompt
   });
 
+  it("after a worker restart (state restored from storage.session) js.eval on the filled tab is still refused", async () => {
+    const { AuthTaint, credentialGuard, persistAuthTaint } = await import("../src/background/authTaint");
+    const mk = () => {
+      const data: Record<string, unknown> = {};
+      return { get: async (k: string) => (k in data ? { [k]: structuredClone(data[k]) } : {}), set: async (o: Record<string, unknown>) => void Object.assign(data, structuredClone(o)) };
+    };
+    const areas = { session: mk(), local: mk() };
+    const old = new AuthTaint();
+    await persistAuthTaint(old, areas);
+    old.filled(1, "password", "hunter2-secret");
+    await new Promise((r) => setTimeout(r, 0));
+    const fresh = new AuthTaint();
+    await persistAuthTaint(fresh, areas);
+    const w = world({ guard: (r) => credentialGuard(fresh, r) }, { yolo: true });
+    const r = await w.router.handle(cmd("js.eval", { expression: "document.querySelector('input[type=password]').value", tabId: 1 }));
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(w.handlers["js.eval"]).not.toHaveBeenCalled();
+  });
+
   it("other tools on the tainted tab still work", async () => {
     const { w } = await taintedWorld();
     expect((await w.router.handle(cmd("page.snapshot", { tabId: 1 }))).ok).toBe(true);
