@@ -32,6 +32,7 @@ import { createAuth, type Auth } from "./auth";
 import { createCaptcha, type CaptchaBridge, type CaptchaOpts } from "./captcha";
 import { auditPath, configPath, saveConfig, type Config } from "./config";
 import { readDownload, resolveUploads, SessionDownloads } from "./files";
+import { HandoffBridge, type HandoffBridgeOpts } from "./handoff";
 import { buildMcpServer } from "./mcp";
 import { Pairing } from "./pairing";
 import { authenticate, bearerOf, principalMeta, type Principal } from "./tokens";
@@ -81,6 +82,9 @@ export interface DaemonOpts {
   auth?: Auth;
   /** #61 CAPTCHA solving (tests inject stub settings/providers). */
   captcha?: Partial<Omit<CaptchaOpts, "inFlight" | "audit">>;
+  /** #61 remote handoff: tests bind the phone listener on loopback and capture the webhook. */
+  handoffListen?: HandoffBridgeOpts["listen"];
+  postWebhook?: HandoffBridgeOpts["postWebhook"];
 }
 
 /**
@@ -132,6 +136,7 @@ export class Daemon {
   readonly audit: AuditWriter;
   readonly auth: Auth;
   readonly captcha: CaptchaBridge;
+  readonly handoff: HandoffBridge;
   readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
@@ -155,6 +160,16 @@ export class Daemon {
     this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
     this.captcha = createCaptcha({ log: this.log, now: this.now, ...opts.captcha, inFlight: (id) => this.pending.get(id), audit: this.audit });
     this.port = cfg.port;
+    this.handoff = new HandoffBridge({
+      inFlight: (id) => this.pending.get(id),
+      sendTo: (ws, m) => this.sendTo(ws as WebSocket, m as unknown as BridgeToExt),
+      audit: { event: (e, d) => this.audit.event(e, d, { caller: "bridge" }) },
+      port: () => this.port,
+      log: this.log,
+      now: this.now,
+      listen: opts.handoffListen,
+      postWebhook: opts.postWebhook,
+    });
   }
 
   get extensionConnected() {
@@ -205,6 +220,7 @@ export class Daemon {
       /* no file yet */
     }
     this.timers.push(setInterval(() => this.gcRestSessions(), 60_000));
+    this.timers.push(setInterval(() => this.handoff.sweep(), 15_000));
     this.timers.push(setInterval(() => this.checkSilent(), this.opts.heartbeatCheckMs ?? 5_000));
     for (const t of this.timers) t.unref();
     await this.auth.start();
@@ -214,6 +230,7 @@ export class Daemon {
     for (const t of this.timers) clearInterval(t);
     await this.auth.stop();
     this.captcha.abortAll();
+    await this.handoff.stop();
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
     this.ext?.ws.terminate();
     for (const c of this.wss.clients) c.terminate();
@@ -258,6 +275,7 @@ export class Daemon {
         this.log("Extension disconnected");
       }
       this.failPending(ws, "The TabAgent extension disconnected");
+      this.handoff.onSocketClosed(ws);
     });
     ws.on("error", () => {});
   }
@@ -344,6 +362,7 @@ export class Daemon {
       if (!retrySafe(p.tool, p.params)) {
         clearTimeout(p.timer);
         this.pending.delete(id);
+        this.handoff.commandEnded(id);
         p.resolve({
           ok: false,
           error: { code: "NO_EXTENSION", message: "The TabAgent extension reconnected while the command was running; it was not re-sent because it may have already run", hint: "Check the page state, then retry." },
@@ -360,6 +379,7 @@ export class Daemon {
       if (p.ws !== ws) continue;
       clearTimeout(p.timer);
       this.pending.delete(id);
+      this.handoff.commandEnded(id);
       p.resolve({ ok: false, error: { code: "NO_EXTENSION", message, hint: PAIRING_HINT } });
     }
   }
@@ -371,12 +391,14 @@ export class Daemon {
     this.log("Extension silent for 45s; closing the socket");
     this.ext = null;
     this.failPending(e.ws, "The TabAgent extension stopped responding (no ping for 45s)");
+    this.handoff.onSocketClosed(e.ws);
     e.ws.terminate();
   }
 
   private onExtMessage(ws: WebSocket, msg: any) {
     if (this.auth.bridge.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     if (this.captcha.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
+    if (this.handoff.onExtMessage(msg, ws)) return;
     switch (msg?.type) {
       case "ping":
         this.sendTo(ws, { type: "pong" });
@@ -414,6 +436,7 @@ export class Daemon {
     if (!p) return;
     this.pending.delete(raw.id);
     clearTimeout(p.timer);
+    this.handoff.commandEnded(raw.id);
     const who = { caller: p.meta.label, session: p.meta.id };
     const env = ResultEnvelopeSchema.safeParse(raw);
     if (env.success) this.audit.record(env.data.audit, who);
@@ -508,15 +531,22 @@ export class Daemon {
     return resp;
   }
 
+  /** How long the bridge waits for a command. auth.handoff waits as long as the configured handoff timeout (#61). */
+  commandTimeoutMs(tool: string, params: Record<string, unknown>, meta?: SessionMeta): number {
+    const t = Number(params.timeout ?? 0) || defaultTimeout(tool);
+    const extra = tool === "auth.handoff" ? Math.max(authExtraTimeout(tool), this.handoff.timeoutMs()) : authExtraTimeout(tool);
+    // Generous: a permission prompt (120s) plus the tool's own timeout plus slack.
+    return TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000 + extra + (meta ? captchaExtraTimeout(tool, meta) : 0);
+  }
+
   private send(meta: SessionMeta, tool: string, params: Record<string, unknown>): Promise<OutputResponse> {
     const id = randomUUID();
-    const t = Number(params.timeout ?? 0) || defaultTimeout(tool);
-    // Generous: a permission prompt (120s) plus the tool's own timeout plus slack.
-    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000 + authExtraTimeout(tool) + captchaExtraTimeout(tool, meta);
+    const ms = this.commandTimeoutMs(tool, params, meta);
     const ws = this.ext!.ws;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        this.handoff.commandEnded(id);
         resolve({ ok: false, error: { code: "TIMEOUT", message: `${tool} did not finish in ${Math.round(ms / 1000)}s` } });
       }, ms);
       this.pending.set(id, { resolve, timer, ws, meta, tool, params });

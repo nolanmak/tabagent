@@ -133,3 +133,96 @@ describe("auth.handoff state machine", () => {
     expect(during).not.toContain("snapshot");
   });
 });
+
+describe("auth.handoff with the remote handoff page (#61)", () => {
+  function withRemote(answer: { handoffId: string | null; url: string | null; timeoutMs: number | null }) {
+    const t = fake();
+    const calls: string[] = [];
+    let timeoutMs = -1;
+    let fireT: () => void = () => {};
+    t.deps.setTimeout = (fn, ms) => ((timeoutMs = ms), (fireT = fn), 1);
+    t.deps.remote = {
+      async open(req) {
+        calls.push(`open ${req.tabId}`);
+        return answer;
+      },
+      async close(id, outcome) {
+        calls.push(`close ${id} ${outcome}`);
+      },
+    };
+    return { ...t, calls, timeoutMs: () => timeoutMs, fire: () => fireT() };
+  }
+
+  it("opens the remote link after detaching, uses the bridge's timeout, closes with the outcome", async () => {
+    const t = withRemote({ handoffId: "h1", url: "http://100.1.1.1:1/handoff/h1?t=x", timeoutMs: 30 * 60_000 });
+    const p = runHandoff(t.deps, REQ);
+    await tick();
+    expect(t.log[0]).toBe("detach 7");
+    expect(t.calls).toEqual(["open 7"]);
+    expect(t.timeoutMs()).toBe(30 * 60_000);
+    expect(t.busy.has(7)).toBe(true);
+    t.ui("done");
+    await expect(p).resolves.toEqual({ completed: true });
+    expect(t.calls).toEqual(["open 7", "close h1 done"]);
+  });
+
+  it("timeout message names the configured minutes, and the remote link is closed", async () => {
+    const t = withRemote({ handoffId: "h1", url: "u", timeoutMs: 30 * 60_000 });
+    const p = runHandoff(t.deps, REQ);
+    await tick();
+    t.fire();
+    await expect(p).rejects.toMatchObject({ code: "PROMPT_TIMEOUT", message: expect.stringContaining("30 minutes") });
+    expect(t.calls.at(-1)).toBe("close h1 timeout");
+  });
+
+  it("kill and tab close also close the remote link", async () => {
+    for (const how of ["kill", "close"] as const) {
+      const t = withRemote({ handoffId: "h2", url: "u", timeoutMs: 60_000 });
+      const p = runHandoff(t.deps, REQ);
+      await tick();
+      t[how]();
+      await p.catch(() => {});
+      expect(t.calls.at(-1)).toBe(`close h2 ${how === "kill" ? "killed" : "closed"}`);
+    }
+  });
+
+  it("no remote link (bridge off or old) → local timeout, nothing to close", async () => {
+    const t = withRemote({ handoffId: null, url: null, timeoutMs: null });
+    const p = runHandoff(t.deps, REQ);
+    await tick();
+    expect(t.timeoutMs()).toBe(5 * 60_000);
+    t.ui("cancel");
+    await p;
+    expect(t.calls).toEqual(["open 7"]);
+  });
+
+  it("a bridge-configured local timeout is honoured without a link", async () => {
+    const t = withRemote({ handoffId: null, url: null, timeoutMs: 12 * 60_000 });
+    const p = runHandoff(t.deps, REQ);
+    await tick();
+    expect(t.timeoutMs()).toBe(12 * 60_000);
+    t.ui("done");
+    await p;
+  });
+
+  it("a failing remote open falls back to a local handoff", async () => {
+    const t = withRemote({ handoffId: null, url: null, timeoutMs: null });
+    t.deps.remote!.open = async () => {
+      throw new Error("boom");
+    };
+    const p = runHandoff(t.deps, REQ);
+    await tick();
+    t.ui("done");
+    await expect(p).resolves.toEqual({ completed: true });
+  });
+
+  it("the audit end event says whether a remote link was issued, never the link", async () => {
+    const t = withRemote({ handoffId: "h1", url: "http://100.1.1.1:1/handoff/h1?t=secret-token", timeoutMs: 60_000 });
+    const p = runHandoff(t.deps, REQ);
+    await tick();
+    t.ui("done");
+    await p;
+    expect(JSON.stringify(t.events)).not.toContain("secret-token");
+    expect(t.events.find((e) => e.name === "auth.handoff.end")!.data.remote).toBe(true);
+  });
+});

@@ -3,7 +3,7 @@
 import { pollCode, TabAgentError, type SessionMeta } from "@tabagent/protocol";
 import { authTaint } from "../authTaint";
 import { authTaintReady } from "../authTaintStore";
-import { detachTab } from "../cdp";
+import { detachTab, peekCdpTab } from "../cdp";
 import * as driverMod from "../driver";
 import { disposeDrivers, driverFor, type Driver } from "../driver";
 import { onKilled, registerHandlers } from "../handlerRegistry";
@@ -17,6 +17,7 @@ import { createAuthChannel, type Sender } from "./pure/channel";
 import { authCode, authLogin, authStatus, newMemory, type AuthEnv, type AuthPage, type EmailReader, type PageField } from "./pure/flows";
 import { GMAIL_FEED_URL, readFeed } from "./pure/gmail";
 import { runHandoff } from "./pure/handoff";
+import { createRemoteHandoffs } from "./pure/remote";
 import { checkAuthSite } from "./pure/site";
 
 // ---------------------------------------------------------------------------
@@ -213,8 +214,38 @@ function needTab(c: Ctx): number {
 // ---------------------------------------------------------------------------
 // Handoff (#35)
 // ---------------------------------------------------------------------------
+
+// #61 remote handoff: a bare debugger session for the phone's frames and input (see pure/remote.ts).
+// It is deliberately not a CdpTab: no pagelib, no capture, no refs, and agent commands stay TAB_BUSY.
+const remote = createRemoteHandoffs({
+  send: (m) => (sender ? sender(m) : false),
+  async attach(tabId) {
+    const target = { tabId };
+    try {
+      await chrome.debugger.attach(target, "1.3");
+    } catch (e) {
+      if (!/already attached/i.test(String((e as Error).message ?? e))) throw e;
+      // A stale session from an earlier service-worker life (cdp.ts does the same).
+      await chrome.debugger.detach(target).catch(() => {});
+      await chrome.debugger.attach(target, "1.3");
+    }
+  },
+  async detach(tabId) {
+    // If the agent's own session already took the tab back (it detaches/re-attaches on "already
+    // attached"), ours is gone: do not detach theirs.
+    if (peekCdpTab(tabId)?.attached) return;
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+  },
+  cdp: (tabId, method, params) => chrome.debugger.sendCommand({ tabId }, method, params),
+  end: (tabId, r) => endHandoff(tabId, r),
+});
+/** Bridge → extension handoff.* messages. Returns true when the message was one. */
+export function onHandoffBridgeMessage(msg: unknown): boolean {
+  return remote.onMessage(msg);
+}
+
 const BANNER = "tabagent-handoff-banner";
-function banner(tabId: number, label: string | null) {
+function banner(tabId: number, label: string | null, isRemote = false) {
   chrome.scripting
     .executeScript({
       target: { tabId },
@@ -228,7 +259,14 @@ function banner(tabId: number, label: string | null) {
         d.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;pointer-events:none;background:#7c3aed;color:#fff;font:13px system-ui;padding:6px 10px;text-align:center";
         document.documentElement.appendChild(d);
       },
-      args: [BANNER, label ? `TabAgent: ${label} is asking you to finish a step in this tab. Click Done in the TabAgent side panel when finished.` : null],
+      args: [
+        BANNER,
+        label
+          ? isRemote
+            ? `TabAgent: ${label} is asking you to finish a step in this tab, here or from the remote handoff link. Press Done when finished.`
+            : `TabAgent: ${label} is asking you to finish a step in this tab. Click Done in the TabAgent side panel when finished.`
+          : null,
+      ],
     })
     .catch(() => {});
 }
@@ -262,12 +300,12 @@ async function handoff(c: Ctx) {
       start: (info) => startHandoff(info),
       end: (id, r) => endHandoff(id, r),
       busy: (id) => inHandoff(id),
-      notify(info) {
+      notify(info, isRemote) {
         chrome.notifications
           ?.create(`tabagent-handoff-${info.tabId}`, { type: "basic", iconUrl: chrome.runtime.getURL("icons/128.png"), title: `${info.sessionLabel} needs you in a tab`, message: `Finish the step on ${new URL(info.origin || "https://x").host}, then click Done in the TabAgent side panel.`, priority: 2 })
           .catch?.(() => {});
         chrome.action.setBadgeText({ text: "!" }).catch(() => {});
-        banner(info.tabId, info.sessionLabel);
+        banner(info.tabId, info.sessionLabel, isRemote);
       },
       clearNotice(id) {
         chrome.notifications?.clear(`tabagent-handoff-${id}`).catch?.(() => {});
@@ -285,6 +323,10 @@ async function handoff(c: Ctx) {
       setTimeout: (fn, ms) => setTimeout(fn, ms),
       clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
       timeoutMs: testHandoffTimeout ?? undefined,
+      remote: {
+        open: (req) => remote.open(c.cmdId, req.tabId, { origin: req.origin, reason: req.reason, sessionLabel: req.sessionLabel }),
+        close: (id, outcome) => remote.close(id, outcome),
+      },
     },
     { tabId, sessionId: c.meta.id, sessionLabel: c.meta.label, origin, reason: String(c.p.reason ?? "").slice(0, 500) },
   );
@@ -330,4 +372,5 @@ let testHandoffTimeout: number | null = null;
   },
   pendingSecrets: () => channel.pendingCount(),
   handoffs: () => listHandoffs(),
+  remoteHandoffs: () => remote.active(),
 };

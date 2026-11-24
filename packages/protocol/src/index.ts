@@ -7,6 +7,7 @@ export * from "./wrap";
 export * from "./auth";
 export * from "./auth-code";
 export * from "./captcha";
+export * from "./handoff";
 
 // ---------------------------------------------------------------------------
 // Site policy helpers (shared by extension engine + bridge token limits)

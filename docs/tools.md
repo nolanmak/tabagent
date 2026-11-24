@@ -649,7 +649,7 @@ MCP name `auth_code` · level act · profiles auth · lite unsupported · handle
 
 ### auth.handoff
 
-Hand the tab to the user for a human-only step (passkey, CAPTCHA, phone approval); waits up to 5 min for Done.
+Hand the tab to the user for a human-only step (passkey, CAPTCHA, ID check, phone approval); waits for Done (5 min; 30 with remote handoff on).
 
 MCP name `auth_handoff` · level read · profiles auth · lite supported · handled by extension
 

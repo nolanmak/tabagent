@@ -7,7 +7,7 @@ import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
-import { onAuthBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
+import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
 import { disposeDrivers, driverFor } from "./driver";
@@ -78,6 +78,12 @@ function onBridgeMessage(msg: any) {
     case "captcha.token":
     case "captcha.vision.answer":
       onCaptchaBridgeMessage(msg);
+      break;
+    case "handoff.opened":
+    case "handoff.frame":
+    case "handoff.input":
+    case "handoff.end":
+      onHandoffBridgeMessage(msg);
       break;
   }
 }

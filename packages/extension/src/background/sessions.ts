@@ -248,7 +248,7 @@ export function inHandoff(tabId: number) {
 
 function refusePrivateOrHandoff(tabId: number) {
   if (privateTabs.has(tabId)) throw new TabAgentError("PERMISSION_DENIED", `Tab ${tabId} is a private sign-in tab`, "Agents cannot use private sign-in tabs.");
-  if (handoffs.has(tabId)) throw new TabAgentError("TAB_BUSY", `Tab ${tabId} is handed to the user`, "Wait until the user presses Done in the TabAgent side panel, then retry.");
+  if (handoffs.has(tabId)) throw new TabAgentError("TAB_BUSY", `Tab ${tabId} is handed to the user`, "Wait until the user presses Done (TabAgent side panel or the remote handoff page), then retry.");
 }
 
 export const NO_TABS_HINT = "call tabs new (tabs action=new), or nav.goto with a url";
