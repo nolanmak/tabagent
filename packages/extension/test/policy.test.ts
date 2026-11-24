@@ -218,3 +218,33 @@ describe("effectiveLevel (session.permissions)", () => {
     expect(effectiveLevel(base(), { sessionId: "s1", cap: "act", sites: [], url: "chrome://x" })).toMatchObject({ level: "deny" });
   });
 });
+
+describe("YOLO mode (allow every site without asking)", () => {
+  const y = (over: Partial<PolicyState> = {}) => base({ yolo: true, ...over });
+  it("allows any level on an unknown site", () => {
+    for (const level of ["read", "act", "full"] as const) expect(resolve(y(), req({ level })).decision).toBe("allow");
+  });
+  it("allows above a lower stored level", () => {
+    expect(resolve(y({ sites: { [A]: { policy: "read" } } }), req({ level: "full" })).decision).toBe("allow");
+  });
+  it("passes sensitive a-e", () => {
+    for (const c of ["a", "b", "c", "d", "e"] as const) expect(resolve(y(), req({ sensitive: c })).decision).toBe("allow");
+  });
+  it("still asks for f (take over a user tab) and g (sign in)", () => {
+    expect(resolve(y(), req({ sensitive: "f" })).decision).toBe("ask");
+    expect(resolve(y({ sites: { [A]: { auth: true } } }), req({ sensitive: "g", accountId: "x" })).decision).toBe("ask");
+  });
+  it("keeps the kill switch, hard denies, denylist, explicit site deny, session deny and token limits", () => {
+    expect(resolve(y({ paused: true }), req())).toMatchObject({ code: "KILLED" });
+    expect(resolve(y(), req({ url: "chrome://settings" })).decision).toBe("deny");
+    expect(resolve(y(), req({ url: "https://my.bank.example/" })).decision).toBe("deny");
+    expect(resolve(y({ sites: { [A]: { policy: "deny" } } }), req()).decision).toBe("deny");
+    expect(resolve(y({ grants: { s1: { [A]: { denied: "act" } } } }), req({ level: "act" })).decision).toBe("deny");
+    expect(resolve(y(), req({ cap: "read", level: "act" })).decision).toBe("deny");
+    expect(resolve(y(), req({ sites: ["b.example"] })).decision).toBe("deny");
+  });
+  it("effectiveLevel reports the token cap with source yolo", () => {
+    expect(effectiveLevel(y(), { sessionId: "s1", cap: "act", sites: [], url: `${A}/` })).toMatchObject({ level: "act", source: expect.stringContaining("YOLO") });
+    expect(effectiveLevel(y({ sites: { [A]: { policy: "deny" } } }), { sessionId: "s1", cap: "full", sites: [], url: `${A}/` })).toMatchObject({ level: "deny" });
+  });
+});

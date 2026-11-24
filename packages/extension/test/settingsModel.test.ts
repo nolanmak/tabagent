@@ -34,3 +34,11 @@ describe("settings model (D32, contract §7)", () => {
     expect(migrateSettings({ port: 1234, secret: "abc" })).toMatchObject({ port: 1234, secret: "abc" });
   });
 });
+
+describe("yolo setting", () => {
+  it("defaults off and only true turns it on", () => {
+    expect(migrateSettings(undefined).yolo).toBe(false);
+    expect(migrateSettings({ yolo: "yes" }).yolo).toBe(false);
+    expect(migrateSettings({ yolo: true }).yolo).toBe(true);
+  });
+});

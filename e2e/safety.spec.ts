@@ -323,3 +323,18 @@ test("prompt while the side panel is open does not pop a window", async ({ h }) 
   expect((await pend).text).toContain("PERMISSION_DENIED");
   await panel.close();
 });
+
+test("YOLO toggle in the side panel: a new site needs no prompt", async ({ h }) => {
+  await h.setPolicies({}, { paused: false, devAllowSensitive: false, yolo: false });
+  const panel = await h.openPanel();
+  await panel.locator("#yolo").evaluate((el) => el.closest("details")?.setAttribute("open", ""));
+  await panel.locator("#yolo").check();
+  await expect.poll(() => h.sw.evaluate(() => (globalThis as any).__tabagent.getSettings().then((s: any) => s.yolo))).toBe(true);
+  const c = await h.mcp({ label: "yolo" });
+  await h.ok(c, "tabs", { action: "new" });
+  const r = await h.call(c, "nav.goto", { url: `${h.A}/index.html` });
+  expect(r.isError).toBeFalsy();
+  expect(await h.pendingPrompts()).toHaveLength(0);
+  await panel.locator("#yolo").uncheck();
+  await panel.close();
+});

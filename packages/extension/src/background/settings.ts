@@ -13,6 +13,7 @@ export interface Settings {
   sites: Record<string, SiteEntry>;
   denylist: string[];
   devAllowSensitive: boolean;
+  yolo: boolean;
   onSessionEnd: OnSessionEnd;
   beforeUnload: BeforeUnload;
   showOverlay: boolean;
