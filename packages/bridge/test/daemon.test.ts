@@ -175,16 +175,18 @@ describe("version handshake (D5)", () => {
 });
 
 describe("one extension connection (D4)", () => {
-  it("same ID replaces the old socket; its in-flight command fails NO_EXTENSION", async () => {
+  it("same ID replaces the old socket; its in-flight action fails NO_EXTENSION at once (not re-sent)", async () => {
     const { d, base, cfg } = await boot();
     const first = await pairedExt(d);
-    const call = rest(base, "/v1/page.snapshot", cfg.secret, {});
+    const call = rest(base, "/v1/act.click", cfg.secret, { ref: "e1" });
     await first.next("command");
     const second = new FakeExt(d.port);
     expect((await second.hello({ secret: cfg.secret })).type).toBe("welcome");
     const r = await call;
     expect(r.status).toBe(503);
     expect(r.body.error.code).toBe("NO_EXTENSION");
+    // An action may already have run in the old worker; re-sending could click twice.
+    expect(second.msgs.some((m) => m.type === "command")).toBe(false);
     expect((await first.closed).code).toBe(4002);
     second.onCommand = () => okEnvelope({ snapshot: "- x" }, "page.snapshot");
     expect((await rest(base, "/v1/page.snapshot", cfg.secret, {})).body.ok).toBe(true);
@@ -238,6 +240,99 @@ describe("heartbeat (D11)", () => {
     d.checkSilent();
     expect(d.extensionConnected).toBe(true);
     e.close();
+  });
+});
+
+// Reload race (Legion, 2026-11-23): "Extension disconnected", then two "Extension connected" in the same
+// second, then "silent for 45s" and a reconnect; commands in that window failed NO_EXTENSION.
+describe("extension reload (D4 + D11)", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const settled = <T>(p: Promise<T>, ms: number) => Promise.race([p.then(() => "settled" as const), sleep(ms).then(() => "pending" as const)]);
+
+  it("two near-simultaneous hellos from the same ID leave exactly one active socket, and commands go to it", async () => {
+    const { d, base, cfg } = await boot();
+    const old = await pairedExt(d);
+    old.close();
+    await old.closed;
+    const a = new FakeExt(d.port);
+    const b = new FakeExt(d.port);
+    await Promise.all([a.opened(), b.opened()]);
+    a.send({ type: "hello", protocolVersion: PROTOCOL_VERSION, extensionVersion: "0.1.0", secret: cfg.secret });
+    b.send({ type: "hello", protocolVersion: PROTOCOL_VERSION, extensionVersion: "0.1.0", secret: cfg.secret });
+    await Promise.all([a.next("welcome"), b.next("welcome")]);
+    const loser = await Promise.race([a.closed.then(() => a), b.closed.then(() => b), sleep(1000).then(() => null)]);
+    expect(loser).not.toBeNull();
+    expect((await loser!.closed).code).toBe(4002);
+    const winner = loser === a ? b : a;
+    expect(winner.ws.readyState).toBe(WebSocket.OPEN);
+    expect(d.extensionConnected).toBe(true);
+    expect([...(d as any).wss.clients].filter((c: WebSocket) => c.readyState === WebSocket.OPEN)).toHaveLength(1);
+    winner.onCommand = () => okEnvelope({ snapshot: "- live" }, "page.snapshot");
+    const r = await rest(base, "/v1/page.snapshot", cfg.secret, {});
+    expect(r.body.ok).toBe(true);
+    expect(r.body.result.snapshot).toContain("- live");
+    winner.close();
+  });
+
+  it("a read-only command in flight on the replaced socket is re-sent to the new one and succeeds at once", async () => {
+    const { d, base, cfg } = await boot();
+    const first = await pairedExt(d); // never answers: its worker went away with the reload
+    const started = Date.now();
+    const call = rest(base, "/v1/page.snapshot", cfg.secret, {});
+    const cmd = await first.next("command");
+    const second = new FakeExt(d.port);
+    second.onCommand = () => okEnvelope({ snapshot: "- after reload" }, "page.snapshot");
+    expect((await second.hello({ secret: cfg.secret })).type).toBe("welcome");
+    const r = await call;
+    expect(r.body.ok).toBe(true);
+    expect(r.body.result.snapshot).toContain("- after reload");
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(second.msgs.find((m) => m.type === "command")).toMatchObject({ id: cmd.id, tool: "page.snapshot" });
+    expect((await first.closed).code).toBe(4002);
+    second.close();
+  });
+
+  it("a socket already silent for 45s gets no new commands; the call waits for the reconnect and succeeds", async () => {
+    let now = 5_000_000;
+    const { d, base, cfg } = await boot({ now: () => now, heartbeatCheckMs: 60_000, extWaitMs: 3_000 });
+    const stale = await pairedExt(d);
+    now += 46_000; // the 5s sweep has not run yet
+    const call = rest(base, "/v1/page.snapshot", cfg.secret, {});
+    expect(await settled(stale.closed, 1_000)).toBe("settled");
+    const fresh = new FakeExt(d.port);
+    fresh.onCommand = () => okEnvelope({ snapshot: "- fresh" }, "page.snapshot");
+    expect((await fresh.hello({ secret: cfg.secret })).type).toBe("welcome");
+    const r = await call;
+    expect(r.body.ok).toBe(true);
+    expect(stale.msgs.some((m) => m.type === "command")).toBe(false);
+    fresh.close();
+  });
+
+  it("with a single socket, 44s of silence still routes commands to it (the 45s rule is unchanged)", async () => {
+    let now = 5_000_000;
+    const { d, base, cfg } = await boot({ now: () => now, heartbeatCheckMs: 60_000 });
+    const e = await pairedExt(d);
+    e.onCommand = () => okEnvelope({ snapshot: "- ok" }, "page.snapshot");
+    now += 44_000;
+    const r = await rest(base, "/v1/page.snapshot", cfg.secret, {});
+    expect(r.body.ok).toBe(true);
+    expect(d.extensionConnected).toBe(true);
+    e.close();
+  });
+
+  it("with a single socket, a silent close is followed by a working reconnect", async () => {
+    let now = 5_000_000;
+    const { d, base, cfg } = await boot({ now: () => now, heartbeatCheckMs: 60_000 });
+    const e = await pairedExt(d);
+    now += 46_000;
+    d.checkSilent();
+    expect(d.extensionConnected).toBe(false);
+    await e.closed;
+    const again = new FakeExt(d.port);
+    again.onCommand = () => okEnvelope({ snapshot: "- back" }, "page.snapshot");
+    expect((await again.hello({ secret: cfg.secret })).type).toBe("welcome");
+    expect((await rest(base, "/v1/page.snapshot", cfg.secret, {})).body.ok).toBe(true);
+    again.close();
   });
 });
 
