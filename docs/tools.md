@@ -124,7 +124,7 @@ MCP name `nav_reload` · level act · profiles full only · lite supported · ha
 
 ### nav.wait
 
-Wait for: load \| networkidle \| selector (CSS) \| text \| url (substring or /regex/) \| fn (JS predicate; asks the user).
+Wait for: load \| networkidle \| selector (CSS) \| text \| url (substring or /regex/) \| fn (JS predicate, re-run every 100ms; needs full access, asks the user).
 
 MCP name `nav_wait` · level read · profiles core · lite supported · sensitive c (when for=fn) · handled by extension · page content `url`
 

@@ -8,6 +8,7 @@ export interface ToolLike {
   sensitive?: SensitiveCategory | boolean;
   actions?: Record<string, { level: Level | "none"; sensitive?: SensitiveCategory }>;
   sensitiveWhen?: { param: string; values: string[] };
+  levelWhen?: { param: string; values: string[]; level: Level };
 }
 
 /**
@@ -62,7 +63,9 @@ export function requirementsFor(tool: ToolLike, params: Record<string, unknown>)
     if (action === "attach") return { action, level: levelOf(a.level) ?? "read", sensitive, urlSource: "attach-target", needsTab: false };
     return { action, level: null, urlSource: "none", needsTab: false };
   }
-  const level = levelOf(tool.level);
+  // nav.wait for=fn is arbitrary JS: it needs js.eval's level (review H2), also via the fallback.
+  const lw = tool.levelWhen ?? (tool.name === "nav.wait" ? { param: "for", values: ["fn"], level: "full" as Level } : undefined);
+  const level = lw && lw.values.includes(String(params[lw.param])) ? lw.level : levelOf(tool.level);
   let sensitive: SensitiveCategory | undefined = normalizeCat(tool.sensitive) ?? STATIC_SENSITIVE[tool.name];
   const when = tool.sensitiveWhen ?? (tool.name === "nav.wait" ? { param: "for", values: ["fn"] } : undefined);
   if (sensitive && when && !when.values.includes(String(params[when.param]))) sensitive = undefined;
