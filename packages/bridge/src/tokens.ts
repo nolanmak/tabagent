@@ -8,6 +8,8 @@ export interface Principal {
   name: string;
   kind: "secret" | "token";
   cap: Cap;
+  /** #61: set only for tokens with automatic CAPTCHA solving on. */
+  autoCaptcha?: boolean;
   sites: string[];
 }
 
@@ -21,14 +23,14 @@ export function parseSites(s: string | undefined): string[] {
   return list;
 }
 
-export function createToken(cfg: Config, name: string, cap: string = "act", sites: string[] = [], now = new Date()): string {
+export function createToken(cfg: Config, name: string, cap: string = "act", sites: string[] = [], now = new Date(), opts: { autoCaptcha?: boolean } = {}): string {
   if (!NAME_RE.test(name)) throw new TabAgentError("BAD_REQUEST", "Token name must be 1-40 chars of letters, digits, _ . -");
   const c = CapSchema.safeParse(cap);
   if (!c.success) throw new TabAgentError("BAD_REQUEST", "--caps must be one of read, act, full (a single maximum level)");
   if (name === "local") throw new TabAgentError("BAD_REQUEST", '"local" is reserved for the bridge secret');
   if (cfg.tokens.some((t) => t.name === name)) throw new TabAgentError("BAD_REQUEST", `Token "${name}" exists. Revoke it first.`);
   const tok = newToken();
-  cfg.tokens.push({ name, hash: hashToken(tok), cap: c.data, sites, created: now.toISOString() });
+  cfg.tokens.push({ name, hash: hashToken(tok), cap: c.data, sites, created: now.toISOString(), ...(opts.autoCaptcha ? { autoCaptcha: true } : {}) });
   return tok;
 }
 
@@ -50,7 +52,21 @@ export function authenticate(cfg: Pick<Config, "secret" | "tokens">, bearer: str
   if (safeEq(bearer, cfg.secret)) return { name: "local", kind: "secret", cap: "full", sites: [] };
   const h = hashToken(bearer);
   const rec = cfg.tokens.find((t) => safeEq(t.hash, h));
-  return rec ? { name: rec.name, kind: "token", cap: rec.cap, sites: [...rec.sites] } : null;
+  return rec ? { name: rec.name, kind: "token", cap: rec.cap, sites: [...rec.sites], ...(rec.autoCaptcha === true ? { autoCaptcha: true } : {}) } : null;
+}
+
+/** #61: turn automatic CAPTCHA solving on/off for one token. False when no such token. */
+export function setAutoCaptcha(cfg: Config, name: string, on: boolean): boolean {
+  const rec = cfg.tokens.find((t) => t.name === name);
+  if (!rec) return false;
+  if (on) rec.autoCaptcha = true;
+  else delete rec.autoCaptcha;
+  return true;
+}
+
+/** SessionMeta fields that come from the principal. autoCaptcha only when on. */
+export function principalMeta(who: Principal): { cap: Cap; sites: string[]; autoCaptcha?: true } {
+  return { cap: who.cap, sites: who.sites, ...(who.autoCaptcha ? { autoCaptcha: true as const } : {}) };
 }
 
 export function bearerOf(header: string | undefined): string | undefined {

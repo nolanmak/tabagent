@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   authExtraTimeout,
+  captchaExtraTimeout,
   defaultTimeout,
   FilesResolveSchema,
   getTool,
@@ -28,11 +29,12 @@ import {
 } from "@tabagent/protocol";
 import { AuditWriter } from "./audit";
 import { createAuth, type Auth } from "./auth";
+import { createCaptcha, type CaptchaBridge, type CaptchaOpts } from "./captcha";
 import { auditPath, configPath, saveConfig, type Config } from "./config";
 import { readDownload, resolveUploads, SessionDownloads } from "./files";
 import { buildMcpServer } from "./mcp";
 import { Pairing } from "./pairing";
-import { authenticate, bearerOf, type Principal } from "./tokens";
+import { authenticate, bearerOf, principalMeta, type Principal } from "./tokens";
 import { BRIDGE_VERSION } from "./version";
 
 export { BRIDGE_VERSION };
@@ -77,6 +79,8 @@ export interface DaemonOpts {
   audit?: AuditWriter;
   /** M6 auth (tests inject a fake). */
   auth?: Auth;
+  /** #61 CAPTCHA solving (tests inject stub settings/providers). */
+  captcha?: Partial<Omit<CaptchaOpts, "inFlight" | "audit">>;
 }
 
 /**
@@ -127,6 +131,7 @@ export class Daemon {
   readonly pairing: Pairing;
   readonly audit: AuditWriter;
   readonly auth: Auth;
+  readonly captcha: CaptchaBridge;
   readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
@@ -148,6 +153,7 @@ export class Daemon {
     this.pairing = new Pairing(this.now);
     this.audit = opts.audit ?? new AuditWriter(auditPath());
     this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
+    this.captcha = createCaptcha({ log: this.log, now: this.now, ...opts.captcha, inFlight: (id) => this.pending.get(id), audit: this.audit });
     this.port = cfg.port;
   }
 
@@ -207,6 +213,7 @@ export class Daemon {
   async stop() {
     for (const t of this.timers) clearInterval(t);
     await this.auth.stop();
+    this.captcha.abortAll();
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
     this.ext?.ws.terminate();
     for (const c of this.wss.clients) c.terminate();
@@ -369,6 +376,7 @@ export class Daemon {
 
   private onExtMessage(ws: WebSocket, msg: any) {
     if (this.auth.bridge.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
+    if (this.captcha.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     switch (msg?.type) {
       case "ping":
         this.sendTo(ws, { type: "pong" });
@@ -504,7 +512,7 @@ export class Daemon {
     const id = randomUUID();
     const t = Number(params.timeout ?? 0) || defaultTimeout(tool);
     // Generous: a permission prompt (120s) plus the tool's own timeout plus slack.
-    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000 + authExtraTimeout(tool);
+    const ms = TIMEOUTS.prompt + Math.min(t, TIMEOUTS.max) + 15_000 + authExtraTimeout(tool) + captchaExtraTimeout(tool, meta);
     const ws = this.ext!.ws;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -679,9 +687,12 @@ export class Daemon {
     let s = this.restSessions.get(key);
     if (!s) {
       const label = who.kind === "token" ? who.name : (proxy && client) || "local";
-      s = { meta: { id: `${proxy ? "mcp" : "rest"}:${key}`, label, cap: who.cap, sites: who.sites }, lastSeen: this.now(), persistent: proxy };
+      s = { meta: { id: `${proxy ? "mcp" : "rest"}:${key}`, label, ...principalMeta(who) }, lastSeen: this.now(), persistent: proxy };
       this.restSessions.set(key, s);
     } else if (proxy && who.kind === "secret" && client && s.meta.label === "local") s.meta.label = client;
+    // `tabagent token auto-captcha` takes effect on the session's next call.
+    if (who.autoCaptcha) s.meta.autoCaptcha = true;
+    else delete s.meta.autoCaptcha;
     s.lastSeen = this.now();
     return s.meta;
   }
@@ -701,7 +712,7 @@ export class Daemon {
       } catch (e) {
         return this.sendJson(res, 400, { jsonrpc: "2.0", error: { code: -32602, message: (e as Error).message }, id: null });
       }
-      const meta: SessionMeta = { id: `mcp-${randomUUID().slice(0, 8)}`, label: who.kind === "token" ? who.name : "local", cap: who.cap, sites: who.sites };
+      const meta: SessionMeta = { id: `mcp-${randomUUID().slice(0, 8)}`, label: who.kind === "token" ? who.name : "local", ...principalMeta(who) };
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {

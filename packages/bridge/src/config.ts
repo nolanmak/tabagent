@@ -12,6 +12,8 @@ export interface TokenRec {
   cap: Cap;
   sites: string[];
   created: string;
+  /** #61: act.click / form.submit solve a blocking CAPTCHA on their own. Default off. */
+  autoCaptcha?: boolean;
 }
 
 export interface Config {

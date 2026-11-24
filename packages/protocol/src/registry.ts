@@ -4,6 +4,7 @@ import { z } from "zod";
 import { TabAgentError } from "./errors";
 import { TIMEOUTS } from "./messages";
 import { AUTH_TOOLS, OPT_IN_GROUPS } from "./auth";
+import { CAPTCHA_TOOLS } from "./captcha";
 
 export type Level = "read" | "act" | "full";
 /** "none" = not site-scoped (no origin is involved). */
@@ -734,6 +735,7 @@ export const TOOLS = [
     handledBy: "extension",
   }),
   ...AUTH_TOOLS,
+  ...CAPTCHA_TOOLS,
 ] as const satisfies readonly ToolDef[];
 
 export type ToolName = (typeof TOOLS)[number]["name"];

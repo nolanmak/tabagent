@@ -8,7 +8,7 @@ import type { Flags } from "./args";
 import { auditPath, configPath, loadConfig, saveConfig } from "./config";
 import { renderCli } from "./format";
 import { installSkill, skillTargets, uninstallSkill } from "./skill";
-import { createToken, parseSites, revokeToken } from "./tokens";
+import { createToken, parseSites, revokeToken, setAutoCaptcha } from "./tokens";
 import { BRIDGE_VERSION } from "./version";
 
 export interface Out {
@@ -36,13 +36,22 @@ export function tokenCommand(rest: string[], f: Flags): Out {
       const name = String(f.name ?? rest[1] ?? "");
       const cap = String(f.caps ?? f.cap ?? "act");
       const sites = parseSites(typeof f.sites === "string" ? f.sites : undefined);
-      const tok = createToken(cfg, name, cap, sites);
+      const autoCaptcha = f["auto-captcha"] === true || f["auto-captcha"] === "on";
+      const tok = createToken(cfg, name, cap, sites, new Date(), { autoCaptcha });
       saveConfig(cfg);
-      return ok([tok], [`Created token "${name}" (caps=${cap}${sites.length ? `, sites=${sites.join(",")}` : ""}). It is shown once.`, "Use it as: TABAGENT_TOKEN=<token> tabagent mcp   or   Authorization: Bearer <token>"]);
+      return ok([tok], [`Created token "${name}" (caps=${cap}${sites.length ? `, sites=${sites.join(",")}` : ""}${autoCaptcha ? ", auto-captcha" : ""}). It is shown once.`, "Use it as: TABAGENT_TOKEN=<token> tabagent mcp   or   Authorization: Bearer <token>"]);
     }
     if (sub === "list") {
       if (!cfg.tokens.length) return ok(["No tokens."]);
-      return ok(cfg.tokens.map((t) => `${t.name.padEnd(20)} caps=${t.cap.padEnd(5)} sites=${t.sites.join(",") || "*"}  created ${t.created}`));
+      return ok(cfg.tokens.map((t) => `${t.name.padEnd(20)} caps=${t.cap.padEnd(5)} sites=${t.sites.join(",") || "*"}  created ${t.created}${t.autoCaptcha ? "  auto-captcha" : ""}`));
+    }
+    if (sub === "auto-captcha") {
+      const name = String(rest[1] ?? f.name ?? "");
+      const v = rest[2];
+      if (v !== "on" && v !== "off") return fail("Usage: tabagent token auto-captcha <name> on|off");
+      if (!setAutoCaptcha(cfg, name, v === "on")) return fail(`No token named ${name}`);
+      saveConfig(cfg);
+      return ok([`auto-captcha ${v} for ${name}: act.click and form.submit ${v === "on" ? "solve a blocking CAPTCHA with the bridge's solver (see `tabagent captcha status`)" : "leave CAPTCHAs to captcha.solve"}. Applies on the next call.`]);
     }
     if (sub === "revoke") {
       const name = String(rest[1] ?? f.name ?? "");
@@ -53,7 +62,7 @@ export function tokenCommand(rest: string[], f: Flags): Out {
   } catch (e) {
     return fail(e instanceof TabAgentError ? e.message : String(e));
   }
-  return fail("Usage: tabagent token create --name <n> [--caps read|act|full] [--sites a.com,*.b.com] | list | revoke <name>");
+  return fail("Usage: tabagent token create --name <n> [--caps read|act|full] [--sites a.com,*.b.com] [--auto-captcha] | list | revoke <name> | auto-captcha <name> on|off");
 }
 
 export function formatAuditLine(l: string): string {
@@ -143,8 +152,10 @@ Usage:
   tabagent pair                        Mint a new pairing code on the running bridge
   tabagent status                      Bridge + extension status (and the pairing code when unpaired)
   tabagent tools [--profile P]         List tools (profiles: ${PROFILES.join(", ")})
-  tabagent token create --name N [--caps read|act|full] [--sites a.com,*.b.com]
-  tabagent token list | revoke <name>
+  tabagent token create --name N [--caps read|act|full] [--sites a.com,*.b.com] [--auto-captcha]
+  tabagent token list | revoke <name> | auto-captcha <name> on|off
+  tabagent captcha enable [capsolver|2captcha|vision] [--fallback vision] [--base-url URL --model M]
+  tabagent captcha disable [provider] | status [--check]   CAPTCHA solving (key read from stdin or env)
   tabagent audit tail [-n 50] [--follow]
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
   tabagent config [show] | add-upload-dir <dir> | set port <n>

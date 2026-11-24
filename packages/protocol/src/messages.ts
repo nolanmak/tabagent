@@ -40,6 +40,8 @@ export const SessionMetaSchema = z.object({
   cap: CapSchema,
   /** Hostname globs this client is limited to (empty = no extra limit). */
   sites: z.array(z.string()),
+  /** #61: act.click / form.submit solve a blocking CAPTCHA on their own (per token, default off). */
+  autoCaptcha: z.boolean().optional(),
 });
 export type SessionMeta = z.infer<typeof SessionMetaSchema>;
 
