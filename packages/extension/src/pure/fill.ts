@@ -4,6 +4,8 @@ import type { ErrorCode } from "@tabagent/protocol";
 export interface Filled {
   key: string;
   ref: string;
+  /** #59: clicked, but the control's checked state can't be read back. */
+  unverified?: true;
 }
 export interface Failed {
   key: string;

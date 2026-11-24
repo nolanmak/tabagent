@@ -29,9 +29,13 @@ async function settled(drv: Driver, ref: string, want: boolean) {
 
 const notActionable = (e: unknown) => e instanceof TabAgentError && e.code === "NOT_ACTIONABLE";
 
-export async function setCheckState(drv: Driver, ref: string, checked: boolean, timeout?: number): Promise<{ checked: boolean; changed: boolean }> {
+export type CheckResult =
+  | { checked: boolean; changed: boolean; verified: true }
+  | { checked: null; changed: "unknown"; verified: false; warning: string };
+
+export async function setCheckState(drv: Driver, ref: string, checked: boolean, timeout?: number): Promise<CheckResult> {
   const cur = await checkedNow(drv, ref);
-  if (cur === checked) return { checked, changed: false };
+  if (cur === checked) return { checked, changed: false, verified: true };
   const inf = (await drv.call("info", [], { ref })) as { visible: boolean; tag?: string };
   let lastErr: unknown = new TabAgentError("NOT_ACTIONABLE", `${ref} is not actionable (reason: hidden)`);
   let clicked = false;
@@ -63,5 +67,14 @@ export async function setCheckState(drv: Driver, ref: string, checked: boolean, 
   }
   if (!clicked) throw lastErr;
   if (after !== null && after !== checked) throw new TabAgentError("NOT_ACTIONABLE", `${ref} did not change to checked=${checked}`, "The page controls this input; take a page.snapshot and act.click the control the page shows for it.");
-  return { checked: after ?? checked, changed: true };
+  // #59: a custom control with no native input or aria-checked can't be read
+  // back. Never report it as checked; say the click is unverified.
+  if (after === null)
+    return {
+      checked: null,
+      changed: "unknown",
+      verified: false,
+      warning: `Clicked ${ref}, but can't read its checked state (no native input or aria-checked). Confirm with page.screenshot ref=${ref} before submitting; a disabled Submit usually means it is still unchecked.`,
+    };
+  return { checked: after, changed: true, verified: true };
 }

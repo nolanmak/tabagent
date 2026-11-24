@@ -155,6 +155,33 @@ describe("act.* through afterAction (D14/D24)", () => {
   });
 });
 
+describe("act.check readback (#59)", () => {
+  function withChecked(seq: (boolean | null)[]) {
+    const base = state.drv.call;
+    state.drv.call = async (fn: string, ...rest: unknown[]) => (fn === "getChecked" ? (seq.length > 1 ? seq.shift() : seq[0]) : base(fn, ...rest));
+  }
+
+  it("state that reads back as checked is verified", async () => {
+    withChecked([false, true]);
+    const r: any = await actHandlers["act.check"](ctx("act.check", { ref: "e1" }));
+    expect(r.result).toEqual({ checked: true, changed: true, verified: true });
+  });
+
+  it("an unreadable control is not reported as checked", async () => {
+    withChecked([null]);
+    const r: any = await actHandlers["act.check"](ctx("act.check", { ref: "e1" }));
+    expect(state.drv.log).toContain("click:e1");
+    expect(r.result.checked).toBeNull();
+    expect(r.result.verified).toBe(false);
+    expect(r.result.warning).toMatch(/can't read/i);
+  });
+
+  it("a control that stays unchecked still fails", async () => {
+    withChecked([false]);
+    await expect(actHandlers["act.check"](ctx("act.check", { ref: "e1" }))).rejects.toMatchObject({ code: "NOT_ACTIONABLE" });
+  });
+});
+
 describe("D18(a)(b) gates", () => {
   it("a click on the submit control of a password form hits the gate", async () => {
     state.drv.clickInfo = { role: "button", name: "Log in", isSubmit: true, formFields: [{ type: "password", name: "pw", label: "Password" }] };
