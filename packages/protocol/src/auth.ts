@@ -493,7 +493,7 @@ export const AUTH_TOOLS = [
   {
     name: "auth.handoff",
     group: "auth",
-    description: "Hand the tab to the user for a human-only step (passkey, CAPTCHA, phone approval); waits up to 5 min for Done.",
+    description: "Hand the tab to the user for a human-only step (passkey, CAPTCHA, ID check, phone approval); waits for Done (5 min; 30 with remote handoff on).",
     params: z.object({ tabId, reason: z.string().min(1).max(500) }),
     result: z.strictObject({ completed: z.boolean() }),
     level: "read",

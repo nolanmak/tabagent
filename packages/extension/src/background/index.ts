@@ -7,7 +7,7 @@ import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
-import { onAuthBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
+import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
 import { disposeDrivers, driverFor } from "./driver";
 import { getDownload } from "./downloads";
@@ -72,6 +72,12 @@ function onBridgeMessage(msg: any) {
     case "auth.accounts.result":
     case "secret":
       onAuthBridgeMessage(msg);
+      break;
+    case "handoff.opened":
+    case "handoff.frame":
+    case "handoff.input":
+    case "handoff.end":
+      onHandoffBridgeMessage(msg);
       break;
   }
 }
