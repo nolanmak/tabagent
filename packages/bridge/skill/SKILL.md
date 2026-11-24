@@ -1,6 +1,6 @@
 ---
 name: tabagent
-description: Drive the user's real Chrome with TabAgent: browse, read pages, pull data from tables and lists, fill and submit forms, upload and download files, inspect network and console. Use whenever a task needs a web browser, a logged-in website, page data extraction or a web form.
+description: Drive the user's real Chrome with TabAgent: browse, read pages, pull data from tables and lists, fill and submit forms, sign in and enter 2FA codes without seeing the secrets, upload and download files, inspect network and console. Use whenever a task needs a web browser, a logged-in website, a sign-in or 2FA step, page data extraction or a web form.
 ---
 
 # TabAgent: drive the user's Chrome
