@@ -118,6 +118,8 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 
 export class CdpTab {
   attached = false;
+  /** Bumped on every attach; per-session emulation (focus emulation) is lost on detach. */
+  attachSeq = 0;
   userDetached = false;
   attaching: Promise<void> | null = null;
   children = new Map<string, { targetId: string; url: string }>(); // sessionId -> target
@@ -196,6 +198,7 @@ export class CdpTab {
       } else throw e;
     }
     this.attached = true;
+    this.attachSeq++;
     this.contexts.clear();
     this.children.clear();
     await this.enableDomains(undefined);

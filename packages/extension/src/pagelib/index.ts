@@ -597,14 +597,43 @@ export function getChecked(el: El): boolean | null {
   return null;
 }
 
+/**
+ * The visible element a user clicks to toggle a custom checkbox/radio whose
+ * native input is hidden: its label (label[for] or wrapping), an aria-labelledby
+ * caption, an ARIA checkbox/radio wrapper, or a visible parent holding only it.
+ */
 function labelFor(el: El): Ret<{ el: number } | null> {
   const labels = (el as HTMLInputElement).labels;
   const vis = labels ? Array.from(labels).find(isVisible) : undefined;
   if (vis) return { value: { el: 0 }, elements: [vis] };
+  for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean)) {
+    const cap = (el.getRootNode() as Document | ShadowRoot).getElementById?.(id);
+    if (cap && isVisible(cap)) return { value: { el: 0 }, elements: [cap] };
+  }
+  const wrap = el.parentElement?.closest("[role=checkbox],[role=radio],[role=switch]");
+  if (wrap && isVisible(wrap)) return { value: { el: 0 }, elements: [wrap] };
   // custom checkbox: visible sibling/ancestor
   const p = el.parentElement;
   if (p && isVisible(p) && p.querySelectorAll("input").length === 1) return { value: { el: 0 }, elements: [p] };
   return { value: null, elements: [] };
+}
+
+const isCheckInput = (el: El): el is HTMLInputElement => el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio");
+
+/** act.click on a hidden native checkbox/radio clicks what a user would click instead (Jarvis#2522). */
+function toggleTarget(el: El): Ret<{ el: number } | null> {
+  if (!isCheckInput(el) || isVisible(el)) return { value: null, elements: [] };
+  return labelFor(el);
+}
+
+/**
+ * Last resort for act.check: the input's own click(), which runs the native
+ * activation (toggle + input + change) that React and other frameworks listen to.
+ */
+function clickEl(el: El) {
+  if (!isCheckInput(el) || el.disabled) return false;
+  el.click();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,6 +1081,8 @@ const api = {
   selectOptions,
   getChecked,
   labelFor,
+  toggleTarget,
+  clickEl,
   // forms (./forms.ts)
   describeFields,
   fieldInfo,
