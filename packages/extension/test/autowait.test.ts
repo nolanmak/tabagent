@@ -67,6 +67,14 @@ describe("autoWait (#7)", () => {
     expect(res.message).toContain(`reason: ${r}`);
   });
 
+  // nolanmak/Jarvis#2524: "hidden" alone left agents guessing why a found button had no box.
+  it("hidden reports why the element has no box (page text)", async () => {
+    expect(judge({ ...ok, visible: false, why: "inside <div#S:0> which is display:none" })).toMatchObject({ reason: "hidden", by: "inside <div#S:0> which is display:none" });
+    const res = await reason([{ visible: false, box: { ...box, w: 0, h: 0 }, why: "inside <div#S:0> which is display:none" }]);
+    expect(res.message).toBe("e7 is not actionable (reason: hidden): inside <div#S:0> which is display:none");
+    expect(res.pageText).toBe(true);
+  });
+
   it("detached during the wait -> NOT_ACTIONABLE detached; detached at the start -> REF_STALE", async () => {
     expect((await reason([{ enabled: false }, { attached: false }])).message).toContain("reason: detached");
     expect((await reason([{ attached: false }])).code).toBe("REF_STALE");

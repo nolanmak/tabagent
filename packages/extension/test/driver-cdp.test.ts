@@ -350,6 +350,43 @@ describe("CdpDriver frames (#19) and find (#26)", () => {
     expect(r).toEqual({ matches: [{ ref, role: "button", name: "Click me" }], truncated: false });
   });
 
+  // nolanmak/Jarvis#2524: a hidden (background) tab runs no animation frames, so React's
+  // streaming reveal never ran and snapshot/find read the unrevealed page.
+  it("snapshot, find and actions wake a background tab and let a frame run before reading the page", async () => {
+    for (const read of ["snapshot", "find", "click"] as const) {
+      const f = fake();
+      const order: string[] = [];
+      const send = f.tab.send;
+      f.tab.send = async (m: string, p: any, sid?: string) => (order.push(m), send(m, p, sid));
+      const evalMain = f.tab.evalMain;
+      f.tab.evalMain = async (e: string) => (order.push(/requestAnimationFrame/.test(e) ? "frame" : "eval"), evalMain(e));
+      const pagelib = f.tab.pagelib;
+      f.tab.pagelib = async (...a: any[]) => (order.push(`pagelib:${a[1]}`), pagelib(...a));
+      if (read === "snapshot") await f.drv.snapshot({});
+      else if (read === "find") await f.drv.find({ by: "role", value: "button" });
+      else {
+        const ref = (f.drv as any).refs.mint({ tabId: 1, frameKey: "|main", backendNodeId: 5, loaderId: "L1" });
+        await f.drv.click(ref);
+      }
+      const wake = order.indexOf("Emulation.setFocusEmulationEnabled");
+      const firstRead = order.findIndex((m) => m === "Accessibility.getFullAXTree" || m === "pagelib:findNodes" || m === "pagelib:observe");
+      expect(wake, read).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("frame"), read).toBeGreaterThan(wake);
+      expect(order.indexOf("frame"), read).toBeLessThan(firstRead);
+    }
+  });
+
+  it("find passes through why a match has no box", async () => {
+    const f = fake();
+    const id = loadAx("index").nodes.find((n) => n.name?.value === "Click me")!.backendDOMNodeId;
+    const pagelib = f.tab.pagelib;
+    f.tab.pagelib = async (fk: string, name: string, ...rest: any[]) =>
+      name === "findNodes" ? { value: { total: 2, matches: [{ el: 0, role: "button", name: "Go" }, { el: 1, role: "button", name: "Go", hidden: "display:none" }] }, nodes: [id, id + 1000] } : pagelib(fk, name, ...rest);
+    const r = await f.drv.find({ by: "role", value: "button" });
+    expect(r.matches.map((m: any) => m.hidden)).toEqual([undefined, "display:none"]);
+    expect("hidden" in r.matches[0]).toBe(false);
+  });
+
   it("mask hooks mask extra nodes", async () => {
     const f = fake("index");
     const search = loadAx("index").nodes.find((n) => n.name?.value === "Search")!;

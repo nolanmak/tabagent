@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Request access | Mirror form fixture</title>
+<style>
+  body { font-family: sans-serif; }
+  form.app { display: grid; gap: 12px; width: 480px; margin: 24px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<!--
+  nolanmak/Jarvis#2524 (second repro): the structure of openai.com's "Request Daybreak
+  Access" form. A React form renders its fields step by step from state that only
+  input/change events update; its submit button is <button type=submit disabled hidden>
+  until every required field it shows is valid. After it sits a display:none Marketo
+  form that mirrors every field (same names, similar labels) and has its own Submit.
+-->
+<form class="app" id="app" novalidate>
+  <label>Legal entity name *<input id="Company" name="Company" type="text" required></label>
+  <label>Public website *<input id="mkto_website_form_fill" name="mkto_website_form_fill" type="url" required></label>
+  <div role="radiogroup" aria-labelledby="gov-q">
+    <span id="gov-q">Are you a government entity? *</span>
+    <label><input type="radio" name="industry_government[]" value="No" required> No</label>
+    <label><input type="radio" name="industry_government[]" value="Yes" required> Yes</label>
+  </div>
+  <div id="step2"></div>
+  <button type="submit" id="go" disabled hidden><span>Submit and start verification</span></button>
+</form>
+<p id="state">State: idle</p>
+
+<form class="hidden mktoForm" id="mktoForm_1377">
+  <label for="mk-Company">*Company</label><input id="mk-Company" name="Company" type="text">
+  <label for="mk-org">*What is your org ID?</label><input id="mk-org" name="What_is_your_org_ID__c" type="text">
+  <label for="mk-Email">*Work email</label><input id="mk-Email" name="Email" type="email">
+  <div class="mktoButtonRow"><button type="submit" class="mktoButton">Submit</button></div>
+</form>
+
+<script>
+  // React-like controlled state: only input/change events reach it, as with React's onChange.
+  const state = {};
+  const app = document.getElementById("app");
+  const step2 = document.getElementById("step2");
+  const go = document.getElementById("go");
+  const STEP2 = [["What_is_your_org_ID__c", "OpenAI Organization ID", false], ["Email", "Work email", true]];
+  function render() {
+    const step1 = !!state.Company && /^https?:\/\/\S+/.test(state.mkto_website_form_fill || "") && !!state["industry_government[]"];
+    if (step1 && !step2.childElementCount) {
+      for (const [name, label, req] of STEP2) {
+        const l = document.createElement("label");
+        l.textContent = label + (req ? " *" : "");
+        const i = document.createElement("input");
+        i.name = name;
+        i.type = name === "Email" ? "email" : "text";
+        i.required = req;
+        l.appendChild(i);
+        step2.appendChild(l);
+      }
+    }
+    const done = step1 && /.+@.+/.test(state.Email || "");
+    go.hidden = !done;
+    go.disabled = !done;
+  }
+  const onEvent = (e) => {
+    const t = e.target;
+    if (!t.name) return;
+    state[t.name] = t.type === "radio" ? (t.checked ? t.value : state[t.name]) : t.value;
+    render();
+  };
+  app.addEventListener("input", onEvent);
+  app.addEventListener("change", onEvent);
+  app.addEventListener("submit", (e) => {
+    e.preventDefault();
+    // like the live form: an incomplete form ignores the submit
+    if (go.disabled) return;
+    document.getElementById("state").textContent = "State: submitted " + state.Email;
+  });
+  document.getElementById("mktoForm_1377").addEventListener("submit", (e) => {
+    e.preventDefault();
+    document.getElementById("state").textContent = "State: mirror submitted";
+  });
+</script>
+</body>
+</html>
