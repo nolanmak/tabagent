@@ -133,7 +133,10 @@ async function groupTab(s: Session, tabId: number) {
         s.groupId = undefined;
       }
     }
-    s.groupId = await chrome.tabs.group({ tabIds: [tabId] });
+    // Without windowId the group lands in the *focused* window, which fails when that is a popup
+    // (our prompt window) or DevTools.
+    const { windowId } = await chrome.tabs.get(tabId);
+    s.groupId = await chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId } });
     await chrome.tabGroups.update(s.groupId, { title: groupTitle(s.meta.label), color: s.color, collapsed: false });
   } catch {
     /* windows without tab-group support (popups) */
