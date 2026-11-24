@@ -49,7 +49,7 @@ function publicField(f: FieldDesc & Record<string, unknown>) {
 // executing one planned action through the driver
 // ---------------------------------------------------------------------------
 async function setChecked(t: TabCtx, ref: string, checked: boolean, timeout: number) {
-  await setCheckState(t.drv, ref, checked, timeout);
+  return setCheckState(t.drv, ref, checked, timeout);
 }
 
 async function pickComboOption(t: TabCtx, ref: string, text: string, timeout: number) {
@@ -154,8 +154,9 @@ async function fillFields(c: Ctx, t: TabCtx, values: Record<string, FillValue>) 
         continue;
       }
       try {
-        await run(t, action, Math.min(perField, Math.max(1, deadline - Date.now())));
-        filled.push({ key, ref: action.ref });
+        const r = await run(t, action, Math.min(perField, Math.max(1, deadline - Date.now())));
+        const unverified = action.kind === "check" && (r as { verified?: boolean } | undefined)?.verified === false;
+        filled.push({ key, ref: action.ref, ...(unverified ? { unverified: true as const } : {}) });
       } catch (e) {
         failed.push(failure(key, e, action.ref));
       }

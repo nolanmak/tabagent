@@ -80,14 +80,14 @@ beforeEach(() => {
 describe("act.check on a custom (hidden-input) checkbox", () => {
   it("clicks the label of a hidden input and reports the new state", async () => {
     const r: any = await actHandlers["act.check"](ctx("act.check", { ref: "e1", checked: true }));
-    expect(r.result).toEqual({ checked: true, changed: true });
+    expect(r.result).toEqual({ checked: true, changed: true, verified: true });
     expect(clicks(state.drv)).toEqual(["click:e9"]);
   });
 
   it("falls back to an in-page click on the input when the label click does not toggle it", async () => {
     state.drv = page({ labelToggles: false });
     const r: any = await actHandlers["act.check"](ctx("act.check", { ref: "e1", checked: true }));
-    expect(r.result).toEqual({ checked: true, changed: true });
+    expect(r.result).toEqual({ checked: true, changed: true, verified: true });
     expect(clicks(state.drv)).toEqual(["click:e9", "call:clickEl:e1"]);
   });
 
@@ -106,7 +106,7 @@ describe("act.check on a custom (hidden-input) checkbox", () => {
   it("does not click at all when already in the asked state", async () => {
     state.drv = page({ initial: true });
     const r: any = await actHandlers["act.check"](ctx("act.check", { ref: "e1", checked: true }));
-    expect(r.result).toEqual({ checked: true, changed: false });
+    expect(r.result).toEqual({ checked: true, changed: false, verified: true });
     expect(clicks(state.drv)).toEqual([]);
   });
 
@@ -134,5 +134,13 @@ describe("form.fill on a custom checkbox", () => {
     const r: any = await formHandlers["form.fill"](ctx("form.fill", { fields: { e1: true } }));
     expect(r.failed ?? []).toEqual([]);
     expect(state.drv.s.checked).toBe(true);
+  });
+
+  it("#59: flags a checkbox whose state can't be read back as unverified", async () => {
+    state.drv = page({ visible: true });
+    const base = state.drv.call;
+    state.drv.call = async (fn: string, a: unknown[], opt?: { ref?: string }) => (fn === "getChecked" ? null : base(fn, a, opt));
+    const r: any = await formHandlers["form.fill"](ctx("form.fill", { fields: { e1: true } }));
+    expect(r.filled).toEqual([{ key: "e1", ref: "e1", unverified: true }]);
   });
 });
