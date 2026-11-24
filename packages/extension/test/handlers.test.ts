@@ -45,8 +45,15 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     setSnap: (l: string[]) => (snap = l),
     snapshot: async () => ({ text: snap.join("\n"), lines: snap, refs: ["e1"], shown: [], truncated: false, collapsed: 0, omitted: 0, tokens: 1 }),
     find: async () => ({ matches: [], truncated: false }),
-    call: async (fn: string) => {
+    calls: [] as { fn: string; o?: any }[],
+    frameKeyInfo: null as any[] | null,
+    callAllFrames: async (fn: string) => {
+      log.push(`callAll:${fn}`);
+      return (d.frameKeyInfo ?? [{ value: d.keyInfo ?? { inForm: false } }]).map((v: any, i: number) => ({ frameKey: `f${i}`, url: "http://x.test/a", isMain: i === 0, ...v }));
+    },
+    call: async (fn: string, _args?: unknown[], o?: any) => {
       log.push(`call:${fn}`);
+      d.calls.push({ fn, o });
       if (fn === "clickGateInfo") return d.clickInfo ?? { role: "button", name: "Go" };
       if (fn === "keyGateInfo") return d.keyInfo ?? { inForm: false };
       if (fn === "info") return { isSelect: false, visible: true };
@@ -161,6 +168,68 @@ describe("D18(a)(b) gates", () => {
     await actHandlers["act.press"](ctx("act.press", { key: "Enter" }));
     await actHandlers["act.type"](ctx("act.type", { text: "x", submit: true }));
     expect(state.sensitive.map((a) => a[2])).toEqual(["a", "a"]);
+  });
+
+  describe("keyboard bypass paths (security review H3)", () => {
+    const pwForm = { inForm: true, formFields: [{ type: "password", name: "pw" }] };
+    const gated = () => state.sensitive.map((a) => a[2]);
+
+    it("act.press Return / Shift+Return / raw CR in a password form hits the gate before the key is sent", async () => {
+      state.drv.keyInfo = pwForm;
+      for (const key of ["Return", "Shift+Return", "\r"]) {
+        state.sensitive = [];
+        state.drv.log.length = 0;
+        await actHandlers["act.press"](ctx("act.press", { key }));
+        expect(gated(), JSON.stringify(key)).toEqual(["a"]);
+      }
+    });
+
+    it("act.type with a newline in a password form hits the gate before anything is typed", async () => {
+      state.drv.keyInfo = pwForm;
+      state.drv.press = async () => {
+        throw new Error("no extra Enter");
+      };
+      let typedBeforeGate = false;
+      state.drv.typeText = async (t: string) => {
+        state.drv.log.push(`type:${t}`);
+        if (!state.sensitive.length) typedBeforeGate = true;
+        return {};
+      };
+      await actHandlers["act.type"](ctx("act.type", { ref: "e1", text: "hunter2\n" }));
+      expect(gated()).toEqual(["a"]);
+      expect(typedBeforeGate).toBe(false);
+      // with a ref, the gate inspects that element (and so its frame)
+      expect(state.drv.calls.find((c: any) => c.fn === "keyGateInfo")?.o).toEqual({ ref: "e1" });
+    });
+
+    it("act.type without a newline, or with one into a textarea, is not gated", async () => {
+      state.drv.keyInfo = pwForm;
+      await actHandlers["act.type"](ctx("act.type", { ref: "e1", text: "hunter2" }));
+      state.drv.keyInfo = { ...pwForm, textarea: true };
+      await actHandlers["act.type"](ctx("act.type", { ref: "e1", text: "line 1\nline 2" }));
+      expect(state.sensitive).toEqual([]);
+    });
+
+    it("Enter with focus inside an iframe's password form hits the gate (the frame is inspected)", async () => {
+      state.drv.keyInfo = { inForm: false, focusInFrame: true };
+      state.drv.frameKeyInfo = [{ value: { inForm: false, focusInFrame: true } }, { value: { inForm: false } }, { value: { ...pwForm, hasFocus: true } }];
+      await actHandlers["act.press"](ctx("act.press", { key: "Enter" }));
+      expect(gated()).toEqual(["a"]);
+    });
+
+    it("focus inside a frame TabAgent cannot inspect: Enter is gated (fail closed)", async () => {
+      state.drv.keyInfo = { inForm: false, focusInFrame: true };
+      state.drv.frameKeyInfo = [{ value: { inForm: false, focusInFrame: true } }];
+      await actHandlers["act.press"](ctx("act.press", { key: "Return" }));
+      expect(gated()).toEqual(["a"]);
+    });
+
+    it("Enter in a plain iframe field is not gated", async () => {
+      state.drv.keyInfo = { inForm: false, focusInFrame: true };
+      state.drv.frameKeyInfo = [{ value: { inForm: false, focusInFrame: true } }, { value: { inForm: true, hasFocus: true, formFields: [{ type: "search", name: "q" }] } }];
+      await actHandlers["act.press"](ctx("act.press", { key: "Enter" }));
+      expect(state.sensitive).toEqual([]);
+    });
   });
 
   it("purchase/delete/send clicks are category b; plain clicks pass", async () => {
