@@ -7,6 +7,7 @@ import { clickSensitivity, formSensitivity, type Detection } from "../../pure/se
 import { sleep } from "../cdp";
 import { act, onTab, type Ctx, type TabCtx } from "./ctx";
 import { gateDetections } from "./gates";
+import { setCheckState } from "./check";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 const CALL_CAP_MS = 120_000;
@@ -48,20 +49,7 @@ function publicField(f: FieldDesc & Record<string, unknown>) {
 // executing one planned action through the driver
 // ---------------------------------------------------------------------------
 async function setChecked(t: TabCtx, ref: string, checked: boolean, timeout: number) {
-  const cur = (await t.drv.call("getChecked", [], { ref })) as boolean | null;
-  if (cur === checked) return;
-  try {
-    await t.drv.click(ref, { timeout });
-  } catch (e) {
-    // Custom checkboxes hide the real input; click its visible label instead.
-    if (!(e instanceof TabAgentError) || e.code !== "NOT_ACTIONABLE") throw e;
-    const lab = (await t.drv.call("labelFor", [], { ref })) as { ref: string } | null;
-    if (!lab?.ref) throw e;
-    await t.drv.click(lab.ref, { timeout });
-  }
-  await sleep(30);
-  const after = (await t.drv.call("getChecked", [], { ref })) as boolean | null;
-  if (after !== null && after !== checked) throw new TabAgentError("NOT_ACTIONABLE", `${ref} did not change to checked=${checked}`, "The page controls this input; try act.click on its visible label.");
+  await setCheckState(t.drv, ref, checked, timeout);
 }
 
 async function pickComboOption(t: TabCtx, ref: string, text: string, timeout: number) {

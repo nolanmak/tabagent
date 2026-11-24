@@ -1,10 +1,11 @@
 // act.* (except act.upload) — #7. Every action goes through act(): auto-wait in
 // the driver, then the D14 side-effect report (diff / navigation / dialogs).
-import { taErr, isCode } from "../errors";
+import { taErr } from "../errors";
 import { act, onTab, type Ctx, type TabCtx } from "../tabctx";
 import { checkClickGate, checkKeyGate } from "./gates";
 import { pollUntil } from "../wait";
 import { textSubmits } from "../../pure/sensitive";
+import { setCheckState } from "./check";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 
@@ -54,30 +55,16 @@ export async function doSelect(t: TabCtx, ref: string, values: string[], timeout
 }
 
 export async function doCheck(t: TabCtx, ref: string, checked: boolean, timeout?: number) {
-  const cur = (await t.drv.call("getChecked", [], { ref })) as boolean | null;
-  if (cur === checked) return { checked, changed: false };
-  const inf = (await t.drv.call("info", [], { ref })) as { visible: boolean };
-  try {
-    if (!inf.visible) throw taErr("NOT_ACTIONABLE", `${ref} is not actionable (reason: hidden)`);
-    await t.drv.click(ref, { timeout: timeout ?? 2000 });
-  } catch (e) {
-    if (isCode(e, "NOT_ACTIONABLE")) {
-      const lab = (await t.drv.call("labelFor", [], { ref })) as { ref: string } | null;
-      if (!lab?.ref) throw e;
-      await t.drv.click(lab.ref, { timeout });
-    } else throw e;
-  }
-  await clock.sleep(50);
-  const after = (await t.drv.call("getChecked", [], { ref })) as boolean | null;
-  if (after !== null && after !== checked) throw taErr("NOT_ACTIONABLE", `${ref} did not change to checked=${checked}`, "The page may control this input; try act.click on its visible label.");
-  return { checked: after ?? checked, changed: true };
+  return setCheckState(t.drv, ref, checked, timeout);
 }
 
 export const actHandlers: Record<string, Handler> = {
   async "act.click"(c) {
     return act(c, "act", async (t) => {
       await checkClickGate(c, t, c.p.ref);
-      return t.drv.click(c.p.ref, { button: c.p.button, clickCount: c.p.clickCount, modifiers: c.p.modifiers, timeout: c.p.timeout });
+      // A hidden native checkbox/radio (custom control): click what a user would, its label (Jarvis#2522).
+      const alt = (await t.drv.call("toggleTarget", [], { ref: c.p.ref })) as { ref: string | null } | null;
+      return t.drv.click(alt?.ref ?? c.p.ref, { button: c.p.button, clickCount: c.p.clickCount, modifiers: c.p.modifiers, timeout: c.p.timeout });
     });
   },
   async "act.dblclick"(c) {

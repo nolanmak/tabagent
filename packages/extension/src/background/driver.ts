@@ -405,6 +405,7 @@ export class CdpDriver implements Driver {
 
   async click(ref: string, o: ClickOpts = {}) {
     const { x, y } = await this.actionPoint(ref, { timeout: o.timeout });
+    await this.wakeInput();
     await this.overlay(ref);
     const button = o.button ?? "left";
     const clickCount = o.clickCount ?? 1;
@@ -422,6 +423,7 @@ export class CdpDriver implements Driver {
 
   async hover(ref: string, timeout?: number) {
     const { x, y } = await this.actionPoint(ref, { timeout });
+    await this.wakeInput();
     await this.tab.guard(this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }));
   }
 
@@ -487,13 +489,17 @@ export class CdpDriver implements Driver {
 
   /**
    * Background tabs in headless Chromium never produce frames, and input that
-   * needs a frame ack (keys, insertText) waits forever. Focus emulation makes
-   * the page behave as focused without bringing the tab to the front (D10).
+   * needs a frame ack (keys, insertText) waits forever. In headful Chrome a
+   * background tab is hidden and CDP mouse events sent to it are dropped while
+   * dispatchMouseEvent still resolves (nolanmak/Jarvis#2522). Focus emulation
+   * makes the page visible and focused without bringing the tab to the front
+   * (D10). It belongs to the debugger session, so it is re-sent after a re-attach.
    */
-  private woke = false;
+  private wokeSeq: number | null = null;
   private async wakeInput() {
-    if (this.woke) return;
-    this.woke = true;
+    const seq = this.tab.attachSeq ?? 0;
+    if (this.wokeSeq === seq) return;
+    this.wokeSeq = seq;
     await this.tab.send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
   }
 
@@ -519,6 +525,7 @@ export class CdpDriver implements Driver {
   async drag(from: string, to: string, timeout?: number) {
     const a = await this.actionPoint(from, { timeout });
     const b = await this.actionPoint(to, { timeout });
+    await this.wakeInput();
     this.tab.dragData = null;
     await this.tab.send("Input.setInterceptDrags", { enabled: true });
     try {

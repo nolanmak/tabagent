@@ -88,14 +88,14 @@ describe("act.check on a custom (hidden-input) checkbox", () => {
     state.drv = page({ labelToggles: false });
     const r: any = await actHandlers["act.check"](ctx("act.check", { ref: "e1", checked: true }));
     expect(r.result).toEqual({ checked: true, changed: true });
-    expect(clicks(state.drv)).toEqual(["click:e9", "call:clickEl"]);
+    expect(clicks(state.drv)).toEqual(["click:e9", "call:clickEl:e1"]);
   });
 
   it("uses the in-page click when there is no label to click", async () => {
     state.drv = page({ label: null });
     const r: any = await actHandlers["act.check"](ctx("act.check", { ref: "e1", checked: true }));
     expect(r.result.checked).toBe(true);
-    expect(clicks(state.drv)).toEqual(["call:clickEl"]);
+    expect(clicks(state.drv)).toEqual(["call:clickEl:e1"]);
   });
 
   it("still reports NOT_ACTIONABLE when nothing changes the state", async () => {

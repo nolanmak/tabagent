@@ -13,7 +13,7 @@ async function bgFixture(h: any, c: any) {
   await h.sw.evaluate(async (id: number) => chrome.tabs.update(id, { active: true }), fg);
   return bg as number;
 }
-const stateOf = async (h: any, c: any, tabId: number) => (view(await h.ok(c, "page.text", { tabId })).all.match(/State: (\S+)/) ?? [])[1];
+const stateOf = async (h: any, c: any, tabId: number) => (view(await h.ok(c, "page.text", { tabId })).all.match(/State: ([^\n]+)/) ?? [])[1];
 const findRef = async (h: any, c: any, tabId: number, css: string) => view(await h.ok(c, "page.find", { tabId, by: "css", value: css })).json.matches[0].ref as string;
 
 test("act.check sets hidden-input checkboxes and radios in a background tab, before any typing", async ({ h }) => {
