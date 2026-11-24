@@ -7,6 +7,7 @@ import { PROFILES, TabAgentError, toolsForProfiles, type OutputResponse } from "
 import type { Flags } from "./args";
 import { auditPath, configPath, loadConfig, saveConfig } from "./config";
 import { renderCli } from "./format";
+import { handoffTimeoutMs, validateWebhookUrl, writeHandoffConfig } from "./handoff/config";
 import { installSkill, skillTargets, uninstallSkill } from "./skill";
 import { createToken, parseSites, revokeToken } from "./tokens";
 import { BRIDGE_VERSION } from "./version";
@@ -98,7 +99,46 @@ export function skillCommand(rest: string[], f: Flags, src: string): Out {
   return fail("Usage: tabagent skill install [--claude] [--codex] [--force] | uninstall [--claude] [--codex] [--force] | print");
 }
 
+const HANDOFF_USAGE = "Usage: tabagent config handoff.remote on|off | handoff.webhook <url>|off | handoff.timeoutMin <1-120>|default";
+
+/** #61: `tabagent config handoff.*`. A running bridge reads these on the next handoff. */
+export function handoffConfigCommand(key: string, value: string | undefined): Out {
+  const port = loadConfig().port; // also creates config.json with its defaults when missing
+  try {
+    if (key === "handoff.remote") {
+      if (value !== "on" && value !== "off") return fail(HANDOFF_USAGE);
+      const h = writeHandoffConfig((c) => ({ ...c, remote: value === "on" }));
+      return ok([
+        `Remote handoff ${h.remote ? "on" : "off"}.`,
+        ...(h.remote
+          ? ["During auth.handoff the bridge serves a one-time phone page on this machine's Tailscale address only (port " + port + "), and closes it when the handoff ends.", `Handoff timeout: ${handoffTimeoutMs(h) / 60_000} min.`]
+          : []),
+      ]);
+    }
+    if (key === "handoff.webhook") {
+      if (!value) return fail(HANDOFF_USAGE);
+      const url = value === "off" ? null : validateWebhookUrl(value);
+      writeHandoffConfig((c) => ({ ...c, webhook: url }));
+      return ok([url ? "Handoff webhook set. It receives {event, origin, reason, url, expiresAt, session} when a handoff starts; the url is a live one-time link." : "Handoff webhook off."]);
+    }
+    if (key === "handoff.timeoutMin") {
+      if (value === "default") {
+        const h = writeHandoffConfig((c) => ({ ...c, timeoutMin: null }));
+        return ok([`Handoff timeout: default (${handoffTimeoutMs(h) / 60_000} min).`]);
+      }
+      const n = Number(value);
+      if (!value || !Number.isInteger(n) || n < 1 || n > 120) return fail(HANDOFF_USAGE);
+      writeHandoffConfig((c) => ({ ...c, timeoutMin: n }));
+      return ok([`Handoff timeout: ${n} min.`]);
+    }
+  } catch (e) {
+    return fail((e as Error).message);
+  }
+  return fail(HANDOFF_USAGE);
+}
+
 export function configCommand(rest: string[]): Out {
+  if (rest[0]?.startsWith("handoff.")) return handoffConfigCommand(rest[0], rest[1]);
   const cfg = loadConfig();
   const [sub, a, b] = rest;
   if (sub === "show" || !sub) {
@@ -149,6 +189,9 @@ Usage:
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
   tabagent config [show] | add-upload-dir <dir> | set port <n>
   tabagent config auth.sms on|off      SMS/iMessage one-time codes for auth.code (macOS)
+  tabagent config handoff.remote on|off        Phone page for auth.handoff on the Tailscale address
+  tabagent config handoff.webhook <url>|off    POST a notice with the link when a handoff starts
+  tabagent config handoff.timeoutMin <n>|default   Handoff wait (default 5 min; 30 with remote on)
   tabagent doctor                      Check sign-in prerequisites (Full Disk Access, op, bw)
   tabagent bitwarden enable|disable|login|unlock|lock|status
   tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw] [--out file.png]

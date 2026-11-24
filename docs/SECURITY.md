@@ -41,7 +41,59 @@ a browser `Origin` other than the paired extension are rejected, and the `Host` 
 `127.0.0.1` or `localhost` with the bridge port, which defeats DNS rebinding. The WebSocket accepts
 only the paired extension ID with the secret (D4). The extension keeps the secret in
 `chrome.storage.local` with access restricted to trusted extension contexts, so content scripts
-cannot read it (D7). No data leaves your machine.
+cannot read it (D7). No data leaves your machine, except through the opt-in remote handoff below.
+
+### Remote handoff (opt-in, #61)
+
+`tabagent config handoff.remote on` lets you finish an `auth.handoff` step (ID and selfie checks,
+passkeys, payment entry) from your phone over Tailscale. It is off by default. When it is on:
+
+- **Where it listens.** A second HTTP listener binds only this machine's Tailscale IPv4 address
+  (100.64.0.0/10), found with `tailscale ip -4` or, failing that, an interface named `tailscale*`.
+  100.64.0.0/10 is also carrier-grade NAT space, so a 100.x address on any other interface is
+  ignored. The listener refuses any address outside that range and never binds a wildcard. It is
+  opened when the first remote handoff starts and closed when the last one ends, so the port is
+  closed the rest of the time. If no Tailscale address is found, the handoff stays local-only.
+- **What it serves.** Only `GET /handoff/<id>`, `POST /handoff/<id>/claim`, `GET /handoff/<id>/frame`,
+  `POST /handoff/<id>/input` and `POST /handoff/<id>/end`. Everything else returns 404, including
+  `/v1`, `/mcp` and the extension WebSocket. Bearer tokens and the bridge secret are not accepted
+  there. The `Host` header must be exactly `<tailnet ip>:<port>`, which blocks DNS rebinding.
+- **Who can use it.** Each handoff gets a random 128-bit id and a 256-bit token in the link. Only
+  their SHA-256 hashes are kept. A GET of the link does not use up the token, so link previews do no
+  harm. The page script claims the token once (`POST …/claim`). That browser gets an `HttpOnly;
+  SameSite=Strict` cookie scoped to `/handoff/<id>`, and the link stops working for anyone else.
+  API calls need that cookie and an `x-tabagent-handoff: 1` header, which a cross-site page cannot
+  send without a CORS preflight that is never answered. The link and the cookie are revoked when the
+  handoff ends by Done or Cancel (on the phone or in the side panel), by timeout, by the tab closing,
+  when the `auth.handoff` command ends for any reason, by the kill switch, when the extension
+  disconnects, and when the bridge stops. Both also expire at the handoff timeout.
+- **What it can do.** It can show a JPEG of the one handed-off tab and send that tab taps (as 0..1
+  coordinates the extension scales to the tab's viewport), up to 500 characters of text, ten named
+  keys with no modifiers, and scrolls. It has no navigation, no address bar, no script evaluation
+  and no way to name another tab. The bridge knows the handoff only by its opaque id. The extension
+  maps that id to the tab it handed off and ignores any tab id in a message.
+- **Input-only debugger session (design decision).** A local handoff detaches the debugger so your
+  own hands are not observed. A remote handoff has no local hands, so the phone's input has to reach
+  the tab through CDP. Only after the phone first asks for a frame or sends input, the extension
+  attaches a bare `chrome.debugger` session to that one tab. It is outside the agent's driver: no
+  page library, no refs, no network or console capture. It is limited to `Page.captureScreenshot`,
+  `Page.getLayoutMetrics`, `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`, `Input.insertText`
+  and `Emulation.setFocusEmulationEnabled` (so a background tab renders and takes input). Agent
+  commands on the tab still get `TAB_BUSY` for the whole handoff. The session is detached when the
+  handoff ends, so the agent's next command attaches fresh with stale refs, as after a local handoff.
+- **Transport.** The page is plain HTTP. Tailscale encrypts it end to end with WireGuard, and only
+  devices on your tailnet can reach the address. Anyone who can reach your tailnet and also has a
+  live, unclaimed link can take over that one tab until the handoff ends. Treat the link like a
+  password: post it only to a private channel.
+- **Webhook.** `tabagent config handoff.webhook <url>` POSTs
+  `{event, origin, reason, url, expiresAt, session}` when a handoff starts. It never sends page
+  content. `url` is the live one-time link, or `null` when remote handoff is off. The webhook must be
+  `https`, or `http` to loopback or a tailnet address. The bridge never logs the URL or the body.
+- **Timeout.** `handoff.timeoutMin` (1 to 120). The default is 30 minutes with remote handoff on and
+  5 minutes without.
+- **Audit.** `handoff.open`, `handoff.remote.claim`, `handoff.remote.end`, `handoff.remote.revoke`
+  and `handoff.webhook` events record the origin and the first 8 hex digits of the handoff id. They
+  never record the token, the cookie or the link.
 
 ## Untrusted page content: wrapping is a label, not a guarantee (D21)
 
