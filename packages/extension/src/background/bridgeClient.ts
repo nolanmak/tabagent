@@ -2,6 +2,7 @@
 //  - hello {protocolVersion, extensionVersion, secret?, pairCode?}
 //  - ping every 20s once welcomed
 //  - reconnect: short backoff, plus a chrome.alarms tick every 30s (the worker can be evicted)
+//  - single-flight: at most one socket open or connecting; only the current socket changes state
 
 export type Status = "unpaired" | "connecting" | "connected" | "disconnected" | "pair-failed" | "version-mismatch";
 
@@ -65,9 +66,42 @@ export function createBridgeClient(d: BridgeClientDeps) {
     heartbeat = null;
   }
 
-  async function connect() {
-    if (ws && (ws.readyState === OPEN || ws.readyState === CONNECTING)) return;
+  const live = () => !!ws && (ws.readyState === OPEN || ws.readyState === CONNECTING);
+
+  /**
+   * Single-flight: at worker start onInstalled, the startup IIFE, the alarm tick and the backoff timer can
+   * all call connect() in the same tick. They share one attempt, so at most one socket is ever open or
+   * connecting. pair()/disconnect() bump `epoch` so an attempt still awaiting loadConfig never opens.
+   */
+  let attempt: Promise<void> | null = null;
+  let epoch = 0;
+
+  function connect(): Promise<void> {
+    if (live()) return Promise.resolve();
+    if (attempt) return attempt;
+    const p = open(epoch).finally(() => {
+      if (attempt === p) attempt = null;
+    });
+    attempt = p;
+    return p;
+  }
+
+  /** Forget the current socket without letting its close handler touch the client's state. */
+  function detach() {
+    const old = ws;
+    ws = null;
+    welcomed = false;
+    stopHeartbeat();
+    try {
+      old?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function open(mine: number) {
     const cfg = await d.loadConfig();
+    if (mine !== epoch || live()) return;
     if (!cfg.secret && !pairCode) {
       setStatus("unpaired");
       return;
@@ -97,9 +131,14 @@ export function createBridgeClient(d: BridgeClientDeps) {
       };
       sock.send(JSON.stringify(hello));
     };
-    sock.onmessage = (ev) => onRaw(String(ev.data));
+    // Only the current socket may change client state: a replaced socket's late close or message
+    // must not clear the live socket's welcome and heartbeat (that silenced it for 45s).
+    sock.onmessage = (ev) => {
+      if (ws === sock) void onRaw(sock, String(ev.data));
+    };
     sock.onclose = (ev) => {
-      if (ws === sock) ws = null;
+      if (ws !== sock) return;
+      ws = null;
       welcomed = false;
       stopHeartbeat();
       if (status !== "pair-failed" && status !== "unpaired" && status !== "version-mismatch") setStatus("disconnected", ev?.reason || "");
@@ -120,7 +159,7 @@ export function createBridgeClient(d: BridgeClientDeps) {
     backoff = Math.min(backoff * 2, 10_000);
   }
 
-  async function onRaw(raw: string) {
+  async function onRaw(sock: WsLike, raw: string) {
     let msg: any;
     try {
       msg = JSON.parse(raw);
@@ -134,11 +173,12 @@ export function createBridgeClient(d: BridgeClientDeps) {
         if (msg.secret) {
           await d.saveSecret(msg.secret);
           pairCode = null;
+          if (ws !== sock) return;
         }
         setStatus("connected");
         stopHeartbeat();
         heartbeat = d.setInterval(() => {
-          if (ws && ws.readyState === OPEN) ws.send(JSON.stringify({ type: "ping" }));
+          if (sock.readyState === OPEN) sock.send(JSON.stringify({ type: "ping" }));
         }, PING_MS);
         return;
       case "error": {
@@ -147,13 +187,14 @@ export function createBridgeClient(d: BridgeClientDeps) {
           pairCode = null;
           const cfg = await d.loadConfig();
           if (cfg.secret && /secret/i.test(String(msg.error.message))) await d.saveSecret(null);
+          if (ws !== sock) return;
           setStatus("pair-failed", String(msg.error.message ?? ""));
-          ws?.close();
+          sock.close();
           return;
         }
         if (code === "VERSION_MISMATCH") {
           setStatus("version-mismatch", [msg.error.message, msg.error.hint].filter(Boolean).join(" "));
-          ws?.close();
+          sock.close();
           return;
         }
         d.onMessage(msg);
@@ -178,12 +219,9 @@ export function createBridgeClient(d: BridgeClientDeps) {
     },
     pair(code: string) {
       pairCode = code.trim().toUpperCase();
-      try {
-        ws?.close();
-      } catch {
-        /* ignore */
-      }
-      ws = null;
+      epoch++;
+      attempt = null;
+      detach();
       backoff = 500;
       if (reconnectTimer != null) d.clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -196,13 +234,12 @@ export function createBridgeClient(d: BridgeClientDeps) {
       return connect();
     },
     disconnect(next: Status = "unpaired") {
+      epoch++;
+      attempt = null;
+      if (reconnectTimer != null) d.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
       setStatus(next);
-      try {
-        ws?.close();
-      } catch {
-        /* ignore */
-      }
-      ws = null;
+      detach();
     },
     status: () => status,
     lastError: () => lastError,
