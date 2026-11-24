@@ -2,6 +2,7 @@
 // bridge socket. Holds no decisions. Hooked in with one import line in background/index.ts.
 import { pollCode, TabAgentError, type SessionMeta } from "@tabagent/protocol";
 import { authTaint } from "../authTaint";
+import { authTaintReady } from "../authTaintStore";
 import { detachTab } from "../cdp";
 import * as driverMod from "../driver";
 import { disposeDrivers, driverFor, type Driver } from "../driver";
@@ -307,10 +308,12 @@ registerHandlers({
   // credential is typed, and the ones after it meet the taint.
   "auth.login": async (c) => {
     const tabId = needTab(c as Ctx);
+    await authTaintReady;
     return withTabLock(tabId, () => authLogin(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem));
   },
   "auth.code": async (c) => {
     const tabId = needTab(c as Ctx);
+    await authTaintReady;
     return withTabLock(tabId, () => authCode(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem));
   },
   "auth.handoff": (c) => handoff(c as Ctx),

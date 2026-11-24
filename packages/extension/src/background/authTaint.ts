@@ -53,15 +53,53 @@ function spellings(s: string): string[] {
   return [...out];
 }
 
+/** What survives a worker restart (D11). Timestamps and tab ids only, never a secret. */
+export interface TaintSnapshot {
+  v: 1;
+  tabs: [number, Period[]][];
+  dirty: number[];
+}
+
 export class AuthTaint {
   private tabs = new Map<number, Period[]>();
   private dirty = new Set<number>();
   private secrets = new Map<string, Screened>();
+  /** After a restart that lost the per-tab state: every tab is tainted and dirty until then. */
+  private closedUntil = 0;
+  /** Called after every change to tabs/dirty (persistAuthTaint hooks storage in here). */
+  onChange?: (snap: TaintSnapshot) => void;
 
   constructor(
     private now: () => number = Date.now,
     private ttl = TAINT_MS,
   ) {}
+
+  private changed() {
+    this.onChange?.(this.snapshot());
+  }
+
+  snapshot(): TaintSnapshot {
+    return { v: 1, tabs: [...this.tabs].map(([id, ps]) => [id, ps.map((p) => ({ ...p }))]), dirty: [...this.dirty] };
+  }
+
+  load(snap: TaintSnapshot) {
+    this.tabs = new Map(snap.tabs.map(([id, ps]) => [id, ps.map((p) => ({ ...p }))]));
+    this.dirty = new Set(snap.dirty);
+  }
+
+  /** Anything open at shutdown: a tab still tainted, or a document agent JS touched. */
+  active(): boolean {
+    return this.dirty.size > 0 || [...this.tabs.keys()].some((id) => this.tainted(id));
+  }
+
+  /** Fail closed: treat every tab as tainted and dirty for one window from now. */
+  failClosed() {
+    this.closedUntil = this.now() + this.ttl;
+  }
+
+  private blanket(): boolean {
+    return this.now() < this.closedUntil;
+  }
 
   private end(p: Period): number {
     return p.navAt === undefined ? Infinity : Math.max(p.navAt, p.lastFill + this.ttl);
@@ -84,6 +122,7 @@ export class AuthTaint {
       ps.push({ start: t, lastFill: t });
       this.tabs.set(tabId, ps);
     }
+    this.changed();
     if ((kind === "password" || kind === "code") && secret && secret.length >= MIN_SCREEN_LEN) {
       const alts = spellings(secret).map(escapeRe).join("|");
       // Codes are short digits: match whole tokens so ids and timestamps don't trip the screen.
@@ -95,12 +134,15 @@ export class AuthTaint {
   /** Main frame committed a document. A back/forward-cache restore brings an old document back. */
   navigated(tabId: number, o: { bfcache?: boolean } = {}) {
     if (o.bfcache) return;
-    this.dirty.delete(tabId);
+    const had = this.dirty.delete(tabId);
     const last = this.last(tabId);
     if (last && last.navAt === undefined) last.navAt = this.now();
+    else if (!had) return;
+    this.changed();
   }
 
   tainted(tabId: number): boolean {
+    if (this.blanket()) return true;
     const last = this.last(tabId);
     return !!last && this.now() < this.end(last);
   }
@@ -112,11 +154,13 @@ export class AuthTaint {
 
   /** Agent JavaScript ran in the tab's current document (js.eval, nav.wait fn). */
   ranScript(tabId: number) {
+    if (this.dirty.has(tabId)) return;
     this.dirty.add(tabId);
+    this.changed();
   }
 
   scriptDirty(tabId: number): boolean {
-    return this.dirty.has(tabId);
+    return this.blanket() || this.dirty.has(tabId);
   }
 
   /** True when `text` carries a typed secret that is still within its window. */
@@ -134,13 +178,59 @@ export class AuthTaint {
   }
 
   closed(tabId: number) {
-    this.tabs.delete(tabId);
-    this.dirty.delete(tabId);
+    const a = this.tabs.delete(tabId);
+    const b = this.dirty.delete(tabId);
+    if (a || b) this.changed();
   }
 }
 
 /** The service worker's one instance. */
 export const authTaint = new AuthTaint();
+
+interface Area {
+  get(key: string): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+}
+
+const SESSION_KEY = "authTaint";
+const ACTIVE_KEY = "authTaintActive";
+
+/**
+ * D11 (PR #54 review): keep the taint across worker restarts. Tab periods and dirty documents go to
+ * storage.session (cleared with the browser session, so tab ids never refer to someone else's tab).
+ * storage.session is also wiped when the extension is reloaded or updated; for that case a single
+ * boolean in storage.local says whether anything was open, and if so the new worker fails closed:
+ * every tab is tainted and dirty for TAINT_MS. Typed secrets are never stored; after a restart the
+ * output screen is gone, and layers 1 and 2 (refusing reads) carry the guarantee.
+ * Resolves to how it started: "restored", "fail-closed" or "clean". Then hooks every change to storage.
+ */
+export async function persistAuthTaint(taint: AuthTaint, areas: { session: Area; local: Area }): Promise<"restored" | "fail-closed" | "clean"> {
+  let outcome: "restored" | "fail-closed" | "clean" = "clean";
+  const snap = ((await areas.session.get(SESSION_KEY).catch(() => ({}))) as { authTaint?: TaintSnapshot }).authTaint;
+  if (snap && snap.v === 1 && Array.isArray(snap.tabs) && Array.isArray(snap.dirty)) {
+    taint.load(snap);
+    outcome = "restored";
+  } else {
+    const was = ((await areas.local.get(ACTIVE_KEY).catch(() => ({}))) as { authTaintActive?: boolean }).authTaintActive;
+    if (was !== false && was !== undefined) {
+      taint.failClosed();
+      outcome = "fail-closed";
+    }
+  }
+  let lastActive: boolean | undefined;
+  const write = (s: TaintSnapshot) => {
+    areas.session.set({ [SESSION_KEY]: s }).catch(() => {});
+    const active = taint.active();
+    if (active !== lastActive) {
+      lastActive = active;
+      areas.local.set({ [ACTIVE_KEY]: active }).catch(() => {});
+    }
+  };
+  taint.onChange = write;
+  if (outcome === "fail-closed") areas.local.set({ [ACTIVE_KEY]: true }).catch(() => {});
+  else write(taint.snapshot());
+  return outcome;
+}
 
 const CREDENTIAL_READ = new Set(["c", "d"]);
 

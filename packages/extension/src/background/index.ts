@@ -3,6 +3,7 @@
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
 import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
 import { authTaint, credentialGuard } from "./authTaint";
+import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
@@ -107,7 +108,10 @@ export const router = createRouter<Session>({
   authorize: (r) => authorize({ meta: r.meta, url: r.url, level: r.level, sensitive: r.sensitive, tool: r.action ? `${r.tool} ${r.action}` : r.tool, summary: r.summary, reasons: r.reasons, tabId: r.tabId }),
   holdApproval,
   // DA1 (review H1): credential reads on a tab TabAgent typed a secret into, and results carrying one.
-  guard: (r) => credentialGuard(authTaint, r),
+  guard: async (r) => {
+    await authTaintReady; // restored from storage.session after a worker restart (D11)
+    credentialGuard(authTaint, r);
+  },
   leaks: (text) => authTaint.leaks(text),
   handler: (name) => (extraHandlers[name] ?? sessionHandlers[name] ?? (handlers as Record<string, any>)[name]) as any,
   sensitivePaths: async (tool, p, tabId, url) => {
