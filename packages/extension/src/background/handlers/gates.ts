@@ -1,7 +1,7 @@
 // Dynamic D18 (a)/(b) gates and the integration points with the router (agent B).
 // Every sensitive path in the extension goes through sensitiveGate().
 import type { SessionMeta } from "@tabagent/protocol";
-import { keySensitivity, submitConfirmation, submitSensitivity, type Detection, type FieldLike } from "../../pure/sensitive";
+import { keySensitivity, submitsOnKey, submitConfirmation, submitSensitivity, type Detection, type FieldLike } from "../../pure/sensitive";
 import { resolveFiles } from "../bridgeFiles";
 import { requireSensitive } from "../permissions";
 import type { Ctx, TabCtx } from "./ctx";
@@ -54,10 +54,30 @@ export async function checkClickGate(c: Ctx, t: TabCtx, ref: string) {
   await gateDetections(c, t.url, dets, info.name || ref, info.formFields, "click");
 }
 
-/** act.press / act.type submit=true: D18(a) Enter inside a sensitive form. */
-export async function checkKeyGate(c: Ctx, t: TabCtx, key: string) {
-  if (!/enter$/i.test(key)) return;
-  const info = (await t.drv.call("keyGateInfo", [])) as { inForm: boolean; textarea?: boolean; formFields?: GateInput["formFields"]; formName?: string };
-  const dets = keySensitivity(key, info);
-  await gateDetections(c, t.url, dets, info.formName || "form", info.formFields, "press Enter in");
+type KeyInfo = { inForm: boolean; textarea?: boolean; formFields?: GateInput["formFields"]; formName?: string; focusInFrame?: boolean; hasFocus?: boolean };
+
+/**
+ * act.press / act.type (submit, or text with a newline): D18(a) Enter inside a sensitive form,
+ * keyed on the effect (review H3). Any chord that resolves to Enter counts, and the form is looked
+ * up in the frame that has the focus: the ref's frame when one is given, else the main frame, else
+ * (focus inside an iframe) the subframe whose document holds the focus. A frame TabAgent cannot
+ * inspect fails closed.
+ */
+export async function checkKeyGate(c: Ctx, t: TabCtx, key: string, ref?: string) {
+  if (!submitsOnKey(key)) return;
+  const main = (await t.drv.call("keyGateInfo", [], ref ? { ref } : undefined)) as KeyInfo;
+  if (!main.focusInFrame || t.drv.kind !== "cdp") {
+    const dets = keySensitivity(key, main);
+    return gateDetections(c, t.url, dets, main.formName || "form", main.formFields, "press Enter in");
+  }
+  const subs = (await t.drv.callAllFrames("keyGateInfo", [])).filter((f) => !f.isMain).map((f) => f.value as KeyInfo);
+  const holders = subs.filter((i) => i.hasFocus && !i.focusInFrame);
+  const candidates = holders.length ? holders : subs.filter((i) => i.inForm);
+  if (!candidates.length) {
+    return gateDetections(c, t.url, [{ category: "a", reason: "Enter inside an embedded frame TabAgent cannot inspect; it may submit a password or card form" }], "embedded frame", undefined, "press Enter in");
+  }
+  for (const info of candidates) {
+    const dets = keySensitivity(key, info);
+    if (dets.length) return gateDetections(c, t.url, dets, info.formName || "form", info.formFields, "press Enter in");
+  }
 }

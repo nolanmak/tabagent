@@ -92,9 +92,28 @@ export function submitSensitivity(t: ClickTarget): Detection[] {
   return out;
 }
 
+/**
+ * Does pressing this chord send Enter? Resolved the way the driver resolves it (review H3):
+ * aliases (Return), any modifiers, any case, and a raw CR or LF key.
+ */
+export function submitsOnKey(chord: string): boolean {
+  if (chord === "\r" || chord === "\n") return true;
+  let key = chord.trim();
+  if (key !== "+") {
+    const parts = key.split("+");
+    key = parts.pop() || (parts.length ? "+" : "");
+  }
+  return /^(enter|return|numpadenter)$/i.test(key);
+}
+
+/** act.type presses a real Enter for every newline in its text (review H3). */
+export function textSubmits(text: string): boolean {
+  return /[\r\n]/.test(text);
+}
+
 /** D18(a) via the keyboard: Enter in a single-line control inside a sensitive form. */
 export function keySensitivity(key: string, ctx: { inForm: boolean; formFields?: FieldLike[]; textarea?: boolean }): Detection[] {
-  if (!/(^|\+)(enter|numpadenter)$/i.test(key.trim())) return [];
+  if (!submitsOnKey(key)) return [];
   if (!ctx.inForm || ctx.textarea || !ctx.formFields) return [];
   return formSensitivity(ctx.formFields).map((r) => ({ category: "a" as const, reason: `Enter submits a form with a ${r}` }));
 }
