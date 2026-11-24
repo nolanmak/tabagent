@@ -201,6 +201,11 @@ export const formHandlers: Record<string, Handler> = {
       const v = (await t.drv.call("submitInfo", [], c.p.ref ? { ref: c.p.ref } : {})) as any;
       if (v?.error) severalForms(v);
       if (!v) throw new TabAgentError("NOT_FOUND", "No form found", "Pass ref of the form or a field inside it.");
+      if (v.blocked) {
+        throw new TabAgentError("NOT_ACTIONABLE", `The form's submit button "${v.blocked.control}" is ${v.blocked.why}, so the page would ignore a submit`, "The form is not complete yet: fill the fields it shows (form.describe), answer any question that reveals the next step, then submit again.", {
+          pageText: true,
+        });
+      }
       const fields = v.fields as Parameters<typeof formSensitivity>[0];
       const dets: Detection[] = [...formSensitivity(fields).map((r) => ({ category: "a" as const, reason: `submits a form with a ${r}` })), ...(v.submitRef ? clickSensitivity({ role: "button", name: v.control }) : [])];
       await gateDetections(c, t.url, dets, v.control || "form", fields, "submit");

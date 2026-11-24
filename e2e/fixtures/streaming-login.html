@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Log in | Streaming fixture</title>
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .contents { display: contents; }
+  main.fallback { display: grid; min-height: 60vh; place-items: center; }
+  .card { display: flex; flex-direction: column; gap: 8px; width: 432px; margin: 40px auto; }
+  .card button { height: 40px; }
+  .collapse { overflow: hidden; height: 0; }
+</style>
+</head>
+<body>
+<!--
+  nolanmak/Jarvis#2524: the structure of portal.anthropic.com/login (Next.js + React 19
+  streaming SSR). The login card arrives in <div hidden id="S:0">; React's inline $RC
+  queues the swap into the Suspense boundary (template B:0) and runs it from
+  requestAnimationFrame. A background tab runs no animation frames, so the card
+  stays in the hidden div and only the fallback spinner is rendered.
+-->
+<div class="cds-root contents"><!--$?--><template id="B:0"></template><main class="fallback"><span role="status" aria-label="Loading"></span></main><!--/$--></div>
+<p id="state">State: idle</p>
+<section id="dup">
+  <!-- a hidden copy (SSR/hydration leftover) before the rendered one -->
+  <div hidden><button type="button" onclick="say('hidden copy')">Open settings</button></div>
+  <button type="button" onclick="say('settings')">Open settings</button>
+</section>
+<x-card id="card"></x-card>
+<script>
+  function say(s) { document.getElementById("state").textContent = "State: " + s; }
+  customElements.define("x-card", class extends HTMLElement {
+    connectedCallback() {
+      const r = this.attachShadow({ mode: "open" });
+      r.innerHTML = '<div hidden><button type="button">Shadow action</button></div><button type="button">Shadow action</button>';
+      r.querySelectorAll("button")[1].addEventListener("click", () => say("shadow"));
+    }
+  });
+</script>
+<script>$RB=[];$RV=function(a){$RT=performance.now();for(var b=0;b<a.length;b+=2){var c=a[b],e=a[b+1];null!==e.parentNode&&e.parentNode.removeChild(e);var f=c.parentNode;if(f){var g=c.previousSibling,h=0;do{if(c&&8===c.nodeType){var d=c.data;if("/$"===d||"/&"===d)if(0===h)break;else h--;else"$"!==d&&"$?"!==d&&"$~"!==d&&"$!"!==d&&"&"!==d||h++}d=c.nextSibling;f.removeChild(c);c=d}while(c);for(;e.firstChild;)f.insertBefore(e.firstChild,c);g.data="$";g._reactRetry&&requestAnimationFrame(g._reactRetry)}}a.length=0};</script>
+<div hidden id="S:0"><div class="card">
+  <h1>Verification Portal</h1>
+  <button type="button" onclick="say('google')">Continue with Google</button>
+  <form class="card" onsubmit="event.preventDefault(); say('email')">
+    <label>Email <input type="email" name="email" required></label>
+    <button type="submit">Continue with email</button>
+    <div class="collapse" aria-hidden="true"><button type="button" onclick="say('sso')">Continue with SSO</button></div>
+  </form>
+</div></div>
+<script>$RC=function(a,b){if(b=document.getElementById(b))(a=document.getElementById(a))?(a.previousSibling.data="$~",$RB.push(a,b),2===$RB.length&&("number"!==typeof $RT?requestAnimationFrame($RV.bind(null,$RB)):(a=performance.now(),setTimeout($RV.bind(null,$RB),2300>a&&2E3<a?2300-a:$RT+300-a)))):b.parentNode.removeChild(b)};$RC("B:0","S:0")</script>
+</body>
+</html>

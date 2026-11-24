@@ -26,6 +26,8 @@ export interface Observation {
   /** Click point (frame-local CSS px). */
   point?: { x: number; y: number };
   hit?: { ok: boolean; by?: string };
+  /** Why the element has no box (page text), e.g. "inside <div#S:0> which is display:none". */
+  why?: string;
 }
 
 export type Reason = "detached" | "hidden" | "moving" | "disabled" | "covered";
@@ -37,7 +39,7 @@ const same = (a: Box | null | undefined, b: Box | null | undefined) =>
 
 export function judge(o: Observation, needEditable = false): Verdict {
   if (!o.attached) return { ok: false, reason: "detached" };
-  if (!o.visible || !o.box || o.box.w <= 0 || o.box.h <= 0) return { ok: false, reason: "hidden" };
+  if (!o.visible || !o.box || o.box.w <= 0 || o.box.h <= 0) return { ok: false, reason: "hidden", ...(o.why ? { by: o.why } : {}) };
   if (o.box2 !== undefined && !same(o.box, o.box2)) return { ok: false, reason: "moving" };
   if (!o.enabled) return { ok: false, reason: "disabled" };
   if (needEditable && o.editable === false) return { ok: false, fatal: "not-editable" };
@@ -49,7 +51,7 @@ export function judge(o: Observation, needEditable = false): Verdict {
 
 const HINTS: Record<Reason, string> = {
   detached: "The element was removed from the page. Take a new page.snapshot.",
-  hidden: "The element is hidden. Open its parent menu/section first; for custom checkboxes use act.check.",
+  hidden: "The element is hidden. If page.find returned several matches, use one without `hidden` (the rendered copy); otherwise open its parent menu/section or finish the earlier form step first; for custom checkboxes use act.check.",
   moving: "The element is still animating; try again.",
   disabled: "The element is disabled. Required fields may need filling first.",
   covered: "Another element is on top (modal, cookie banner, sticky header?). Close it first, or scroll.",
@@ -58,6 +60,9 @@ const HINTS: Record<Reason, string> = {
 export function notActionable(ref: string, reason: Reason, by?: string): TabAgentError {
   if (reason === "covered" && by) {
     return taErr("NOT_ACTIONABLE", `${ref} is not actionable (reason: covered): covered by ${by}`, HINTS.covered, { pageText: true });
+  }
+  if (reason === "hidden" && by) {
+    return taErr("NOT_ACTIONABLE", `${ref} is not actionable (reason: hidden): ${by}`, HINTS.hidden, { pageText: true });
   }
   return taErr("NOT_ACTIONABLE", `${ref} is not actionable (reason: ${reason})`, HINTS[reason]);
 }

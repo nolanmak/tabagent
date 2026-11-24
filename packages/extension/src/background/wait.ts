@@ -136,6 +136,14 @@ export interface FindMatch {
   ref: string;
   role: string;
   name: string;
+  /** Set when the element has no rendered box, with why (page text). Rendered matches come first. */
+  hidden?: string;
+}
+
+type RawMatch = { ref: string | null; role: string; name: string; hidden?: string };
+/** pagelib findNodes matches (refs already minted) -> FindMatch, dropping unmapped nodes. */
+export function toMatches(raw: RawMatch[]): FindMatch[] {
+  return raw.filter((m) => m.ref).map((m) => ({ ref: m.ref!, role: m.role, name: m.name, ...(m.hidden ? { hidden: m.hidden } : {}) }));
 }
 
 /** Merge per-frame matches (already in document order) and cap at the limit. */
