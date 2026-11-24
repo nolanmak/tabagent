@@ -293,3 +293,33 @@ test("D7: content scripts cannot read the secret from storage.local", async ({ h
   }, t.json.tabId);
   expect(res).not.toContain('"secret"');
 });
+
+test("prompt with no TabAgent panel open pops the approval window; answering it settles the call", async ({ h }) => {
+  await h.setPolicies({ [h.A]: "read" }, { paused: false, devAllowSensitive: false });
+  const c = await h.mcp({ label: "popper" });
+  await h.ok(c, "tabs", { action: "new" });
+  const popupP = h.ctx.waitForEvent("page", { predicate: (p) => p.url().includes("/prompt.html?id="), timeout: 10000 });
+  const pend = h.call(c, "nav.goto", { url: `${h.A}/index.html` });
+  const popup = await popupP;
+  await popup.locator("#once").click();
+  expect((await pend).isError).toBeFalsy();
+});
+
+test("prompt while the side panel is open does not pop a window", async ({ h }) => {
+  await h.setPolicies({ [h.A]: "read" }, { paused: false, devAllowSensitive: false });
+  const panel = await h.openPanel();
+  const c = await h.mcp({ label: "quiet" });
+  await h.ok(c, "tabs", { action: "new" });
+  let popped = false;
+  const onPage = (p: { url(): string }) => { if (p.url().includes("/prompt.html")) popped = true; };
+  h.ctx.on("page", onPage);
+  const pend = h.call(c, "nav.goto", { url: `${h.A}/index.html` });
+  await expect.poll(async () => (await h.pendingPrompts()).length, { timeout: 10000 }).toBe(1);
+  await panel.waitForTimeout(1500);
+  h.ctx.off("page", onPage);
+  expect(popped).toBe(false);
+  const [p] = await h.pendingPrompts();
+  await h.sw.evaluate((id) => (globalThis as any).__tabagent.answerPrompt(id, "deny"), p.promptId);
+  expect((await pend).text).toContain("PERMISSION_DENIED");
+  await panel.close();
+});

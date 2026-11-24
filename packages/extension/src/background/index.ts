@@ -189,13 +189,44 @@ onPrompt((ev) => {
       })
       .catch(() => {});
     if (p.tabId != null) showBanner(p.tabId, "TabAgent is waiting for your approval. Open the TabAgent side panel (toolbar icon) to answer.");
+    void popPromptWindowIfHidden(p.promptId);
   } else {
     sendEvent("decision", { ...promptEventData(p), answer: ev.outcome });
     chrome.notifications?.clear(`prompt:${p.promptId}`).catch(() => {});
+    void closePromptWindows(p.promptId);
     if (p.tabId != null && !prompts.list().some((x) => x.tabId === p.tabId)) hideBanner(p.tabId);
   }
   refreshBadge();
 });
+
+/**
+ * Notifications are often blocked at the OS level (macOS ships Chrome's off), and a new tab
+ * has no page for the banner, so the badge alone is easy to miss and the agent times out.
+ * When no TabAgent page that can answer (side panel or prompt window) is open, pop the
+ * prompt window so the request is in front of the user.
+ */
+async function popPromptWindowIfHidden(promptId: string) {
+  try {
+    const ctxs = await chrome.runtime.getContexts({});
+    const answering = ctxs.some((c) => /\/(sidepanel|prompt)\.html/.test(c.documentUrl ?? ""));
+    if (answering) return;
+    await chrome.windows.create({ url: chrome.runtime.getURL(`prompt.html?id=${promptId}`), type: "popup", width: 460, height: 440, focused: true });
+  } catch {
+    /* best effort: badge + notification still stand */
+  }
+}
+
+/** A settled prompt's window is stale; close it so it neither lingers nor masks the next prompt. */
+async function closePromptWindows(promptId: string) {
+  try {
+    const ctxs = await chrome.runtime.getContexts({});
+    for (const c of ctxs) {
+      if (c.windowId >= 0 && (c.documentUrl ?? "").includes(`/prompt.html?id=${promptId}`)) await chrome.windows.remove(c.windowId).catch(() => {});
+    }
+  } catch {
+    /* best effort */
+  }
+}
 
 chrome.notifications?.onClicked.addListener((nid) => {
   if (!nid.startsWith("prompt:")) return;
