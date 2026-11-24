@@ -140,6 +140,7 @@ describe("error codes", () => {
         "DEBUGGER_DETACHED",
         "DIALOG_OPEN",
         "TOO_LARGE",
+        "CAPTCHA_UNSOLVED",
         "INTERNAL",
       ].sort(),
     );

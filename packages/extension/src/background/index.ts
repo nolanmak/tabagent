@@ -8,6 +8,7 @@ import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
 import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
+import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
 import { disposeDrivers, driverFor } from "./driver";
 import { getDownload } from "./downloads";
@@ -53,6 +54,7 @@ const bridge = createBridgeClient({
 });
 setFilesSender((m) => bridge.send(m));
 setAuthSender((m) => bridge.send(m));
+setCaptchaSender((m) => bridge.send(m));
 
 function sendEvent(event: string, data: Record<string, unknown> = {}) {
   bridge.send({ type: "event", event, data });
@@ -72,6 +74,10 @@ function onBridgeMessage(msg: any) {
     case "auth.accounts.result":
     case "secret":
       onAuthBridgeMessage(msg);
+      break;
+    case "captcha.token":
+    case "captcha.vision.answer":
+      onCaptchaBridgeMessage(msg);
       break;
     case "handoff.opened":
     case "handoff.frame":

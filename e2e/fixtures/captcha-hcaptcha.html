@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign up (hCaptcha)</title>
+    <!-- #61: hCaptcha's published test site key always passes. -->
+    <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+    <script>
+      window.onCaptchaDone = function (token) {
+        document.getElementById("status").textContent = "captcha ok (" + String(token).length + " chars)";
+        document.getElementById("submit").disabled = false;
+      };
+    </script>
+  </head>
+  <body>
+    <h1>Create your account</h1>
+    <form id="signup" action="#done" onsubmit="event.preventDefault(); document.getElementById('status').textContent = 'submitted';">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" />
+      <div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001" data-callback="onCaptchaDone"></div>
+      <button id="submit" type="submit" disabled>Create account</button>
+    </form>
+    <p id="status"></p>
+  </body>
+</html>

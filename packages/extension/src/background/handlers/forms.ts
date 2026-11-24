@@ -8,6 +8,7 @@ import { sleep } from "../cdp";
 import { act, onTab, type Ctx, type TabCtx } from "./ctx";
 import { gateDetections } from "./gates";
 import { setCheckState } from "./check";
+import { autoCaptcha } from "../captcha/hook";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 const CALL_CAP_MS = 120_000;
@@ -210,8 +211,15 @@ export const formHandlers: Record<string, Handler> = {
       const fields = v.fields as Parameters<typeof formSensitivity>[0];
       const dets: Detection[] = [...formSensitivity(fields).map((r) => ({ category: "a" as const, reason: `submits a form with a ${r}` })), ...(v.submitRef ? clickSensitivity({ role: "button", name: v.control }) : [])];
       await gateDetections(c, t.url, dets, v.control || "form", fields, "submit");
-      if (v.submitRef) return t.drv.click(v.submitRef, { timeout: c.p.timeout });
+      // #61: with autoCaptcha on, a blocking CAPTCHA is solved before the submit and after it.
+      await autoCaptcha(c, t, "before");
+      if (v.submitRef) {
+        const r = await t.drv.click(v.submitRef, { timeout: c.p.timeout });
+        if (!r.dialog) await autoCaptcha(c, t, "after");
+        return r;
+      }
       await t.drv.call("requestSubmit", [], { ref: v.ref });
+      await autoCaptcha(c, t, "after");
     });
   },
 };

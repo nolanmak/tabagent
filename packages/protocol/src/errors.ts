@@ -17,6 +17,7 @@ export const ERROR_CODES = [
   "DEBUGGER_DETACHED",
   "DIALOG_OPEN",
   "TOO_LARGE",
+  "CAPTCHA_UNSOLVED",
   "INTERNAL",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

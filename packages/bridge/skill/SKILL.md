@@ -47,6 +47,7 @@ TabAgent controls the user's **real Chrome profile**, with their logins, cookies
 - TabAgent itself asks the user before payments, deletes, sends, password or card submits, scripts, cookie reads, file transfers and taking over a tab. Don't ask again in chat. When a call waits on approval, or returns `PROMPT_TIMEOUT` or `PERMISSION_DENIED`, tell the user a prompt is waiting in the TabAgent side panel (or that they declined), and don't retry in a loop or route around it.
 - `KILLED`: the user pressed the kill switch. Stop and wait for them to resume.
 - Don't type credentials or payment details the user didn't give you. At a login wall, ask the user to sign in in that tab.
+- CAPTCHA (with `--profile auth`): call `captcha.solve`. It clicks the checkbox, then uses the solver the user configured. `CAPTCHA_UNSOLVED` names a reason; follow its hint (usually `auth.handoff`). Never try to get past ID, selfie or passkey checks yourself.
 - Close tabs you opened (`tabs {action: "close"}`) or call `session.end` when done.
 
 ## Dialogs, tabs, downloads

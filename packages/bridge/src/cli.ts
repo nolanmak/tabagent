@@ -13,6 +13,7 @@ import { buildMcpServer } from "./mcp";
 import { auditTail, configCommand, formatAuditLine, helpText, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out } from "./commands";
 import { BRIDGE_VERSION } from "./version";
 import { authCli } from "./auth/cli-entry";
+import { captchaCli } from "./captcha/cli-entry";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = fileURLToPath(import.meta.url);
@@ -221,6 +222,9 @@ switch (cmd) {
     break;
   case "config":
     print(pos[0]?.startsWith("auth") ? await authCli.config(pos) : configCommand(pos));
+    break;
+  case "captcha":
+    print(await captchaCli(pos, f));
     break;
   case "doctor":
   case "bitwarden":

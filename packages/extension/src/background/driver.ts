@@ -426,6 +426,24 @@ export class CdpDriver implements Driver {
     return this.raceDialog(seq);
   }
 
+  /**
+   * #61: a trusted click at a fraction (fx, fy) of ref's box, for targets that are not elements of
+   * their own: a point on a CAPTCHA canvas, or the Turnstile checkbox inside a closed shadow root.
+   */
+  async clickAt(ref: string, fx: number, fy: number) {
+    const t = await this.resolveRef(ref);
+    await this.wake();
+    const b = await this.boxOf(t);
+    const x = b.x + b.w * Math.min(1, Math.max(0, fx));
+    const y = b.y + b.h * Math.min(1, Math.max(0, fy));
+    const seq = (async () => {
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+    })();
+    return this.raceDialog(seq);
+  }
+
   async hover(ref: string, timeout?: number) {
     const { x, y } = await this.actionPoint(ref, { timeout });
     await this.wake();

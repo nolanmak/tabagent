@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign up (reCAPTCHA)</title>
+    <!-- #61: Google's published reCAPTCHA v2 test site key always passes. -->
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+    <script>
+      window.onRecaptcha = function (token) {
+        document.getElementById("status").textContent = "captcha ok (" + String(token).length + " chars)";
+      };
+    </script>
+  </head>
+  <body>
+    <h1>Create your account</h1>
+    <form id="signup" onsubmit="event.preventDefault(); document.getElementById('status').textContent = 'submitted';">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" />
+      <div class="g-recaptcha" data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI" data-callback="onRecaptcha"></div>
+      <button id="submit" type="submit">Create account</button>
+    </form>
+    <p id="status"></p>
+  </body>
+</html>

@@ -59,6 +59,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`auth.login`](#authlogin) | `auth_login` | act | — | auth | unsupported | both |
 | [`auth.code`](#authcode) | `auth_code` | act | — | auth | unsupported | both |
 | [`auth.handoff`](#authhandoff) | `auth_handoff` | read | — | auth | supported | extension |
+| [`captcha.solve`](#captchasolve) | `captcha_solve` | act | — | auth | unsupported | both |
 
 ## tabs
 
@@ -656,3 +657,14 @@ MCP name `auth_handoff` · level read · profiles auth · lite supported · hand
 |---|---|---|---|
 | `tabId` | integer |  | Tab id; default: the session's active tab |
 | `reason` | string | yes |  |
+
+### captcha.solve
+
+Solve the CAPTCHA on the page (hCaptcha, reCAPTCHA, Turnstile): checkbox click first, then the bridge's solver. Never returns the token.
+
+MCP name `captcha_solve` · level act · profiles auth · lite unsupported · handled by both
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `ref` | string |  | Widget ref when the page has several |
