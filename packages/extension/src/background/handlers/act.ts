@@ -4,6 +4,7 @@ import { taErr, isCode } from "../errors";
 import { act, onTab, type Ctx, type TabCtx } from "../tabctx";
 import { checkClickGate, checkKeyGate } from "./gates";
 import { pollUntil } from "../wait";
+import { textSubmits } from "../../pure/sensitive";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 
@@ -97,12 +98,11 @@ export const actHandlers: Record<string, Handler> = {
         if (c.p.clear) await t.drv.fill(c.p.ref, "", c.p.timeout);
         await t.drv.focus(c.p.ref, true);
       }
+      // D18(a) by effect (review H3): every newline in text is a real Enter, so gate before typing.
+      if (c.p.submit || textSubmits(String(c.p.text ?? ""))) await checkKeyGate(c, t, "Enter", c.p.ref);
       const r = await t.drv.typeText(c.p.text);
       if (r.dialog) return r;
-      if (c.p.submit) {
-        await checkKeyGate(c, t, "Enter");
-        return t.drv.press("Enter");
-      }
+      if (c.p.submit) return t.drv.press("Enter");
       return r;
     });
   },
@@ -119,7 +119,7 @@ export const actHandlers: Record<string, Handler> = {
   async "act.press"(c) {
     return act(c, "act", async (t) => {
       if (c.p.ref) await t.drv.focus(c.p.ref, true);
-      await checkKeyGate(c, t, c.p.key);
+      await checkKeyGate(c, t, c.p.key, c.p.ref);
       return t.drv.press(c.p.key);
     });
   },

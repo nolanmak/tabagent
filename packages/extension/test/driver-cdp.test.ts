@@ -103,6 +103,59 @@ async function refOf(drv: any, re: RegExp) {
   return s.text.split("\n").find((l: string) => re.test(l))!.match(/ref=(e\d+)/)![1];
 }
 
+describe("CdpDriver.evaluator (nav.wait fn, security review H2)", () => {
+  it("runs agent predicates in a world of their own, created once per wait, never in pagelib's __tabagent__ world", async () => {
+    const f = fake();
+    let ctxSeq = 40;
+    const send = f.tab.send;
+    f.tab.send = async (m: string, p: any = {}, sid?: string) => {
+      if (m === "Page.createIsolatedWorld") {
+        f.calls.push({ m, p, sid });
+        return { executionContextId: ++ctxSeq };
+      }
+      if (m === "Runtime.evaluate") {
+        f.calls.push({ m, p, sid });
+        return { result: { type: "boolean", value: true } };
+      }
+      return send(m, p, sid);
+    };
+    f.tab.isolatedContext = async () => {
+      throw new Error("pagelib world used");
+    };
+    const ev = f.drv.evaluator();
+    expect(await ev("!!(1)")).toBe(true);
+    expect(await ev("!!(2)")).toBe(true);
+    const worlds = f.calls.filter((c) => c.m === "Page.createIsolatedWorld");
+    expect(worlds).toHaveLength(1);
+    expect(worlds[0].p).toMatchObject({ frameId: "main", grantUniveralAccess: false });
+    expect(worlds[0].p.worldName).not.toBe("__tabagent__");
+    expect(f.calls.filter((c) => c.m === "Runtime.evaluate").map((c) => c.p.contextId)).toEqual([41, 41]);
+    expect(f.calls.some((c) => c.m.startsWith("pagelib:"))).toBe(false);
+    await f.drv.evaluator()("!!(3)");
+    expect(f.calls.filter((c) => c.m === "Runtime.evaluate").at(-1)!.p.contextId).toBe(42); // a new wait gets a new world
+  });
+
+  it("re-creates its world after the document changes (stale context)", async () => {
+    const f = fake();
+    let ctxSeq = 0;
+    let fail = true;
+    f.tab.send = async (m: string, p: any = {}) => {
+      if (m === "Page.createIsolatedWorld") return { executionContextId: ++ctxSeq };
+      if (m === "Runtime.evaluate") {
+        if (fail && p.contextId === 1) {
+          fail = false;
+          throw new Error("Cannot find context with specified id");
+        }
+        return { result: { type: "boolean", value: p.contextId === 2 } };
+      }
+      return {};
+    };
+    const ev = f.drv.evaluator();
+    await expect(ev("x")).rejects.toThrow();
+    expect(await ev("x")).toBe(true);
+  });
+});
+
 describe("CdpDriver actions (#7)", () => {
   it("click = move, down, up at the centre of the box", async () => {
     const f = fake();

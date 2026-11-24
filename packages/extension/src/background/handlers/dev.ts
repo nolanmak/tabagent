@@ -2,6 +2,7 @@
 import { originOf, TabAgentError, TIMEOUTS } from "@tabagent/protocol";
 import { cookieUrlFor } from "../../pure/cookies";
 import { runEval } from "../../pure/jseval";
+import { authTaint } from "../authTaint";
 import { tabState } from "../capture";
 import { cdp, onTab, type Ctx, type TabCtx } from "./ctx";
 import { staticGate } from "./gates";
@@ -20,6 +21,7 @@ export const devHandlers: Record<string, Handler> = {
       await staticGate(c, t.url, "c", `run JavaScript: ${String(c.p.expression).slice(0, 120)}`, ["Runs code in the page with access to its data"]);
       await tab.ensure();
       tab.assertNoDialog();
+      authTaint.ranScript(t.tabId); // auth won't type into this document now (review H1)
       return runEval((m, p) => tab.send(m, p), { expression: c.p.expression, world: c.p.world ?? "main", frameId: tab.mainFrameId!, timeout: c.p.timeout ?? TIMEOUTS.action });
     });
   },
@@ -44,7 +46,7 @@ export const devHandlers: Record<string, Handler> = {
       const id = String(c.p.id ?? c.p.requestId);
       await staticGate(c, t.url, "d", `read request ${id} (headers and body)`, ["Request and response headers can include cookies and tokens"]);
       await tab.ensure();
-      return tabState(t.tabId).capture.get(id, (requestId, sessionId) => tab.send("Network.getResponseBody", { requestId }, sessionId));
+      return tabState(t.tabId).capture.get(id, (requestId, sessionId) => tab.send("Network.getResponseBody", { requestId }, sessionId), { blocked: (start) => authTaint.requestBlocked(t.tabId, start) });
     });
   },
 

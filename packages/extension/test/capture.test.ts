@@ -136,6 +136,19 @@ describe("network.get", () => {
     expect(g.body!.length).toBeLessThan(110_000);
     expect(g.truncated).toBe(true);
   });
+  it("DA1 (review H1): a request the auth taint covers is refused without fetching its body", async () => {
+    let t = 1000;
+    const c = new Capture(undefined, undefined, () => t);
+    req(c, "1", "http://a.test/before");
+    t = 2000;
+    c.onEvent("Network.requestWillBeSent", { requestId: "2", type: "Document", request: { url: "http://a.test/session", method: "POST", headers: {}, postData: "login=n&password=hunter2" } });
+    const [before, login] = c.list({}).requests.map((r) => r.id);
+    const fetch = vi.fn(async () => ({ body: "ok" }));
+    const blocked = (start: number) => start >= 1500;
+    await expect(c.get(login, fetch, { blocked })).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await c.get(before, fetch, { blocked })).body).toBe("ok");
+  });
 });
 
 describe("network.waitFor", () => {

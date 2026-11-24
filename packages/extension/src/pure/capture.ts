@@ -216,9 +216,11 @@ export class Capture {
   }
 
   /** Full request/response; body fetched on demand (may have been evicted by Chrome). */
-  async get(id: string, fetchBody: BodyFetcher) {
+  async get(id: string, fetchBody: BodyFetcher, o: { blocked?: (start: number) => boolean } = {}) {
     const e = this.byId.get(id);
     if (!e || e.marker) throw new TabAgentError("NOT_FOUND", `No request "${id}" in the capture buffer`, "Ids come from network.list; old requests drop out after 500.");
+    // DA1 (review H1): requests made while TabAgent's typed credential was on the tab stay unreadable.
+    if (o.blocked?.(e.start)) throw new TabAgentError("PERMISSION_DENIED", `Request ${id} was made right after TabAgent typed a credential on this tab, so its headers and body are not readable (DA1)`);
     let body: string;
     let base64Encoded = false;
     try {

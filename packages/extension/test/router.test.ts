@@ -216,3 +216,91 @@ describe("redaction in feed + audit", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("nav.wait for=fn is held to js.eval's level (security review H2)", () => {
+  const readTok = { id: "s1", label: "ci", cap: "read" as const, sites: [] as string[] };
+  it("a read-capped token cannot run a JS predicate, even under YOLO", async () => {
+    const w = world({}, { yolo: true });
+    const fn = await w.router.handle({ type: "command", id: "c1", session: readTok, tool: "nav.wait", params: { for: "fn", value: "fetch('/api/x',{method:'DELETE'}).then(()=>1)", tabId: 1 } });
+    expect(fn.error?.code).toBe("PERMISSION_DENIED");
+    expect(fn.error?.message).toContain('limited to "read"');
+    expect(w.handlers["nav.wait"]).not.toHaveBeenCalled();
+    expect(w.authorize.mock.calls[0][0]).toMatchObject({ level: "full", sensitive: "c" });
+  });
+  it("a site set to read does not cover for=fn", async () => {
+    const w = world({}, { sites: { "https://a.example": { policy: "read", preapproved: { c: true } } } });
+    const r = await w.router.handle(cmd("nav.wait", { for: "fn", value: "true", tabId: 1 }));
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(r.error?.message).toContain("would ask (site)");
+  });
+});
+
+describe("DA1 credential readback (security review H1)", () => {
+  const taintedWorld = async (over: Partial<RouterDeps<{ tabs: number[] }>> = {}) => {
+    const { AuthTaint, credentialGuard } = await import("../src/background/authTaint");
+    const taint = new AuthTaint();
+    taint.filled(1, "password", "hunter2-secret");
+    // YOLO: the policy alone would allow every read below without asking.
+    const w = world({ guard: (r) => credentialGuard(taint, r), leaks: (t) => taint.leaks(t), ...over }, { yolo: true });
+    return { w, taint };
+  };
+
+  it("js.eval, nav.wait fn, network.get, storage.get and cookies.get are refused on the tab after a fill, even under YOLO; handler never runs", async () => {
+    const { w } = await taintedWorld();
+    for (const [tool, p] of [
+      ["js.eval", { expression: "document.querySelector('input[type=password]').value" }],
+      ["nav.wait", { for: "fn", value: "document.forms[0].password.value" }],
+      ["network.get", { id: "n1" }],
+      ["storage.get", { kind: "local" }],
+      ["cookies.get", {}],
+    ] as const) {
+      const r = await w.router.handle(cmd(tool, { ...p, tabId: 1 }));
+      expect(r.error?.code, tool).toBe("PERMISSION_DENIED");
+    }
+    expect(w.handlers["js.eval"]).not.toHaveBeenCalled();
+    expect(w.handlers["nav.wait"]).not.toHaveBeenCalled();
+    expect(w.authorize).not.toHaveBeenCalled(); // refused before any prompt
+  });
+
+  it("after a worker restart (state restored from storage.session) js.eval on the filled tab is still refused", async () => {
+    const { AuthTaint, credentialGuard, persistAuthTaint } = await import("../src/background/authTaint");
+    const mk = () => {
+      const data: Record<string, unknown> = {};
+      return { get: async (k: string) => (k in data ? { [k]: structuredClone(data[k]) } : {}), set: async (o: Record<string, unknown>) => void Object.assign(data, structuredClone(o)) };
+    };
+    const areas = { session: mk(), local: mk() };
+    const old = new AuthTaint();
+    await persistAuthTaint(old, areas);
+    old.filled(1, "password", "hunter2-secret");
+    await new Promise((r) => setTimeout(r, 0));
+    const fresh = new AuthTaint();
+    await persistAuthTaint(fresh, areas);
+    const w = world({ guard: (r) => credentialGuard(fresh, r) }, { yolo: true });
+    const r = await w.router.handle(cmd("js.eval", { expression: "document.querySelector('input[type=password]').value", tabId: 1 }));
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(w.handlers["js.eval"]).not.toHaveBeenCalled();
+  });
+
+  it("other tools on the tainted tab still work", async () => {
+    const { w } = await taintedWorld();
+    expect((await w.router.handle(cmd("page.snapshot", { tabId: 1 }))).ok).toBe(true);
+  });
+
+  it("any result carrying the typed secret is withheld, from every tool, and the secret reaches neither audit nor feed", async () => {
+    const { w } = await taintedWorld({
+      handler: () => async () => ({ snapshot: "body", __side: { navigation: { url: "https://a.example/?password=hunter2-secret", title: "t", kind: "navigate" } } }),
+    });
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(JSON.stringify(r)).not.toContain("hunter2-secret");
+    expect(JSON.stringify((w.deps.feed as any).mock.calls)).not.toContain("hunter2-secret");
+  });
+
+  it("an error message quoting the secret is withheld too", async () => {
+    const { w } = await taintedWorld({ handler: () => async () => Promise.reject(new TabAgentError("BAD_REQUEST", "The expression threw: hunter2-secret")) });
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(JSON.stringify(r)).not.toContain("hunter2-secret");
+  });
+});

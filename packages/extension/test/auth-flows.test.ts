@@ -451,3 +451,72 @@ describe("auth.code", () => {
     expect(pg.values.size).toBe(0);
   });
 });
+
+describe("DA1 structural (security review H1): taint the tab before any secret reaches it", () => {
+  const codePage = () => fakePage([{ url: "https://github.com/2fa", fields: fields({ autocomplete: "one-time-code", name: "otp" }) }, { url: "https://github.com/", fields: [] }]);
+
+  /** Records env.filled calls, interleaved with the page's own order log. */
+  function tainting(e: ReturnType<typeof fakeEnv>, pg: ReturnType<typeof fakePage>, dirty?: () => boolean) {
+    const fills: { kind: string; secret: string | null | undefined }[] = [];
+    e.env.filled = (kind, secret) => {
+      fills.push({ kind, secret });
+      pg.order.push(`taint ${kind}`);
+    };
+    if (dirty) e.env.scriptDirty = dirty;
+    return fills;
+  }
+
+  it("auth.login reports username (no value), then the password value, each before it is typed", async () => {
+    const pg = fakePage(okSteps());
+    const e = fakeEnv({ accounts: [GH()], secrets: { username: "nolan@gmail.com", password: "pw-secret" } });
+    const fills = tainting(e, pg);
+    await authLogin(e.env, pg.page, {}, newMemory());
+    expect(fills).toEqual([
+      { kind: "username", secret: null },
+      { kind: "password", secret: "pw-secret" },
+    ]);
+    expect(pg.order).toEqual(["mask e1", "taint username", "type e1", "mask e2", "taint password", "type e2", "submit e2"]);
+  });
+
+  it("chrome-autofill taints the tab too (Chrome put a password there)", async () => {
+    const pg = fakePage(okSteps(), { autofill: { usernameMasked: "a•••@example.com" } });
+    const e = fakeEnv({ accounts: [], providers: [] });
+    const fills = tainting(e, pg);
+    await authLogin(e.env, pg.page, {}, newMemory());
+    expect(fills.map((f) => f.kind)).toEqual(["autofill"]);
+  });
+
+  it("auth.code reports the whole code before typing it, also into split boxes", async () => {
+    const box = { autocomplete: "one-time-code", maxLength: 1 };
+    const pg = fakePage([{ url: "https://github.com/2fa", fields: fields(box, box, box, box) }, { url: "https://github.com/", fields: [] }]);
+    const e = fakeEnv({ email: async () => "4821" });
+    const fills = tainting(e, pg);
+    await authCode(e.env, pg.page, { source: "email" }, newMemory());
+    expect(fills).toEqual([{ kind: "code", secret: "4821" }]);
+    expect(pg.order.indexOf("taint code")).toBeLessThan(pg.order.indexOf("type e1"));
+  });
+
+  it("agent JavaScript already ran in this document (it could be listening for keystrokes) → refused before consent, nothing fetched", async () => {
+    const pg = fakePage(okSteps());
+    const e = fakeEnv({ accounts: [GH()], secrets: { username: "u", password: "p" } });
+    tainting(e, pg, () => true);
+    await expect(authLogin(e.env, pg.page, {}, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.consent).toEqual([]);
+    expect(e.calls.secret).toEqual([]);
+    const c = codePage();
+    const e2 = fakeEnv({ email: async () => "123456" });
+    tainting(e2, c, () => true);
+    await expect(authCode(e2.env, c.page, { source: "email" }, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e2.calls.email).toBe(0);
+    expect(c.values.size).toBe(0);
+  });
+
+  it("agent JavaScript that starts during the prompt → refused before the first keystroke", async () => {
+    const pg = fakePage(okSteps());
+    let dirty = false;
+    const e = fakeEnv({ accounts: [GH()], secrets: { username: "u", password: "p" }, onConsent: () => (dirty = true) });
+    tainting(e, pg, () => dirty);
+    await expect(authLogin(e.env, pg.page, {}, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(pg.values.size).toBe(0);
+  });
+});

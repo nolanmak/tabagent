@@ -240,8 +240,10 @@ export class LiteDriver implements Driver {
     const dims = (await this.env.exec(() => ({ w: innerWidth, h: innerHeight }), [])) as { w: number; h: number } | undefined;
     return { mime: `image/${fmt}`, dataBase64: data, width: dims?.w ?? 0, height: dims?.h ?? 0 };
   }
-  async evaluate(): Promise<unknown> {
-    throw unsupported("js.eval");
+  evaluator(): (expression: string) => Promise<unknown> {
+    return async () => {
+      throw unsupported("nav.wait for=fn");
+    };
   }
   navEpoch() {
     return this.epoch;

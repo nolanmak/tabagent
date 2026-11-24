@@ -74,6 +74,31 @@ export type Decision =
 export const HARD_DENY_HOSTS = ["chromewebstore.google.com"];
 const HARD_DENY_SCHEMES = /^(chrome|chrome-extension|chrome-untrusted|chrome-search|devtools|edge|view-source|about):/i;
 
+/**
+ * DA12 (review M3): where saved passwords, the Google account and the mailbox live. Not part of
+ * the editable denylist: nothing (YOLO, site policy, a denylist edit) opens these to an agent.
+ * Auth email codes (DA7) are read by the extension itself, not through agent tools.
+ */
+export const VAULT_DENY_HOSTS = [
+  "passwords.google.com",
+  "myaccount.google.com",
+  "mail.google.com",
+  "*.1password.com",
+  "*.1password.eu",
+  "*.1password.ca",
+  "*.bitwarden.com",
+  "*.bitwarden.eu",
+  "*.lastpass.com",
+  "*.dashlane.com",
+  "*.keepersecurity.com",
+  "*.keepersecurity.eu",
+];
+
+export function isVaultDenied(url: string): boolean {
+  const h = hostOf(url);
+  return !!h && VAULT_DENY_HOSTS.some((g) => hostMatches(g, h));
+}
+
 export function originOf(url: string): string | null {
   try {
     const u = new URL(url);
@@ -150,6 +175,9 @@ export function resolve(state: PolicyState, req: PolicyRequest): Decision {
   const blank = isBlank(req.url);
   if (!blank && !origin) {
     return { decision: "deny", code: "PERMISSION_DENIED", origin, message: "TabAgent only works on http(s) and file pages" };
+  }
+  if (!blank && isVaultDenied(req.url)) {
+    return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `TabAgent never lets agents open ${hostOf(req.url)} (saved passwords, account or mail)` };
   }
   if (!blank && isDenylisted(req.url, state.denylist)) {
     return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `${hostOf(req.url)} is on the TabAgent denylist`, hint: "The user can edit the denylist in the TabAgent side panel." };
@@ -252,6 +280,7 @@ export function effectiveLevel(state: PolicyState, req: Omit<PolicyRequest, "lev
   const origin = originOf(req.url);
   if (isBlank(req.url)) return { origin: null, level: req.cap, source: "blank page" };
   if (isHardDenied(req.url) || !origin) return { origin, level: "deny", source: "restricted browser page" };
+  if (isVaultDenied(req.url)) return { origin, level: "deny", source: "password, account and mail sites" };
   if (isDenylisted(req.url, state.denylist)) return { origin, level: "deny", source: "denylist" };
   if (req.sites.length && !req.sites.some((g) => hostMatches(g, hostOf(req.url)))) return { origin, level: "deny", source: "token site scope" };
   const stored = state.sites[origin]?.policy;

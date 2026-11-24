@@ -66,7 +66,7 @@ export type Hello = z.infer<typeof HelloSchema>;
 
 export const PingSchema = z.object({ type: z.literal("ping") });
 
-export const EVENT_NAMES = ["prompt", "decision", "killed", "resumed", "session.ended"] as const;
+export const EVENT_NAMES = ["prompt", "decision", "killed", "resumed", "session.ended", "settings.changed"] as const;
 export const EventSchema = z.object({
   type: z.literal("event"),
   event: z.string().min(1),

@@ -91,6 +91,18 @@ describe("gate inputs", () => {
     (document.getElementById("q") as HTMLInputElement).focus();
     expect(keySensitivity("Enter", keyGateInfo())).toEqual([]);
   });
+  it("keyGateInfo(self) inspects the given element, not whatever has focus (review H3)", () => {
+    load(fixture("login-search.html"));
+    (document.getElementById("q") as HTMLInputElement).focus();
+    expect(keySensitivity("Enter", keyGateInfo(document.getElementById("p")))).toHaveLength(1);
+  });
+  it("keyGateInfo says when focus sits inside an embedded frame (review H3)", () => {
+    load('<form><input type="password" id="p"></form><iframe id="f" srcdoc="<form><input type=password></form>"></iframe>');
+    (document.getElementById("f") as HTMLIFrameElement).focus();
+    const info = keyGateInfo() as any;
+    if (document.activeElement?.id === "f") expect(info).toMatchObject({ inForm: false, focusInFrame: true });
+    expect(typeof info.hasFocus).toBe("boolean");
+  });
   it("submitInfo + confirmation masks values", () => {
     load(fixture("login-search.html"));
     (document.getElementById("u") as HTMLInputElement).value = "neo";

@@ -73,6 +73,20 @@ describe("submit paths", () => {
     expect(keySensitivity("Enter", { inForm: true, formFields: [{ type: "search" }] })).toEqual([]);
     expect(keySensitivity("Enter", { inForm: true, formFields: login, textarea: true })).toEqual([]);
   });
+  it("every chord that resolves to Enter is Enter: aliases, modifiers, case, raw CR/LF (review H3)", () => {
+    for (const k of ["Return", "return", "Shift+Return", "Control+Enter", "enter", "NumpadEnter", "\r", "\n"]) {
+      expect(keySensitivity(k, { inForm: true, formFields: login }).map((d) => d.category), JSON.stringify(k)).toEqual(["a"]);
+    }
+    for (const k of ["Tab", "Escape", "e", "Shift+e"]) expect(keySensitivity(k, { inForm: true, formFields: login }), k).toEqual([]);
+  });
+  it("submitsOnKey and textSubmits name the keyboard paths that submit (review H3)", async () => {
+    const { submitsOnKey, textSubmits } = await import("../src/pure/sensitive");
+    expect(submitsOnKey("Shift+Return")).toBe(true);
+    expect(submitsOnKey("ArrowDown")).toBe(false);
+    expect(textSubmits("hunter2\n")).toBe(true);
+    expect(textSubmits("a\r\nb")).toBe(true);
+    expect(textSubmits("plain")).toBe(false);
+  });
 });
 
 describe("masking + confirmation payload", () => {

@@ -159,12 +159,18 @@ export function clickGateInfo(el: El) {
   return { role: roleOf(el), name: nameOf(el).slice(0, 200), isSubmit: !!form, formFields: form ? fieldsWithValues(form) : undefined };
 }
 
-/** Gate inputs for a key press on the focused element (D18a via Enter). */
-export function keyGateInfo() {
-  const el = deepActive();
-  if (!el || el === document.body) return { inForm: false };
+/**
+ * Gate inputs for a key press (D18a via Enter) on `self` (the ref the agent named) or else the
+ * focused element. focusInFrame: focus is inside an embedded frame, whose own document must be
+ * asked (review H3). hasFocus tells the background which frame's document holds the focus.
+ */
+export function keyGateInfo(self?: El | null) {
+  const hasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : false;
+  const el = self ?? deepActive();
+  if (!el || el === document.body) return { inForm: false, hasFocus };
+  if (!self && (el.tagName === "IFRAME" || el.tagName === "FRAME")) return { inForm: false, focusInFrame: true, hasFocus };
   const form = formOf(el);
-  return { inForm: !!form, textarea: el.tagName === "TEXTAREA" || (el as HTMLElement).isContentEditable, formFields: form ? fieldsWithValues(form) : undefined, formName: form ? formLabel(form) : undefined };
+  return { inForm: !!form, hasFocus, textarea: el.tagName === "TEXTAREA" || (el as HTMLElement).isContentEditable, formFields: form ? fieldsWithValues(form) : undefined, formName: form ? formLabel(form) : undefined };
 }
 
 /** form.submit: the form, its submit control and fields (for the gate and confirmation). */

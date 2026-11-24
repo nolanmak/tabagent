@@ -103,6 +103,7 @@ describe("renderers handle old and new registry shapes", () => {
     expect(lib.typeLabel({})).toBe("any");
     expect(lib.liteOf({ lite: "bogus" })).toBe("unspecified");
     expect(lib.toolSensitiveLabel({ sensitive: "c", sensitiveWhen: { param: "for", values: ["fn"] } })).toBe("c (when for=fn)");
+    expect(lib.levelLabel({ level: "read", levelWhen: { param: "for", values: ["fn"], level: "full" } })).toBe("read (full when for=fn)");
     expect(lib.toolSensitiveLabel({})).toBe("");
     expect(lib.profilesLabel({ profiles: [] })).toBe("full only");
     expect(lib.profilesLabel({ profiles: ["core", "full"] })).toBe("core");

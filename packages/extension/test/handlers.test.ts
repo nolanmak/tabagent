@@ -3,11 +3,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TOOLS, TabAgentError } from "@tabagent/protocol";
 
-const state = vi.hoisted(() => ({ dialog: null as any, drv: null as any, sensitive: [] as any[], url: "http://x.test/a" }));
+const state = vi.hoisted(() => ({ dialog: null as any, drv: null as any, sensitive: [] as any[], site: [] as any[], url: "http://x.test/a" }));
 
 vi.mock("../src/background/sessions", () => ({ resolveTab: async (_s: unknown, id?: number) => id ?? 1 }));
 vi.mock("../src/background/permissions", () => ({
-  requireSite: async () => {},
+  requireSite: async (...a: unknown[]) => {
+    state.site.push(a);
+  },
   requireSensitive: async (...a: unknown[]) => {
     state.sensitive.push(a);
   },
@@ -28,6 +30,7 @@ const { pageHandlers } = await import("../src/background/handlers/page");
 const { navHandlers } = await import("../src/background/handlers/nav");
 const { assertLiteSupport, assertNoDialog, levelOf } = await import("../src/background/tabctx");
 const { baselines } = await import("../src/background/refstore");
+const { authTaint } = await import("../src/background/authTaint");
 
 function fakeDriver(kind: "cdp" | "lite" = "cdp") {
   const log: string[] = [];
@@ -42,8 +45,15 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     setSnap: (l: string[]) => (snap = l),
     snapshot: async () => ({ text: snap.join("\n"), lines: snap, refs: ["e1"], shown: [], truncated: false, collapsed: 0, omitted: 0, tokens: 1 }),
     find: async () => ({ matches: [], truncated: false }),
-    call: async (fn: string) => {
+    calls: [] as { fn: string; o?: any }[],
+    frameKeyInfo: null as any[] | null,
+    callAllFrames: async (fn: string) => {
+      log.push(`callAll:${fn}`);
+      return (d.frameKeyInfo ?? [{ value: d.keyInfo ?? { inForm: false } }]).map((v: any, i: number) => ({ frameKey: `f${i}`, url: "http://x.test/a", isMain: i === 0, ...v }));
+    },
+    call: async (fn: string, _args?: unknown[], o?: any) => {
       log.push(`call:${fn}`);
+      d.calls.push({ fn, o });
       if (fn === "clickGateInfo") return d.clickInfo ?? { role: "button", name: "Go" };
       if (fn === "keyGateInfo") return d.keyInfo ?? { inForm: false };
       if (fn === "info") return { isSelect: false, visible: true };
@@ -73,6 +83,14 @@ function fakeDriver(kind: "cdp" | "lite" = "cdp") {
     currentUrl: async () => d.url,
     dialog: () => d.dlg,
     evaluate: async () => true,
+    evals: [] as string[],
+    fnResult: false as unknown,
+    onEval: undefined as undefined | (() => void),
+    evaluator: () => async (expr: string) => {
+      d.evals.push(expr);
+      d.onEval?.();
+      return d.fnResult;
+    },
   };
   return d;
 }
@@ -82,6 +100,7 @@ const ctx = (tool: string, p: Record<string, unknown> = {}) => ({ s: {} as any, 
 beforeEach(() => {
   state.dialog = null;
   state.sensitive = [];
+  state.site = [];
   state.drv = fakeDriver();
   baselines.clearTab(1);
 });
@@ -149,6 +168,68 @@ describe("D18(a)(b) gates", () => {
     await actHandlers["act.press"](ctx("act.press", { key: "Enter" }));
     await actHandlers["act.type"](ctx("act.type", { text: "x", submit: true }));
     expect(state.sensitive.map((a) => a[2])).toEqual(["a", "a"]);
+  });
+
+  describe("keyboard bypass paths (security review H3)", () => {
+    const pwForm = { inForm: true, formFields: [{ type: "password", name: "pw" }] };
+    const gated = () => state.sensitive.map((a) => a[2]);
+
+    it("act.press Return / Shift+Return / raw CR in a password form hits the gate before the key is sent", async () => {
+      state.drv.keyInfo = pwForm;
+      for (const key of ["Return", "Shift+Return", "\r"]) {
+        state.sensitive = [];
+        state.drv.log.length = 0;
+        await actHandlers["act.press"](ctx("act.press", { key }));
+        expect(gated(), JSON.stringify(key)).toEqual(["a"]);
+      }
+    });
+
+    it("act.type with a newline in a password form hits the gate before anything is typed", async () => {
+      state.drv.keyInfo = pwForm;
+      state.drv.press = async () => {
+        throw new Error("no extra Enter");
+      };
+      let typedBeforeGate = false;
+      state.drv.typeText = async (t: string) => {
+        state.drv.log.push(`type:${t}`);
+        if (!state.sensitive.length) typedBeforeGate = true;
+        return {};
+      };
+      await actHandlers["act.type"](ctx("act.type", { ref: "e1", text: "hunter2\n" }));
+      expect(gated()).toEqual(["a"]);
+      expect(typedBeforeGate).toBe(false);
+      // with a ref, the gate inspects that element (and so its frame)
+      expect(state.drv.calls.find((c: any) => c.fn === "keyGateInfo")?.o).toEqual({ ref: "e1" });
+    });
+
+    it("act.type without a newline, or with one into a textarea, is not gated", async () => {
+      state.drv.keyInfo = pwForm;
+      await actHandlers["act.type"](ctx("act.type", { ref: "e1", text: "hunter2" }));
+      state.drv.keyInfo = { ...pwForm, textarea: true };
+      await actHandlers["act.type"](ctx("act.type", { ref: "e1", text: "line 1\nline 2" }));
+      expect(state.sensitive).toEqual([]);
+    });
+
+    it("Enter with focus inside an iframe's password form hits the gate (the frame is inspected)", async () => {
+      state.drv.keyInfo = { inForm: false, focusInFrame: true };
+      state.drv.frameKeyInfo = [{ value: { inForm: false, focusInFrame: true } }, { value: { inForm: false } }, { value: { ...pwForm, hasFocus: true } }];
+      await actHandlers["act.press"](ctx("act.press", { key: "Enter" }));
+      expect(gated()).toEqual(["a"]);
+    });
+
+    it("focus inside a frame TabAgent cannot inspect: Enter is gated (fail closed)", async () => {
+      state.drv.keyInfo = { inForm: false, focusInFrame: true };
+      state.drv.frameKeyInfo = [{ value: { inForm: false, focusInFrame: true } }];
+      await actHandlers["act.press"](ctx("act.press", { key: "Return" }));
+      expect(gated()).toEqual(["a"]);
+    });
+
+    it("Enter in a plain iframe field is not gated", async () => {
+      state.drv.keyInfo = { inForm: false, focusInFrame: true };
+      state.drv.frameKeyInfo = [{ value: { inForm: false, focusInFrame: true } }, { value: { inForm: true, hasFocus: true, formFields: [{ type: "search", name: "q" }] } }];
+      await actHandlers["act.press"](ctx("act.press", { key: "Enter" }));
+      expect(state.sensitive).toEqual([]);
+    });
   });
 
   it("purchase/delete/send clicks are category b; plain clicks pass", async () => {
@@ -221,5 +302,39 @@ describe("page / nav handlers", () => {
   it("levelOf follows the registry (nav tools are act, D16)", () => {
     expect(levelOf(ctx("nav.goto") as any, "read")).toBe("act");
     expect(levelOf(ctx("page.snapshot") as any, "act")).toBe("read");
+  });
+});
+
+describe("nav.wait for=fn (security review H2)", () => {
+  beforeEach(() => authTaint.closed(1));
+
+  it("checks the site at full, other waits at read", async () => {
+    state.drv.fnResult = true;
+    await navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "1", timeout: 500 }));
+    expect(state.site.at(-1)[2]).toBe("full");
+    await navHandlers["nav.wait"](ctx("nav.wait", { for: "load" }));
+    expect(state.site.at(-1)[2]).toBe("read");
+  });
+
+  it("evaluates through the driver's fresh-world evaluator, never pagelib's world", async () => {
+    state.drv.fnResult = true;
+    state.drv.evaluate = async () => {
+      throw new Error("pagelib world used");
+    };
+    expect(await navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "document.title", timeout: 500 }))).toMatchObject({ ok: true });
+    expect(state.drv.evals).toEqual(["!!(document.title)"]);
+  });
+
+  it("stops with PERMISSION_DENIED as soon as the tab leaves the authorized origin, without evaluating there", async () => {
+    state.drv.onEval = () => (state.drv.url = "https://bank.example/");
+    await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "0", timeout: 2000 }))).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(state.drv.evals).toHaveLength(1);
+  });
+
+  it("stops when TabAgent types a credential into the tab mid-wait, and marks the document as touched by agent JS", async () => {
+    state.drv.onEval = () => authTaint.filled(1, "password", "hunter2-secret");
+    await expect(navHandlers["nav.wait"](ctx("nav.wait", { for: "fn", value: "0", timeout: 2000 }))).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(state.drv.evals).toHaveLength(1);
+    expect(authTaint.scriptDirty(1)).toBe(true);
   });
 });

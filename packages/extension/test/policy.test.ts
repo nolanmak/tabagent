@@ -243,6 +243,16 @@ describe("YOLO mode (allow every site without asking)", () => {
     expect(resolve(y(), req({ cap: "read", level: "act" })).decision).toBe("deny");
     expect(resolve(y(), req({ sites: ["b.example"] })).decision).toBe("deny");
   });
+  it("DA12 (review M3): Google password/account/mail surfaces and vault apps are denied even with an empty denylist, under YOLO and site allow", () => {
+    for (const url of ["https://passwords.google.com/", "https://myaccount.google.com/security", "https://mail.google.com/mail/u/0/", "https://vault.bitwarden.eu/", "https://my.1password.eu/", "https://my.1password.ca/"]) {
+      const origin = new URL(url).origin;
+      const st = y({ denylist: [], sites: { [origin]: { policy: "full", preapproved: { c: true, d: true } } } });
+      expect(resolve(st, req({ url, level: "read" })), url).toMatchObject({ decision: "deny", code: "PERMISSION_DENIED" });
+      expect(resolve(st, req({ url, level: null })).decision, url).toBe("deny");
+      expect(effectiveLevel(st, { sessionId: "s1", cap: "full", sites: [], url }).level, url).toBe("deny");
+    }
+    expect(resolve(y({ denylist: [] }), req({ url: "https://docs.google.com/" })).decision).toBe("allow");
+  });
   it("effectiveLevel reports the token cap with source yolo", () => {
     expect(effectiveLevel(y(), { sessionId: "s1", cap: "act", sites: [], url: `${A}/` })).toMatchObject({ level: "act", source: expect.stringContaining("YOLO") });
     expect(effectiveLevel(y({ sites: { [A]: { policy: "deny" } } }), { sessionId: "s1", cap: "full", sites: [], url: `${A}/` })).toMatchObject({ level: "deny" });

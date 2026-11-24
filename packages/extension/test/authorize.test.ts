@@ -26,6 +26,11 @@ describe("requirementsFor: every D18 static path reaches the gate", () => {
     expect(requirementsFor({ name: "nav.wait", level: "read", sensitive: true }, { for: "fn" }).sensitive).toBe("c");
     expect(requirementsFor({ name: "tabs", level: "none" }, { action: "attach" })).toMatchObject({ level: "read", sensitive: "f" });
   });
+  it("nav.wait for=fn needs full on the site, from the registry and from the fallback (review H2)", () => {
+    expect(requirementsFor(reg("nav.wait"), { for: "fn", value: "1" }).level).toBe("full");
+    expect(requirementsFor(reg("nav.wait"), { for: "text", value: "x" }).level).toBe("read");
+    expect(requirementsFor({ name: "nav.wait", level: "read", sensitive: true }, { for: "fn" }).level).toBe("full");
+  });
   it("category g is left to the auth handler", () => {
     expect(requirementsFor({ name: "auth.login", level: "act", sensitive: "g" }, {}).sensitive).toBeUndefined();
   });

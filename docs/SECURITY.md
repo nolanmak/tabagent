@@ -70,9 +70,9 @@ by *effect*, so there is no side door through a different tool:
 
 | | Effect | Paths gated |
 |---|---|---|
-| a | Submitting a form that has password, card or SSN-like fields | `form.submit`, `act.press` Enter inside the form, `act.click` on its submit control |
+| a | Submitting a form that has password, card or SSN-like fields | `form.submit`, `act.press` of any key that resolves to Enter (Enter, Return, with modifiers) inside the form, `act.type` text containing a newline, `act.click` on its submit control; in any frame |
 | b | Clicks that look like purchase, delete, send or transfer | `act.click` on a matching accessible name |
-| c | Arbitrary JavaScript | `js.eval`, `nav.wait` with `for: fn` |
+| c | Arbitrary JavaScript | `js.eval`, `nav.wait` with `for: fn` (both need `full` on the site) |
 | d | Credential reads | `cookies.get`, `storage.get`, `network.get` (`network.list` never returns header values) |
 | e | Local file transfer | `act.upload`, `downloads.read` |
 | f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved) |
@@ -84,6 +84,22 @@ late answer never executes anything (D15). Until the full permission engine land
 are refused outright unless the developer setting `devAllowSensitive` is on (D17).
 
 Each gate has a test for the gated path and for every bypass path listed above.
+
+### After TabAgent signs in (DA1)
+
+Once `auth.login` or `auth.code` has typed a credential into a tab, that tab is tainted until it
+has moved to a new page *and* 10 minutes (Chrome's back/forward cache lifetime) have passed. While
+it is tainted, every c and d tool is refused on it, whatever the site policy, pre-approvals or
+YOLO say. `network.get` never returns a request that started while the tab was tainted. For 10
+minutes, any result or error that contains a typed password or code is withheld. Auth also refuses
+to type into a page where agent JavaScript (`js.eval`, `nav.wait` fn) has run.
+
+### Never reachable
+
+`passwords.google.com`, `myaccount.google.com`, `mail.google.com` and the password-manager vault
+apps are refused for every agent tool. This list is built in and cannot be edited; YOLO does not
+apply to it (DA12). YOLO mode shows a YOLO badge and a banner in the side panel while it is on,
+and turning it (or `devAllowSensitive`) on or off is written to the audit log.
 
 ## Best-effort heuristics (D18b)
 

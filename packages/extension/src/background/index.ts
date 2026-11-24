@@ -2,6 +2,8 @@
 // permission gate, the kill switch, the badge and the UI API together.
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
 import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { authTaint, credentialGuard } from "./authTaint";
+import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
@@ -17,6 +19,7 @@ import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
+import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
 
 const VERSION = chrome.runtime.getManifest().version;
@@ -104,6 +107,12 @@ export const router = createRouter<Session>({
   },
   authorize: (r) => authorize({ meta: r.meta, url: r.url, level: r.level, sensitive: r.sensitive, tool: r.action ? `${r.tool} ${r.action}` : r.tool, summary: r.summary, reasons: r.reasons, tabId: r.tabId }),
   holdApproval,
+  // DA1 (review H1): credential reads on a tab TabAgent typed a secret into, and results carrying one.
+  guard: async (r) => {
+    await authTaintReady; // restored from storage.session after a worker restart (D11)
+    credentialGuard(authTaint, r);
+  },
+  leaks: (text) => authTaint.leaks(text),
   handler: (name) => (extraHandlers[name] ?? sessionHandlers[name] ?? (handlers as Record<string, any>)[name]) as any,
   sensitivePaths: async (tool, p, tabId, url) => {
     if (tabId == null) return [];
@@ -125,7 +134,8 @@ export const router = createRouter<Session>({
 // ---------------------------------------------------------------------------
 let lastBadge = "";
 async function refreshBadge() {
-  const st = badgeState({ connected: bridge.connected(), paused: await isPaused().catch(() => false), pendingPrompts: prompts.size, inflight: router?.inflightCount?.() ?? 0 });
+  const yolo = await getSettings().then((s) => !!s.yolo, () => false);
+  const st = badgeState({ connected: bridge.connected(), paused: await isPaused().catch(() => false), pendingPrompts: prompts.size, inflight: router?.inflightCount?.() ?? 0, yolo });
   if (st === lastBadge) return;
   lastBadge = st;
   const b = BADGE[st];
@@ -134,6 +144,15 @@ async function refreshBadge() {
   chrome.action.setTitle({ title: b.title }).catch(() => {});
 }
 onSessionsChanged(() => refreshBadge());
+
+// Review M1: YOLO / devAllowSensitive toggles are audited and the badge follows, whatever wrote them.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.settings) return;
+  const before = migrateSettings(changes.settings.oldValue as Record<string, unknown> | undefined);
+  const after = migrateSettings(changes.settings.newValue as Record<string, unknown> | undefined);
+  for (const e of settingsAuditEvents(before, after)) sendEvent(e.event, e.data);
+  refreshBadge();
+});
 
 // ---------------------------------------------------------------------------
 // Prompt delivery (D19): badge "!", notification, informational in-tab banner.

@@ -1,4 +1,6 @@
 // nav.goto / back / forward / reload / wait (#26, D15, D24, D35).
+import { originOf, type TabAgentError } from "@tabagent/protocol";
+import { authTaint } from "../authTaint";
 import { driverFor } from "../driver";
 import { noteAction } from "../downloads";
 import { taErr } from "../errors";
@@ -59,7 +61,7 @@ export const navHandlers: Record<string, Handler> = {
     const w = normalizeWait(c.p);
     return onTab(
       c,
-      "read",
+      levelOf(c, "read"), // for=fn: full, like js.eval (review H2)
       async (t) => {
         const started = Date.now();
         let ok = false;
@@ -81,11 +83,35 @@ export const navHandlers: Record<string, Handler> = {
             ok = await pollUntil(async () => m(await t.drv.currentUrl()), w.timeout, clock, 100);
             break;
           }
-          case "fn":
+          case "fn": {
             // D18(c): the router's sensitive gate ran before we got here (registry sensitiveWhen for=fn).
             if (t.drv.kind !== "cdp") throw taErr("UNSUPPORTED", "nav.wait for=fn needs full (debugger) mode");
-            ok = await pollUntil(async () => !!(await t.drv.evaluate(`!!(${w.value})`, "isolated")), w.timeout, clock, 100);
+            // Review H2: the predicate only ever runs on the origin it was authorized for, never after
+            // TabAgent types a credential into the tab, and in a world of its own (not pagelib's).
+            const origin = originOf(t.url);
+            const evaluate = t.drv.evaluator();
+            let stop: TabAgentError | null = null;
+            ok = await pollUntil(
+              async () => {
+                const now = await t.drv.currentUrl();
+                if (originOf(now) !== origin) {
+                  stop = taErr("PERMISSION_DENIED", `nav.wait for=fn stopped: the tab left ${origin}`, "Wait for url instead, or call nav.wait again on the new page.");
+                  return true;
+                }
+                if (authTaint.tainted(t.tabId)) {
+                  stop = taErr("PERMISSION_DENIED", "nav.wait for=fn stopped: TabAgent typed a credential into this tab (DA1)", "Wait for url, text or selector instead.");
+                  return true;
+                }
+                authTaint.ranScript(t.tabId); // before it runs: auth won't type into this document now
+                return !!(await evaluate(`!!(${w.value})`));
+              },
+              w.timeout,
+              clock,
+              100,
+            );
+            if (stop) throw stop;
             break;
+          }
         }
         if (!ok) throw taErr("TIMEOUT", `Timed out after ${w.timeout}ms waiting for ${describeWait(w)}`, "Take a page.snapshot to see the current state.");
         return { ok: true, waitedMs: Date.now() - started, url: await t.drv.currentUrl() };

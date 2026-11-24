@@ -81,7 +81,11 @@ export interface Driver {
   drag(from: string, to: string, timeout?: number): Promise<void>;
   upload(ref: string, paths: string[]): Promise<void>;
   screenshot(o: ScreenshotOpts): Promise<Screenshot>;
-  evaluate(expression: string, world: "main" | "isolated"): Promise<unknown>;
+  /**
+   * nav.wait for=fn: an evaluator bound to an isolated world of its own (never pagelib's, which
+   * agent code could otherwise tamper with), created on first use and again after the document changes.
+   */
+  evaluator(): (expression: string) => Promise<unknown>;
   navigate(url: string, waitUntil: string, timeout: number): Promise<{ url: string; warning?: string }>;
   history(action: "back" | "forward" | "reload", timeout: number): Promise<void>;
   waitLoad(timeout: number): Promise<boolean>;
@@ -102,6 +106,7 @@ export interface Driver {
 // ---------------------------------------------------------------------------
 type MaskHook = (tabId: number, backendNodeId: number, frameKey: string) => boolean;
 const maskHooks: MaskHook[] = [];
+let waitWorldSeq = 0;
 export function addMaskHook(fn: MaskHook): () => void {
   maskHooks.push(fn);
   return () => {
@@ -605,14 +610,26 @@ export class CdpDriver implements Driver {
     }
   }
 
-  async evaluate(expression: string, world: "main" | "isolated") {
-    await this.tab.ensure();
-    this.tab.assertNoDialog();
-    if (world === "main") return this.tab.evalMain(expression);
-    const ctx = await this.tab.isolatedContext(this.tab.mainKey());
-    const r = await this.tab.send<any>("Runtime.evaluate", { expression, contextId: ctx, awaitPromise: true, returnByValue: true, replMode: true });
-    if (r.exceptionDetails) throw taErr("BAD_REQUEST", `Evaluation failed: ${r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text}`, undefined, { pageText: true });
-    return r.result.value;
+  evaluator(): (expression: string) => Promise<unknown> {
+    let ctx: number | undefined;
+    const worldName = `tabagent-wait-${++waitWorldSeq}`;
+    return async (expression: string) => {
+      await this.tab.ensure();
+      this.tab.assertNoDialog();
+      if (ctx == null) {
+        const w = await this.tab.send<{ executionContextId: number }>("Page.createIsolatedWorld", { frameId: this.tab.mainFrameId, worldName, grantUniveralAccess: false });
+        ctx = w.executionContextId;
+      }
+      let r: any;
+      try {
+        r = await this.tab.send<any>("Runtime.evaluate", { expression, contextId: ctx, awaitPromise: true, returnByValue: true, replMode: true });
+      } catch (e) {
+        ctx = undefined; // the document went away with its world
+        throw e;
+      }
+      if (r.exceptionDetails) throw taErr("BAD_REQUEST", `Evaluation failed: ${r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text}`, undefined, { pageText: true });
+      return r.result?.value;
+    };
   }
 
   navEpoch() {

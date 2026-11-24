@@ -45,6 +45,8 @@ export interface ToolDef<S extends z.ZodObject = z.ZodObject> {
   sensitive?: SensitiveCategory;
   /** Static sensitivity applies only when params[param] is one of values (nav.wait for=fn). */
   sensitiveWhen?: { param: string; values: string[] };
+  /** A higher site level when params[param] is one of values (nav.wait for=fn needs full, like js.eval). */
+  levelWhen?: { param: string; values: string[]; level: Level };
   /** Per-action level/sensitivity (only `tabs` in v1, D13). */
   actions?: Record<string, ActionDef>;
   /** Result field paths that are page-derived (D21). `a.b`, `a[].b`; [] if none. */
@@ -167,7 +169,7 @@ export const TOOLS = [
   def({
     name: "nav.wait",
     group: "nav",
-    description: "Wait for: load | networkidle | selector (CSS) | text | url (substring or /regex/) | fn (JS predicate; asks the user).",
+    description: "Wait for: load | networkidle | selector (CSS) | text | url (substring or /regex/) | fn (JS predicate, re-run every 100ms; needs full access, asks the user).",
     params: z.object({
       for: z.enum(["load", "networkidle", "selector", "text", "url", "fn"]),
       value: z.string().optional(),
@@ -178,6 +180,7 @@ export const TOOLS = [
     level: "read",
     sensitive: "c",
     sensitiveWhen: { param: "for", values: ["fn"] },
+    levelWhen: { param: "for", values: ["fn"], level: "full" },
     pageContent: ["url"],
     profiles: ["core"],
     lite: "supported",
@@ -769,6 +772,7 @@ export function levelFor(tool: ToolDef, params: Record<string, unknown> = {}): T
     const a = tool.actions[String(params.action)];
     if (a) return a.level;
   }
+  if (tool.levelWhen && tool.levelWhen.values.includes(String(params[tool.levelWhen.param]))) return tool.levelWhen.level;
   return tool.level;
 }
 

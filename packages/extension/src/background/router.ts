@@ -5,6 +5,13 @@ import { buildAudit, liftSide, outcomeFor, type AuditRecord, type RedactOpts } f
 import { normalizeNavUrl, requirementsFor, type Requirements, type ToolLike } from "./authorize";
 import { originOf, type Level, type SensitiveCategory } from "./policy";
 
+/** What the agent gets instead of a result that carried a typed secret (DA1). */
+const WITHHELD: ErrorJson = {
+  code: "PERMISSION_DENIED",
+  message: "The result was withheld because it contained a credential TabAgent typed for sign-in (DA1)",
+  hint: "Read something narrower, or use another tab.",
+};
+
 export interface SessionMetaLike {
   id: string;
   label: string;
@@ -83,6 +90,13 @@ export interface RouterDeps<S = unknown> {
   /** Mark a static sensitive approval as valid for the duration of this command. */
   holdApproval?(sessionId: string, origin: string, category: SensitiveCategory): () => void;
   handler(name: string): ((ctx: { s: S; meta: SessionMetaLike; p: any; tool: any; tabId?: number; url?: string; cmdId: string }) => Promise<unknown>) | undefined;
+  /**
+   * DA1 (review H1): runs before authorize; throws to refuse a credential read on a tab
+   * TabAgent typed a secret into. Nothing (YOLO, pre-approval) overrides it.
+   */
+  guard?(req: { tool: string; sensitive?: SensitiveCategory; tabId?: number; url: string }): void | Promise<void>;
+  /** DA1 (review H1): true when serialised output carries a typed secret; the result is withheld. */
+  leaks?(text: string): boolean;
   /** Param paths whose values are password/card fields (masked in feed + audit). */
   sensitivePaths?(tool: string, params: Record<string, unknown>, tabId: number | undefined, url: string): Promise<string[]>;
   feed?(e: FeedEvent): void;
@@ -175,7 +189,14 @@ export function createRouter<S>(deps: RouterDeps<S>) {
     setInflight();
 
     const finish = async (ok: boolean, result: unknown, err?: ErrorJson): Promise<Envelope> => {
-      const { result: clean, side } = ok ? liftSide(result) : { result: undefined, side: {} };
+      let { result: clean, side } = ok ? liftSide(result) : { result: undefined as unknown, side: {} };
+      // DA1 (review H1): no result or error may carry a credential TabAgent typed.
+      if (deps.leaks?.(JSON.stringify({ clean, side, err }) ?? "")) {
+        ok = false;
+        clean = undefined;
+        side = {};
+        err = { ...WITHHELD };
+      }
       const audit = await buildAudit({ tool: toolName, action, origin, params, outcome: ok ? "ok" : outcomeFor(err?.code), errorCode: err?.code, result: clean, redact });
       deps.feed?.({ ...feedBase(), params: audit.params, status: ok ? "ok" : audit.outcome === "denied" ? "denied" : "error", errorCode: err?.code, ms: now() - started, resultSummary: audit.resultSummary });
       const env: Envelope = { type: "result", id: cmd.id, ok, ...(ok ? { result: clean } : { error: err }), ...side, audit };
@@ -219,6 +240,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
             break;
         }
         origin = url ? originOf(url) : null;
+        await deps.guard?.({ tool: tool.name, sensitive: req.sensitive, tabId, url });
         // The D17 chokepoint: exactly one authorize() per command, before any handler.
         // authorize() asks about the site first and the sensitive category second.
         await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: req.sensitive && REASONS[req.sensitive] ? [REASONS[req.sensitive]] : [] });

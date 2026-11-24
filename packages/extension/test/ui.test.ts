@@ -66,6 +66,11 @@ describe("badge state machine (D40)", () => {
     ["needs approval even when disconnected", s({ connected: false, pendingPrompts: 1 }), "approval"],
     ["paused beats everything", s({ paused: true, pendingPrompts: 3, inflight: 3 }), "paused"],
     ["off beats acting", s({ connected: false, inflight: 1 }), "off"],
+    ["YOLO shows while idle (review M1)", s({ yolo: true }), "yolo"],
+    ["YOLO shows while acting", s({ yolo: true, inflight: 2 }), "yolo"],
+    ["needs approval beats YOLO", s({ yolo: true, pendingPrompts: 1 }), "approval"],
+    ["paused beats YOLO", s({ yolo: true, paused: true }), "paused"],
+    ["off beats YOLO (nothing can act)", s({ yolo: true, connected: false }), "off"],
   ])("%s", (_n, input, want) => expect(badgeState(input)).toBe(want));
   it("transitions: off -> connected -> acting -> approval -> acting -> paused -> connected", () => {
     const seq = [s({ connected: false }), s({}), s({ inflight: 1 }), s({ inflight: 1, pendingPrompts: 1 }), s({ inflight: 1 }), s({ paused: true }), s({})].map(badgeState);
@@ -74,6 +79,8 @@ describe("badge state machine (D40)", () => {
   it("approval shows ! and paused shows the pause glyph", () => {
     expect(BADGE.approval.text).toBe("!");
     expect(BADGE.paused.text).toBe("⏸");
-    expect(new Set(Object.values(BADGE).map((b) => b.color)).size).toBe(5);
+    expect(new Set(Object.values(BADGE).map((b) => b.color)).size).toBe(6);
+    expect(BADGE.yolo.text).toBe("YOLO");
+    expect(BADGE.yolo.title).toMatch(/YOLO/);
   });
 });
