@@ -1,6 +1,7 @@
 // M6 auth wiring (#33-#35): thin adapters from the pure flows to chrome.*, the CDP driver and the
 // bridge socket. Holds no decisions. Hooked in with one import line in background/index.ts.
 import { pollCode, TabAgentError, type SessionMeta } from "@tabagent/protocol";
+import { authTaint } from "../authTaint";
 import { detachTab } from "../cdp";
 import * as driverMod from "../driver";
 import { disposeDrivers, driverFor, type Driver } from "../driver";
@@ -9,6 +10,7 @@ import { requireSensitive } from "../permissions";
 import { AUTH_DENY_HOSTS } from "../policy";
 import { endHandoff, inHandoff, listHandoffs, markPrivateTab, startHandoff, unmarkPrivateTab } from "../sessions";
 import { getSettings } from "../settings";
+import { withTabLock } from "../tabctx";
 import { clearAuthMasks, isAuthMaskedNode, markAuthMaskedNode } from "./mask";
 import { createAuthChannel, type Sender } from "./pure/channel";
 import { authCode, authLogin, authStatus, newMemory, type AuthEnv, type AuthPage, type EmailReader, type PageField } from "./pure/flows";
@@ -194,6 +196,9 @@ function envFor(c: Ctx, tabId: number): AuthEnv {
     consent: (url, who, summary) => requireSensitive(c.meta, url, "g", c.tool.name, summary, ["Sign-in uses a saved credential; the agent never sees it"], { auth: who, tabId }),
     channel,
     email: emailReader(tabId),
+    // DA1 (review H1): taint the tab before the first keystroke; refuse documents agent JS touched.
+    filled: (kind, secret) => authTaint.filled(tabId, kind, secret),
+    scriptDirty: () => authTaint.scriptDirty(tabId),
     event,
     now: () => Date.now(),
   };
@@ -286,6 +291,7 @@ async function handoff(c: Ctx) {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   clearAuthMasks(tabId);
+  authTaint.closed(tabId);
   mem.lastLogin.delete(tabId);
 });
 
@@ -297,13 +303,15 @@ registerHandlers({
     const tabId = needTab(c as Ctx);
     return authStatus(envFor(c as Ctx, tabId), realPage(tabId));
   },
+  // Under the tab lock (review H1): a js.eval already running on the tab finishes before any
+  // credential is typed, and the ones after it meet the taint.
   "auth.login": async (c) => {
     const tabId = needTab(c as Ctx);
-    return authLogin(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem);
+    return withTabLock(tabId, () => authLogin(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem));
   },
   "auth.code": async (c) => {
     const tabId = needTab(c as Ctx);
-    return authCode(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem);
+    return withTabLock(tabId, () => authCode(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem));
   },
   "auth.handoff": (c) => handoff(c as Ctx),
 });

@@ -49,6 +49,13 @@ export interface AuthEnv {
   consent(url: string, who: { accountId: string; accountMasked: string; provider: string }, summary: string): Promise<void>;
   channel: Pick<AuthChannel, "accounts" | "secret" | "smsCode">;
   email?: EmailReader;
+  /**
+   * DA1 (review H1): called just before a credential reaches the page, so the tab is tainted
+   * (no c/d reads, results screened) before the first keystroke. `secret` only for password/code.
+   */
+  filled?(kind: "username" | "password" | "code" | "autofill", secret: string | null): void;
+  /** DA1 (review H1): agent JavaScript ran in the tab's current document; it could be listening. */
+  scriptDirty?(): boolean;
   /** DA11 audit event (tool, origin, provider/source, masked account, outcome). Never a secret. */
   event(name: string, data: Record<string, unknown>): void;
   now(): number;
@@ -64,6 +71,13 @@ export interface AuthMemory {
 export const newMemory = (): AuthMemory => ({ lastLogin: new Map(), lastAccount: new Map(), approvedSources: new Set() });
 
 export const CHROME_AUTOFILL_ID = "chrome-autofill:saved";
+
+/** Refuse to type a secret into a document where agent JavaScript has run (review H1). */
+function assertClean(env: AuthEnv) {
+  if (env.scriptDirty?.()) {
+    throw new TabAgentError("PERMISSION_DENIED", "Agent JavaScript ran in this page, so TabAgent will not type a credential into it", "Call nav.reload (or open the sign-in page again), then retry without js.eval or nav.wait for=fn first.");
+  }
+}
 
 function originOrDeny(url: string): string {
   let o: string | null = null;
@@ -162,6 +176,7 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
   const url0 = await page.url();
   const origin = originOrDeny(url0);
   await env.siteCheck(url0); // (1)
+  assertClean(env);
   const form0 = detectLogin(await page.fields());
   if (!form0.ok) throw new TabAgentError("NOT_FOUND", form0.reason, form0.signup ? "auth.login only signs in; it never fills sign-up or change-password forms." : "Navigate to the site's sign-in page first.");
   const { accounts, providers, rejected } = await gatherAccounts(env, page, origin, url0); // (2)
@@ -210,6 +225,8 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
   if (chosen.provider === "chrome-autofill") {
     // Chrome already put the saved credential in the fields; TabAgent never sees it (#32).
     for (const r of [userRef, passRef]) if (r) await page.markFilled(r);
+    assertClean(env);
+    env.filled?.("autofill", null);
     last = passRef ?? userRef;
   } else {
     for (const [field, ref] of [["username", userRef], ["password", passRef]] as const) {
@@ -218,6 +235,8 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
       try {
         await sameOrigin(page, origin, field);
         await page.markFilled(ref);
+        assertClean(env);
+        env.filled?.(field, field === "password" ? value : null);
         await page.type(ref, value);
       } finally {
         value = null;
@@ -257,6 +276,7 @@ export async function authCode(
   const url0 = await page.url();
   const origin = originOrDeny(url0);
   await env.siteCheck(url0);
+  assertClean(env);
   const timeout = p.timeout ?? 60_000;
   const now = env.now();
   const loginAt = mem.lastLogin.get(env.tabId);
@@ -306,6 +326,8 @@ export async function authCode(
       try {
         if (!/^[A-Za-z0-9]{4,10}$/.test(code)) throw new TabAgentError("BAD_REQUEST", "The code source returned something that is not a code");
         await sameOrigin(page, origin, "code");
+        assertClean(env);
+        env.filled?.("code", code);
         if (dest.length > 1) {
           const chars = [...code];
           if (chars.length !== dest.length) throw new TabAgentError("BAD_REQUEST", `The code has ${chars.length} characters but the page has ${dest.length} boxes`);

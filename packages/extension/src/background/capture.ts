@@ -1,6 +1,7 @@
 // Per-tab capture state fed by CDP events: network/console ring buffers (D35),
 // the dialog state machine (D28) and download notes (D31). Thin adapter over ../pure.
 import { Capture } from "../pure/capture";
+import { authTaint } from "./authTaint";
 import { DialogState, type BeforeUnloadPolicy } from "../pure/dialogs";
 import { tracker } from "./downloads";
 import { getSettings } from "./settings";
@@ -63,6 +64,8 @@ export function onCdpEvent(tabId: number, method: string, p: any, sessionId?: st
       if (p?.url) tracker.noteTabDownload(tabId, p.url);
       return;
   }
+  // DA1 (review H1): a main-frame commit moves the tab off the document TabAgent typed into.
+  if (method === "Page.frameNavigated" && !sessionId && !p?.frame?.parentId) authTaint.navigated(tabId, { bfcache: p?.type === "BackForwardCacheRestore" });
   // #17: only the top-level target is captured until cross-origin frames land (#19).
   if (sessionId && method.startsWith("Network.")) return;
   t.capture.onEvent(method, p, sessionId);
