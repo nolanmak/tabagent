@@ -29,6 +29,8 @@ export interface StoredShape {
   sites: Record<string, SiteEntry>;
   denylist: string[];
   devAllowSensitive: boolean;
+  /** Allow every site without asking (denylist, kill switch and hard denies still apply). */
+  yolo: boolean;
   onSessionEnd: OnSessionEnd;
   beforeUnload: BeforeUnload;
   showOverlay: boolean;
@@ -42,6 +44,7 @@ export const DEFAULTS: StoredShape = {
   sites: {},
   denylist: SEEDED_DENYLIST,
   devAllowSensitive: false,
+  yolo: false,
   onSessionEnd: "collapse",
   beforeUnload: "accept",
   showOverlay: true,
@@ -99,6 +102,7 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
     sites,
     denylist: Array.isArray(r.denylist) ? r.denylist.filter((x: unknown) => typeof x === "string" && x.trim()).map((x: string) => x.trim()) : DEFAULTS.denylist.slice(),
     devAllowSensitive: r.devAllowSensitive === true,
+    yolo: r.yolo === true,
     onSessionEnd: ["collapse", "close", "keep"].includes(r.onSessionEnd) ? r.onSessionEnd : DEFAULTS.onSessionEnd,
     beforeUnload,
     showOverlay: typeof r.showOverlay === "boolean" ? r.showOverlay : DEFAULTS.showOverlay,

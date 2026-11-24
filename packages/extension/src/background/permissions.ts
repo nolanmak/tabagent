@@ -32,7 +32,7 @@ async function saveGrants() {
 
 async function policyState(): Promise<PolicyState> {
   const s = await getSettings();
-  return { paused: s.paused, sites: s.sites, denylist: s.denylist, devAllowSensitive: s.devAllowSensitive, grants: await loadGrants() };
+  return { paused: s.paused, sites: s.sites, denylist: s.denylist, devAllowSensitive: s.devAllowSensitive, yolo: s.yolo, grants: await loadGrants() };
 }
 
 /** Kill switch / session end: allow-once (and deny) answers go away. */

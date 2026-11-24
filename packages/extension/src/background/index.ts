@@ -270,7 +270,7 @@ chrome.commands.onCommand.addListener((c) => {
 // ---------------------------------------------------------------------------
 // UI API (side panel + prompt window). Only our own extension pages may call it.
 // ---------------------------------------------------------------------------
-const UI_KEYS = ["sites", "denylist", "devAllowSensitive", "onSessionEnd", "beforeUnload", "showOverlay", "forceLite", "liteSites"] as const;
+const UI_KEYS = ["sites", "denylist", "devAllowSensitive", "yolo", "onSessionEnd", "beforeUnload", "showOverlay", "forceLite", "liteSites"] as const;
 
 function publicSettings(s: Settings) {
   const { secret: _s, autoAcceptBeforeUnload: _a, sensitiveAllowed: _x, ...rest } = s;

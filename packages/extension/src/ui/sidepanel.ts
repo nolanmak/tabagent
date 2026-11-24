@@ -101,6 +101,7 @@ function renderSettings() {
   ($("showOverlay") as HTMLInputElement).checked = s.showOverlay;
   ($("forceLite") as HTMLInputElement).checked = s.forceLite;
   ($("devAllowSensitive") as HTMLInputElement).checked = s.devAllowSensitive;
+  ($("yolo") as HTMLInputElement).checked = !!s.yolo;
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
   const rows = Object.entries(s.sites as Record<string, any>);
   $("sites").innerHTML =
@@ -192,7 +193,7 @@ $("sessions").addEventListener("click", (e) => {
 const patch = (p: unknown) => send({ type: "ui.settings", patch: p }).then(refresh);
 const sites = () => structuredClone(state.settings.sites ?? {}) as Record<string, any>;
 for (const id of ["onSessionEnd", "beforeUnload"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLSelectElement).value }));
-for (const id of ["showOverlay", "forceLite", "devAllowSensitive"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
+for (const id of ["showOverlay", "forceLite", "devAllowSensitive", "yolo"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
 
 $("sites").addEventListener("change", (e) => {
   const el = e.target as HTMLInputElement | HTMLSelectElement;

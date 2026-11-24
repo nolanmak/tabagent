@@ -39,6 +39,8 @@ export interface PolicyState {
   /** sessionId -> origin -> grant */
   grants: Record<string, Record<string, SessionGrant>>;
   devAllowSensitive?: boolean;
+  /** YOLO mode: every site is allowed (up to the token cap) and sensitive a-e pass without asking. */
+  yolo?: boolean;
 }
 
 export interface PolicyRequest {
@@ -174,7 +176,7 @@ export function resolve(state: PolicyState, req: PolicyRequest): Decision {
     if (g?.denied && RANK[req.level] >= RANK[g.denied]) {
       return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `The user denied ${req.level} access to ${origin} for this session` };
     }
-    const ok = (stored && RANK[stored] >= RANK[req.level]) || (g?.once && RANK[g.once] >= RANK[req.level]);
+    const ok = state.yolo || (stored && RANK[stored] >= RANK[req.level]) || (g?.once && RANK[g.once] >= RANK[req.level]);
     if (!ok) {
       return { decision: "ask", kind: "site", origin, level: req.level, ...(stored ? { reason: `Site is set to "${stored}"; ${req.level} needs more access` } : {}) };
     }
@@ -198,7 +200,7 @@ function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | 
   }
   const key = origin ?? (isBlank(req.url) ? "about:blank" : req.url);
   if (cat !== "f") {
-    if (state.devAllowSensitive) return { decision: "allow", origin };
+    if (state.devAllowSensitive || state.yolo) return { decision: "allow", origin };
     if (origin && state.sites[origin]?.preapproved?.[cat]) return { decision: "allow", origin };
   }
   return { decision: "ask", kind: "sensitive", origin: key, category: cat };
@@ -259,6 +261,10 @@ export function effectiveLevel(state: PolicyState, req: Omit<PolicyRequest, "lev
   if (g?.once && (lvl === "ask" || (lvl !== "deny" && RANK[g.once] > RANK[lvl]))) {
     lvl = g.once;
     source = "allowed once for this session";
+  }
+  if (state.yolo && lvl !== "deny") {
+    lvl = "full";
+    source = "YOLO mode";
   }
   if (lvl !== "ask" && lvl !== "deny") {
     const capped = minLevel(lvl, req.cap);
