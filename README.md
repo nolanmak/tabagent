@@ -33,10 +33,10 @@ permissions you control.
 
 2. **Install the extension** from the Chrome Web Store, or load it unpacked: run
    `chrome://extensions` → Developer mode → Load unpacked → the copy shipped in the npm package,
-   `$(npm root -g)/tabagent/dist/extension`.
+   `$(npm root -g)/@nolmak/tabagent/dist/extension`.
 
 3. **Pair**: open the TabAgent side panel (toolbar icon) and enter the code. `tabagent status`
-   shows it again.
+   shows it again. A code is valid for 30 minutes; `tabagent pair` makes a new one and cancels the old.
 
 4. **Connect your agent** (more in [examples/](examples)):
 

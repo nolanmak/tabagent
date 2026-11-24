@@ -1,4 +1,4 @@
-// D4 pairing code: one-time, 10-minute TTL, 5 wrong attempts invalidate it. Clock is injectable.
+// D4 pairing code: one-time, 30-minute TTL, 5 wrong attempts invalidate it. Clock is injectable.
 import { PAIR_MAX_ATTEMPTS, TIMEOUTS } from "@tabagent/protocol";
 import { newPairCode } from "./config";
 

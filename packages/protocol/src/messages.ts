@@ -21,7 +21,7 @@ export const TIMEOUTS = {
   /** Bridge closes a socket silent for this long. */
   silentSocket: 45_000,
   /** Pairing code lifetime. */
-  pairCode: 10 * 60_000,
+  pairCode: 30 * 60_000,
   /** REST/CLI session idle expiry (D8). */
   restSessionIdle: 30 * 60_000,
 } as const;

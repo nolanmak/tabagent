@@ -54,16 +54,27 @@ describe("pairing (D4)", () => {
     expect(d.pairCode).toBeNull();
     const minted = await rest(base, "/v1/pair", cfg.secret, {});
     expect(minted.body.pairCode).toMatch(/^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+    expect(minted.body.expiresInSec).toBe(30 * 60);
     const ok = new FakeExt(d.port);
     expect((await ok.hello({ pairCode: minted.body.pairCode.toLowerCase() })).type).toBe("welcome");
     ok.close();
   });
 
-  it("an expired code is rejected (fake clock past 10 min)", async () => {
+  it("a code still works at 29 minutes (30-minute lifetime)", async () => {
     let now = 1_000_000;
     const { d } = await boot({ now: () => now });
     const code = d.pairCode!;
-    now += 10 * 60_000 + 1;
+    now += 29 * 60_000;
+    expect(d.pairCode).toBe(code);
+    const e = new FakeExt(d.port);
+    expect((await e.hello({ pairCode: code })).type).toBe("welcome");
+  });
+
+  it("an expired code is rejected (fake clock past 30 min)", async () => {
+    let now = 1_000_000;
+    const { d } = await boot({ now: () => now });
+    const code = d.pairCode!;
+    now += 30 * 60_000 + 1;
     expect(d.pairCode).toBeNull();
     const e = new FakeExt(d.port);
     const r = await e.hello({ pairCode: code });
