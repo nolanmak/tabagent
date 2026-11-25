@@ -36,6 +36,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`act.upload`](#actupload) | `act_upload` | act | e | forms | unsupported | both |
 | [`form.describe`](#formdescribe) | `form_describe` | read | — | forms | supported | extension |
 | [`form.fill`](#formfill) | `form_fill` | act | — | core | supported | extension |
+| [`form.blockers`](#formblockers) | `form_blockers` | read | — | forms | supported | extension |
 | [`form.submit`](#formsubmit) | `form_submit` | act | — | forms | supported | extension |
 | [`extract.table`](#extracttable) | `extract_table` | read | — | core | supported | extension |
 | [`extract.links`](#extractlinks) | `extract_links` | read | — | data | supported | extension |
@@ -210,7 +211,7 @@ MCP name `page_find` · level read · profiles data · lite supported · handled
 
 Click an element (auto-waits until actionable).
 
-MCP name `act_click` · level act · profiles core · lite supported · handled by extension
+MCP name `act_click` · level act · profiles core · lite supported · handled by extension · page content `blockers`
 
 | Param | Type | Required | Description |
 |---|---|---|---|
@@ -377,11 +378,22 @@ MCP name `form_fill` · level act · profiles core · lite supported · handled 
 | `ref` | string |  | Limit to this form/container |
 | `timeout` | number |  | ms per field, default 5000 |
 
+### form.blockers
+
+Why a form can't submit: required fields empty or unchecked, invalid fields (with the page's error text), and whether the submit button is disabled.
+
+MCP name `form_blockers` · level read · profiles forms · lite supported · handled by extension · page content `blockers`, `form`, `submit`
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | number |  | Default: active tab |
+| `ref` | string |  | A form, field or submit button; default: the focused form, else the main form |
+
 ### form.submit
 
 Submit a form (by form ref, or the form containing ref). Password/card forms ask the user.
 
-MCP name `form_submit` · level act · profiles forms · lite supported · handled by extension
+MCP name `form_submit` · level act · profiles forms · lite supported · handled by extension · page content `blockers`
 
 | Param | Type | Required | Description |
 |---|---|---|---|

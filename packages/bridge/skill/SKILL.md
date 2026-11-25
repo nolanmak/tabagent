@@ -30,6 +30,7 @@ TabAgent controls the user's **real Chrome profile**, with their logins, cookies
 
 - `form.fill {fields}` fills many fields in one call. Keys are labels (exact, case-insensitive) or refs; values are strings, booleans for checkboxes, arrays for multi-selects. Check `filled` and `failed` in the result.
 - `form.describe` lists every field with its ref. `form.submit` submits. File inputs need `act.upload {ref, paths}` with files in `~/.tabagent/uploads`.
+- Submit or Continue stays disabled, or a submit does nothing: `form.blockers` lists the required, unchecked and invalid fields (refs, labels, the page's messages). Fix those, then submit again.
 
 ## Getting data out
 
@@ -60,7 +61,7 @@ TabAgent controls the user's **real Chrome profile**, with their logins, cookies
 ## Tool profiles
 
 `tabagent mcp` exposes `core` by default. Add more with `--profile`, for example `tabagent mcp --profile forms,data`:
-- forms: `form.describe`, `form.submit`, `act.fill`, `act.check`, `act.upload`
+- forms: `form.describe`, `form.blockers`, `form.submit`, `act.fill`, `act.check`, `act.upload`
 - data: `page.text`, `page.find`, `extract.links`, `extract.schema`, `extract.paginate`, `downloads.list`, `downloads.wait`, `downloads.read`
 - dev: `js.eval`, `console.list`, `network.list`, `network.get`, `cookies.get`, `storage.get`
 - full: everything, including `nav.back` and `act.hover`.

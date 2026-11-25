@@ -78,6 +78,7 @@ const LEVELS: Record<string, string> = {
   "act.drag": "act",
   "act.upload": "act",
   "form.describe": "read",
+  "form.blockers": "read",
   "form.fill": "act",
   "form.submit": "act",
   "extract.table": "read",
@@ -158,7 +159,7 @@ describe("D18 static sensitivity", () => {
 const CORE = ["tabs", "nav.goto", "nav.wait", "page.snapshot", "page.screenshot", "act.click", "act.type", "act.press", "act.select", "form.fill", "extract.table", "page.markdown", "dialog.handle"];
 const D29: Record<string, string[]> = {
   core: CORE,
-  forms: [...CORE, "form.describe", "form.submit", "act.fill", "act.check", "act.upload"],
+  forms: [...CORE, "form.describe", "form.blockers", "form.submit", "act.fill", "act.check", "act.upload"],
   data: [...CORE, "page.text", "page.find", "extract.links", "extract.schema", "extract.paginate", "downloads.list", "downloads.wait", "downloads.read"],
   dev: [...CORE, "js.eval", "console.list", "network.list", "network.get", "network.waitFor", "cookies.get", "storage.get"],
   // DA10: full is everything except the opt-in auth group.
