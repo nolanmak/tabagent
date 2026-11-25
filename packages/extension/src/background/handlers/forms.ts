@@ -9,6 +9,7 @@ import { act, onTab, type Ctx, type TabCtx } from "./ctx";
 import { gateDetections } from "./gates";
 import { setCheckState } from "./check";
 import { autoCaptcha } from "../captcha/hook";
+import { blockersAfterSubmit, needsText, readBlockers, type BlockersReport } from "./blockers";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 const CALL_CAP_MS = 120_000;
@@ -198,15 +199,26 @@ export const formHandlers: Record<string, Handler> = {
     );
   },
 
+  async "form.blockers"(c) {
+    return onTab(c, "read", async (t) => (await t.drv.call("formBlockers", [], c.p.ref ? { ref: c.p.ref } : {})) as BlockersReport);
+  },
+
   async "form.submit"(c) {
-    return act(c, "act", async (t) => {
+    let formRef: string | undefined;
+    const res = await act(c, "act", async (t) => {
       const v = (await t.drv.call("submitInfo", [], c.p.ref ? { ref: c.p.ref } : {})) as any;
       if (v?.error) severalForms(v);
       if (!v) throw new TabAgentError("NOT_FOUND", "No form found", "Pass ref of the form or a field inside it.");
+      formRef = v.ref;
       if (v.blocked) {
-        throw new TabAgentError("NOT_ACTIONABLE", `The form's submit button "${v.blocked.control}" is ${v.blocked.why}, so the page would ignore a submit`, "The form is not complete yet: fill the fields it shows (form.describe), answer any question that reveals the next step, then submit again.", {
-          pageText: true,
-        });
+        // #64: name the fields that keep it disabled.
+        const b = await readBlockers(t, v.ref);
+        throw new TabAgentError(
+          "NOT_ACTIONABLE",
+          `The form's submit button "${v.blocked.control}" is ${v.blocked.why}, so the page would ignore a submit${b ? `. ${needsText(b)}` : ""}`,
+          "The form is not complete yet: fix the fields listed (form.blockers; form.describe for all fields), answer any question that reveals the next step, then submit again.",
+          { pageText: true },
+        );
       }
       const fields = v.fields as Parameters<typeof formSensitivity>[0];
       const dets: Detection[] = [...formSensitivity(fields).map((r) => ({ category: "a" as const, reason: `submits a form with a ${r}` })), ...(v.submitRef ? clickSensitivity({ role: "button", name: v.control }) : [])];
@@ -221,5 +233,6 @@ export const formHandlers: Record<string, Handler> = {
       await t.drv.call("requestSubmit", [], { ref: v.ref });
       await autoCaptcha(c, t, "after");
     });
+    return blockersAfterSubmit(c, res, formRef);
   },
 };

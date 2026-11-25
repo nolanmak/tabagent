@@ -22,7 +22,7 @@ test("act.check sets hidden-input checkboxes and radios in a background tab, bef
   const bg = await bgFixture(h, c);
   const s = view(await h.ok(c, "page.snapshot", { tabId: bg })).snap;
   // The very first input in this tab is a mouse click (no act.type/press has woken it).
-  expect(view(await h.ok(c, "act.check", { tabId: bg, ref: refIn(s, /radio "Yes"/), checked: true })).json.result).toEqual({ checked: true, changed: true });
+  expect(view(await h.ok(c, "act.check", { tabId: bg, ref: refIn(s, /radio "Yes"/), checked: true })).json.result).toEqual({ checked: true, changed: true, verified: true });
   expect(await stateOf(h, c, bg)).toBe("loc-0");
   await h.ok(c, "act.check", { tabId: bg, ref: refIn(s, /checkbox "AI-powered research/), checked: true });
   await h.ok(c, "act.check", { tabId: bg, ref: refIn(s, /checkbox "Workflow automation/), checked: true });

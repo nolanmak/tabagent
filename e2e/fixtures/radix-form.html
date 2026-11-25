@@ -1,0 +1,76 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Daybreak application</title>
+<style>
+  /* nolanmak/tabagent#64: the structure of OpenAI's Daybreak form (platform.openai.com),
+     built from Radix primitives. Every radio/checkbox is a <button role=radio|checkbox>
+     followed by a hidden native <input> (Radix's BubbleInput: aria-hidden, tabindex=-1,
+     opacity:0, pointer-events:none) that carries `required` and `name` for the form.
+     Question and consent text sit next to the controls, not in a <label>. Continue stays
+     disabled until every required answer is set. */
+  body { font-family: sans-serif; }
+  form { display: grid; gap: 16px; width: 520px; margin: 24px; }
+  .row { display: flex; gap: 8px; align-items: center; position: relative; }
+  .bubble { transform: translateX(-100%); position: absolute; pointer-events: none; opacity: 0; margin: 0; width: 16px; height: 16px; }
+  button[role=checkbox], button[role=radio] { width: 16px; height: 16px; border: 1px solid #333; background: #fff; padding: 0; cursor: pointer; }
+  button[data-state=checked] { background: #333; }
+  .error { color: #b00; }
+</style></head><body>
+<main>
+<h1>Request access</h1>
+<form id="apply" novalidate>
+  <div class="field"><label for="org">Organization name</label><input id="org" name="org" required></div>
+
+  <div class="field">
+    <p id="gov-q">Are you a government entity or acting on behalf of one?</p>
+    <div role="radiogroup" aria-labelledby="gov-q" aria-required="true">
+      <div class="row"><button type="button" role="radio" aria-checked="false" data-state="unchecked" value="yes" id="gov-yes"></button><input type="radio" aria-hidden="true" tabindex="-1" class="bubble" name="governmentSupport" value="yes" required><label for="gov-yes">Yes</label></div>
+      <div class="row"><button type="button" role="radio" aria-checked="false" data-state="unchecked" value="no" id="gov-no"></button><input type="radio" aria-hidden="true" tabindex="-1" class="bubble" name="governmentSupport" value="no" required><span>No</span></div>
+    </div>
+  </div>
+
+  <div class="field">
+    <div class="row"><button type="button" role="checkbox" aria-checked="false" data-state="unchecked" value="on" id="codex"></button><input type="checkbox" aria-hidden="true" tabindex="-1" class="bubble" name="surface-codex-chatgpt" value="on" required><span>I will use Codex in ChatGPT under the usage policies</span></div>
+  </div>
+
+  <div class="field">
+    <p>I agree to share usage data with the research team</p>
+    <div class="row"><button type="button" role="checkbox" aria-checked="false" data-state="unchecked" value="on" id="share"></button><input type="checkbox" aria-hidden="true" tabindex="-1" class="bubble" name="share-data" value="on" required></div>
+  </div>
+
+  <div class="field">
+    <label for="site">Website</label><input id="site" name="site" aria-describedby="site-err">
+    <p id="site-err" class="error" hidden>Enter a full URL starting with https://</p>
+  </div>
+
+  <button type="submit" id="go" disabled>Continue</button>
+</form>
+<p>State: <span id="state">idle</span></p>
+</main>
+<script>
+// Radix-like behavior: a click on the button flips aria-checked/data-state and mirrors the
+// state into the hidden input (with input/change events, as BubbleInput does).
+const form = document.getElementById("apply");
+const go = document.getElementById("go");
+const site = document.getElementById("site");
+const siteErr = document.getElementById("site-err");
+function mirror(btn, on) {
+  btn.setAttribute("aria-checked", String(on));
+  btn.dataset.state = on ? "checked" : "unchecked";
+  const input = btn.nextElementSibling;
+  input.checked = on;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+for (const btn of document.querySelectorAll("button[role=checkbox]")) btn.addEventListener("click", () => { mirror(btn, btn.getAttribute("aria-checked") !== "true"); update(); });
+for (const btn of document.querySelectorAll("button[role=radio]")) btn.addEventListener("click", () => { for (const r of btn.closest("[role=radiogroup]").querySelectorAll("button[role=radio]")) mirror(r, r === btn); update(); });
+function siteOk() { return !site.value || /^https:\/\/\S+/.test(site.value); }
+function update() {
+  const bad = !siteOk();
+  site.setAttribute("aria-invalid", String(bad));
+  siteErr.hidden = !bad;
+  const ready = !!document.getElementById("org").value.trim() && [...form.querySelectorAll("input[required][type=checkbox]")].every((i) => i.checked) && !!form.querySelector("input[name=governmentSupport]:checked") && !bad;
+  go.disabled = !ready;
+}
+form.addEventListener("input", update);
+form.addEventListener("submit", (e) => { e.preventDefault(); document.getElementById("state").textContent = "submitted " + new FormData(form).get("governmentSupport"); });
+update();
+</script></body></html>

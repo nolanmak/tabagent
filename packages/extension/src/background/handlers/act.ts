@@ -7,6 +7,7 @@ import { pollUntil } from "../wait";
 import { textSubmits } from "../../pure/sensitive";
 import { setCheckState } from "./check";
 import { autoCaptcha } from "../captcha/hook";
+import { blockersAfterSubmit, disabledSubmitError } from "./blockers";
 
 type Handler = (c: Ctx) => Promise<unknown>;
 
@@ -61,16 +62,25 @@ export async function doCheck(t: TabCtx, ref: string, checked: boolean, timeout?
 
 export const actHandlers: Record<string, Handler> = {
   async "act.click"(c) {
-    return act(c, "act", async (t) => {
+    let submit = false;
+    const res = await act(c, "act", async (t) => {
       await checkClickGate(c, t, c.p.ref);
       // A hidden native checkbox/radio (custom control): click what a user would, its label (Jarvis#2522).
       const alt = (await t.drv.call("toggleTarget", [], { ref: c.p.ref })) as { ref: string | null } | null;
       // #61: with autoCaptcha on, a blocking CAPTCHA is solved before the click and after it.
       await autoCaptcha(c, t, "before");
-      const r = await t.drv.click(alt?.ref ?? c.p.ref, { button: c.p.button, clickCount: c.p.clickCount, modifiers: c.p.modifiers, timeout: c.p.timeout });
+      // #64: a submit/Continue button; if it is disabled or ignored, say which fields block it.
+      submit = !alt?.ref && (await t.drv.call("submitLike", [], { ref: c.p.ref }).catch(() => false)) === true;
+      let r: Awaited<ReturnType<typeof t.drv.click>>;
+      try {
+        r = await t.drv.click(alt?.ref ?? c.p.ref, { button: c.p.button, clickCount: c.p.clickCount, modifiers: c.p.modifiers, timeout: c.p.timeout });
+      } catch (e) {
+        throw submit ? await disabledSubmitError(t, c.p.ref, e) : e;
+      }
       if (!r.dialog) await autoCaptcha(c, t, "after");
       return r;
     });
+    return submit ? blockersAfterSubmit(c, res, c.p.ref) : res;
   },
   async "act.dblclick"(c) {
     return act(c, "act", async (t) => {

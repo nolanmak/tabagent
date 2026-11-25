@@ -83,6 +83,8 @@ function def<S extends z.ZodObject>(d: ToolDef<S>): ToolDef<S> {
 }
 
 const NAV_RESULT = loose({ ...urlTitle, status: z.number().optional() });
+/** #64: a submit click that changed nothing returns the form's remaining blockers. */
+const SUBMIT_RESULT = loose({ blockers: page(z.array(z.unknown())).optional(), hint: z.string().optional() });
 
 export const TOOLS = [
   // ---------------- tabs ----------------
@@ -290,9 +292,9 @@ export const TOOLS = [
       modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).optional(),
       timeout: actTimeout,
     }),
-    result: empty,
+    result: SUBMIT_RESULT,
     level: "act",
-    pageContent: [],
+    pageContent: ["blockers"],
     profiles: ["core"],
     lite: "supported",
     handledBy: "extension",
@@ -457,13 +459,25 @@ export const TOOLS = [
     handledBy: "extension",
   }),
   def({
+    name: "form.blockers",
+    group: "form",
+    description: "Why a form can't submit: required fields empty or unchecked, invalid fields (with the page's error text), and whether the submit button is disabled.",
+    params: z.object({ tabId, ref: ref.optional().describe("A form, field or submit button; default: the focused form, else the main form") }),
+    result: loose({ form: page(z.unknown()).optional(), submit: page(z.unknown()).optional(), blockers: page(z.array(z.unknown())).optional(), more: z.number().optional() }),
+    level: "read",
+    pageContent: ["blockers", "form", "submit"],
+    profiles: ["forms"],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  def({
     name: "form.submit",
     group: "form",
     description: "Submit a form (by form ref, or the form containing ref). Password/card forms ask the user.",
     params: z.object({ ref: ref.optional(), tabId, timeout: actTimeout }),
-    result: empty,
+    result: SUBMIT_RESULT,
     level: "act",
-    pageContent: [],
+    pageContent: ["blockers"],
     profiles: ["forms"],
     lite: "supported",
     handledBy: "extension",

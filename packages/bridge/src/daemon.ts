@@ -100,6 +100,7 @@ const RETRY_SAFE = new Set([
   "page.markdown",
   "page.find",
   "form.describe",
+  "form.blockers",
   "extract.table",
   "extract.links",
   "extract.schema",

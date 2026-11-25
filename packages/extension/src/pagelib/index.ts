@@ -4,7 +4,7 @@
 // reference elements inside `value` as { el: <index> }; the background maps those
 // indexes to refs.
 
-import { clickGateInfo, clickSensitivity, comboOptions, describeFields, fieldInfo, isFormControl, keyGateInfo, keySensitivity, requestSubmit, resolveFileInput, submitInfo } from "./forms";
+import { clickGateInfo, clickSensitivity, comboOptions, describeFields, fieldInfo, formBlockers, isFormControl, keyGateInfo, keySensitivity, requestSubmit, resolveFileInput, submitInfo, submitLike, twinControl, twinInput } from "./forms";
 import { extractLinks, extractSchema, extractTable, markdown, nextControl, storage, text } from "./extract";
 
 import { authApi } from "./auth";
@@ -625,7 +625,9 @@ export function getChecked(el: El): boolean | null {
   const a = el.getAttribute("aria-checked") ?? el.getAttribute("aria-pressed") ?? el.getAttribute("aria-selected");
   if (a === "true") return true;
   if (a === "false") return false;
-  return null;
+  // #64: an ARIA control that does not say its state; its hidden native twin does.
+  const tw = twinInput(el);
+  return tw ? tw.checked : null;
 }
 
 /**
@@ -634,6 +636,9 @@ export function getChecked(el: El): boolean | null {
  * caption, an ARIA checkbox/radio wrapper, or a visible parent holding only it.
  */
 function labelFor(el: El): Ret<{ el: number } | null> {
+  // #64: the visible ARIA control this hidden input mirrors (Radix) is what a user clicks.
+  const twin = twinControl(el);
+  if (twin) return { value: { el: 0 }, elements: [twin] };
   const labels = (el as HTMLInputElement).labels;
   const vis = labels ? Array.from(labels).find(isVisible) : undefined;
   if (vis) return { value: { el: 0 }, elements: [vis] };
@@ -1135,6 +1140,8 @@ const api = {
   clickGateInfo,
   keyGateInfo,
   submitInfo,
+  formBlockers,
+  submitLike,
   requestSubmit,
   comboOptions,
   resolveFileInput,
