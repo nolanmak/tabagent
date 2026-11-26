@@ -99,15 +99,18 @@ describe("secret channel (1Password through fake op)", () => {
   it("no-leak property: whatever the password, a well-behaved run never surfaces it", async () => {
     await fc.assert(
       fc.asyncProperty(fc.string({ minLength: 6, maxLength: 40 }).filter((s) => !/["\\\n]/.test(s) && s.trim().length >= 6), async (pw) => {
-        fake.scenario("op", opScenario({ items: [opItem(GH_ID, ["https://github.com"], "nolan@gmail.com")], secrets: { [GH_ID]: { password: pw } } }));
+        // The marker keeps this property about leaking the *secret value*, not a
+        // coincidental ordinary word such as the audit field name "caller".
+        const secret = `__tabagent_secret_${pw}__`;
+        fake.scenario("op", opScenario({ items: [opItem(GH_ID, ["https://github.com"], "nolan@gmail.com")], secrets: { [GH_ID]: { password: secret } } }));
         const { cmd, resp } = await call("auth.login");
         await ask({ type: "auth.accounts", commandId: cmd.id, origin: "https://github.com" }, "auth.accounts.result");
         const s = await ask({ type: "auth.secret.request", commandId: cmd.id, accountId: `1password:${GH_ID}`, field: "password" }, "secret");
-        expect(s.value).toBe(pw);
+        expect(s.value).toBe(secret);
         ext.send(envelope(cmd.id, { filled: true, account: "n•••@gmail.com", source: "1password", submitted: false, next: "unknown" }));
         const r = await resp;
-        expect(r.text.includes(JSON.stringify(pw).slice(1, -1))).toBe(false);
-        expect(readFileSync(join(ctx.home, "audit.jsonl"), "utf8").includes(JSON.stringify(pw).slice(1, -1))).toBe(false);
+        expect(r.text.includes(JSON.stringify(secret).slice(1, -1))).toBe(false);
+        expect(readFileSync(join(ctx.home, "audit.jsonl"), "utf8").includes(JSON.stringify(secret).slice(1, -1))).toBe(false);
       }),
       { numRuns: 5 },
     );
