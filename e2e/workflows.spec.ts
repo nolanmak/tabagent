@@ -26,4 +26,12 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   expect(replay.json.run.state, JSON.stringify(replay.json.run)).toBe("succeeded");
   const history = await h.ok(c, "workflow.runs", { id: recipe.id });
   expect(history.json.runs.at(-1).state).toBe("succeeded");
+
+  await h.ok(c, "workflow.schedule", { id: recipe.id, tabId, cron: "* * * * *", timeZone: "UTC" });
+  const before = history.json.runs.length;
+  await h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules());
+  await h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules()); // same minute: no duplicate/catch-up
+  const scheduled = await h.ok(c, "workflow.runs", { id: recipe.id });
+  expect(scheduled.json.runs).toHaveLength(before + 1);
+  expect(scheduled.json.runs.at(-1).state).toBe("succeeded");
 });

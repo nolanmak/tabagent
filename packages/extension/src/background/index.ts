@@ -439,5 +439,6 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   stoppedTabs,
   debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
   attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
+  runDueSchedules,
 };
 export type { Status };
