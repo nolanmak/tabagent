@@ -22,7 +22,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
-import { discardAllCaptures, discardCapture, listWorkflows, recordAgent, recordManual, recordManualNavigation, reviewWorkflow, runDueSchedules } from "./workflows";
+import { captureAgentStep, discardAllCaptures, discardCapture, listWorkflows, recordAgent, recordManual, recordManualNavigation, reviewWorkflow, runDueSchedules } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve"];
@@ -140,6 +140,7 @@ export const router = createRouter<Session>({
   },
   feed: (e) => feedPush(e),
   onInflight: () => refreshBadge(),
+  captureWorkflowStep: captureAgentStep,
   recordWorkflowStep: recordAgent,
 });
 

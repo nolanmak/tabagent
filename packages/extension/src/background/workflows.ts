@@ -70,19 +70,24 @@ export async function discardCapture(tabId: number) {
 }
 export async function discardAllCaptures() { await Promise.all([...active.keys()].map(discardCapture)); }
 
-export async function recordAgent(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string) {
+export async function captureAgentStep(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string): Promise<{ tabId: number; event: CaptureEvent } | undefined> {
   if (tabId == null || tool.startsWith("workflow.")) return;
   const capture = active.get(tabId);
   if (!capture || capture.source !== "agent") return;
-  if (tool === "nav.goto" && typeof params.url === "string") capture.events.push({ kind: "navigate", url: params.url });
+  if (tool === "nav.goto" && typeof params.url === "string") return { tabId, event: { kind: "navigate", url: params.url } };
   else if ((tool === "act.click" || tool === "act.type") && typeof params.ref === "string") {
     const ref = params.ref;
     const info = (await driverFor(tabId, url).then((d) => d.call("info", [], { ref })).catch(() => null)) as { role?: string; name?: string; label?: string; selector?: string } | null;
     const target = info ? { role: info.role, name: info.name, label: info.label, selector: info.selector } : { name: "captured target" };
-    if (tool === "act.click") capture.events.push({ kind: "click", url, target });
-    else if (typeof params.text === "string") capture.events.push({ kind: "input", url, target: { ...target, value: params.text } });
+    if (tool === "act.click") return { tabId, event: { kind: "click", url, target } };
+    if (typeof params.text === "string") return { tabId, event: { kind: "input", url, target: { ...target, value: params.text } } };
   }
-  else if (tool === "act.press" && typeof params.key === "string") capture.events.push({ kind: "press", url, key: params.key });
+  else if (tool === "act.press" && typeof params.key === "string") return { tabId, event: { kind: "press", url, key: params.key } };
+}
+
+export function recordAgent(captured: unknown) {
+  const item = captured as { tabId?: number; event?: CaptureEvent } | undefined;
+  if (item?.tabId != null && item.event && active.get(item.tabId)?.source === "agent") active.get(item.tabId)!.events.push(item.event);
 }
 
 export async function listWorkflows() {

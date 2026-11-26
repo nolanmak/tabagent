@@ -102,7 +102,8 @@ export interface RouterDeps<S = unknown> {
   feed?(e: FeedEvent): void;
   onInflight?(n: number): void;
   /** Optional workflow recorder. It only receives a successful, already-authorized command. */
-  recordWorkflowStep?(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string): void | Promise<void>;
+  captureWorkflowStep?(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string): unknown | Promise<unknown>;
+  recordWorkflowStep?(captured: unknown): void | Promise<void>;
   now?(): number;
 }
 
@@ -249,6 +250,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         // The D17 chokepoint: exactly one authorize() per command, before any handler.
         // authorize() asks about the site first and the sensitive category second.
         await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: req.sensitive && REASONS[req.sensitive] ? [REASONS[req.sensitive]] : [] });
+        const captured = await deps.captureWorkflowStep?.(tabId, tool.name, params, url);
         if (req.sensitive && deps.holdApproval && origin) release = deps.holdApproval(cmd.session.id, origin, req.sensitive);
         if (deps.sensitivePaths) {
           try {
@@ -261,7 +263,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         const h = deps.handler(tool.name);
         if (!h) throw new RouterError("UNSUPPORTED", `No handler for ${tool.name} in this extension version`);
         const result = await h({ s: session, meta: cmd.session, p: params, tool, tabId, url, cmdId: cmd.id });
-        await deps.recordWorkflowStep?.(tabId, tool.name, params, url);
+        await deps.recordWorkflowStep?.(captured);
         return result;
       };
       const result = await Promise.race([run(), aborted]);
