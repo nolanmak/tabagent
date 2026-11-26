@@ -6,19 +6,20 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
   await h.ok(c, "workflow.capture_start", { tabId, source: "agent", name: "fixture click and search" });
   await h.ok(c, "nav.goto", { tabId, url: `${h.A}/index.html` });
+  await h.ok(c, "nav.wait", { tabId, for: "load" });
   const snap = await h.ok(c, "page.snapshot", { tabId });
   await h.ok(c, "act.click", { tabId, ref: Harness.ref(snap.text, /button "Click me"/) });
   await h.ok(c, "act.type", { tabId, ref: Harness.ref(snap.text, /searchbox "Search"/), text: "widgets" });
   const stopped = await h.ok(c, "workflow.capture_stop", { tabId });
   const recipe = stopped.json.recipe;
   expect(recipe.status).toBe("draft");
-  expect(recipe.steps.map((s: any) => s.kind)).toEqual(["navigate", "click", "input"]);
+  expect(recipe.steps.map((s: any) => s.kind)).toEqual(["navigate", "wait", "click", "input"]);
   expect(JSON.stringify(recipe)).not.toContain("cookie");
 
   const panel = await h.openPanel();
   try {
     await expect(panel.locator("#workflows")).toContainText("click: Click me");
-    await expect(panel.locator(`button[data-delete-workflow-step="${recipe.id}"]`)).toHaveCount(3);
+    await expect(panel.locator(`button[data-delete-workflow-step="${recipe.id}"]`)).toHaveCount(4);
     await panel.locator(`button[data-parameterize-workflow-step="${recipe.id}"]`).click();
     await expect(panel.locator("#workflows")).toContainText("{{SEARCH}}");
     await panel.locator(`input[data-dedupe-key="${recipe.id}"]`).fill("fixture-report-v1");

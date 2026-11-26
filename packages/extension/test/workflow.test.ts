@@ -31,6 +31,10 @@ describe("workflow capture (#68, #69)", () => {
     });
   });
 
+  it("normalizes a safe recorded wait but never needs page JavaScript", () => {
+    expect(normalizeCaptureEvent({ kind: "wait", waitFor: "text", waitValue: "Report ready", timeoutMs: 5000 } as any)).toMatchObject({ kind: "wait", waitFor: "text", waitValue: "Report ready", timeoutMs: 5000 });
+  });
+
   it("resolves a reviewed input parameter only from a supplied run input", () => {
     expect(resolveReplayInput({ kind: "parameter", placeholder: "{{REPORT_PERIOD}}" }, { "{{REPORT_PERIOD}}": "2026-11" })).toBe("2026-11");
     expect(resolveReplayInput({ kind: "parameter", placeholder: "{{REPORT_PERIOD}}" }, {})).toBeNull();

@@ -5,6 +5,7 @@ import { driverFor } from "./driver";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
 import { getSession, resolveTab } from "./sessions";
+import { pollUntil, urlMatcher } from "./wait";
 
 type CaptureSource = "agent" | "manual";
 type ActiveCapture = { source: CaptureSource; name: string; events: CaptureEvent[]; startedAt: number };
@@ -83,6 +84,7 @@ export async function captureAgentStep(tabId: number | undefined, tool: string, 
   const capture = active.get(tabId);
   if (!capture || capture.source !== "agent") return;
   if (tool === "nav.goto" && typeof params.url === "string") return { tabId, event: { kind: "navigate", url: params.url } };
+  if (tool === "nav.wait" && params.for !== "fn" && ["load", "networkidle", "selector", "text", "url"].includes(String(params.for))) return { tabId, event: { kind: "wait", waitFor: params.for, ...(typeof params.value === "string" ? { waitValue: params.value } : {}), timeoutMs: typeof params.timeout === "number" ? params.timeout : undefined } as any };
   else if ((tool === "act.click" || tool === "act.type" || tool === "act.select") && typeof params.ref === "string") {
     const ref = params.ref;
     const info = (await driverFor(tabId, url).then((d) => d.call("info", [], { ref })).catch(() => null)) as { role?: string; name?: string; label?: string; selector?: string } | null;
@@ -238,6 +240,19 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any, in
         continue;
       }
       await requireSite(meta, url, "act", "workflow.run", `replay workflow step ${i + 1}`);
+      if (step.kind === "wait") {
+        const timeout = Math.min(Math.max(1, step.timeoutMs ?? 30_000), 120_000);
+        const drv = await driverFor(tabId, url);
+        const clock = { now: () => Date.now(), sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) };
+        let ok = false;
+        if (step.waitFor === "load") ok = await drv.waitLoad(timeout);
+        else if (step.waitFor === "networkidle") ok = await drv.networkIdle(500, timeout);
+        else if (step.waitFor === "selector") ok = await pollUntil(async () => !!(await drv.call("waitSelector", [step.waitValue])), timeout, clock);
+        else if (step.waitFor === "text") ok = await pollUntil(async () => !!(await drv.call("waitText", [step.waitValue])), timeout, clock);
+        else if (step.waitFor === "url") ok = await pollUntil(async () => urlMatcher(step.waitValue ?? "")(await drv.currentUrl()), timeout, clock);
+        if (!ok) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: wait condition did not complete`, reasonCode: "ASSERTION_FAILED" });
+        continue;
+      }
       const found = step.locator ? await findRef(tabId, url, step.locator) : null;
       if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !found) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous`, reasonCode: "AMBIGUOUS_TARGET" });
       if (found?.repair && step.locator) run.repairs.push({ id: crypto.randomUUID(), step: i, from: step.locator, to: found.repair });

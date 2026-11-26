@@ -1,7 +1,7 @@
 /** Browser-independent recipe capture, redaction, and bounded locator healing. */
 export type Locator = { role?: string; name?: string; label?: string; text?: string; selector?: string; context?: string };
 export type InputValue = { kind: "fixed"; value: string } | { kind: "parameter"; placeholder: string } | { kind: "secret-ref"; placeholder: string } | { kind: "omit" };
-export type WorkflowStep = { kind: "navigate" | "click" | "input" | "select" | "press"; url?: string; locator?: Locator; value?: InputValue; options?: string[]; key?: string };
+export type WorkflowStep = { kind: "navigate" | "wait" | "click" | "input" | "select" | "press"; url?: string; locator?: Locator; value?: InputValue; options?: string[]; key?: string; waitFor?: "load" | "networkidle" | "selector" | "text" | "url"; waitValue?: string; timeoutMs?: number };
 export type WorkflowAssertion = { kind: "url_includes"; value: string };
 export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; values?: string[]; key?: string };
 export type LocatorCandidate = Required<Pick<Locator, "role" | "name" | "selector">> & Pick<Locator, "label" | "text" | "context">;
@@ -36,6 +36,7 @@ function locator(target: CaptureEvent["target"]): Locator | undefined {
 export function normalizeCaptureEvent(event: CaptureEvent): WorkflowStep {
   const target = locator(event.target);
   if (event.kind === "navigate") return { kind: "navigate", url: event.url };
+  if (event.kind === "wait") return { kind: "wait", waitFor: (event as any).waitFor, ...(typeof (event as any).waitValue === "string" ? { waitValue: (event as any).waitValue } : {}), timeoutMs: (event as any).timeoutMs };
   if (event.kind === "input") return { kind: "input", ...(event.url ? { url: event.url } : {}), ...(target ? { locator: target } : {}), value: classifyInput(event.target?.name ?? event.target?.label ?? "input", event.target?.value ?? "") };
   if (event.kind === "select") return { kind: "select", ...(event.url ? { url: event.url } : {}), ...(target ? { locator: target } : {}), options: (event.values ?? []).filter((value) => typeof value === "string").map((value) => value.slice(0, 300)).slice(0, 20) };
   if (event.kind === "press") return { kind: "press", ...(event.url ? { url: event.url } : {}), key: event.key ?? "" };
@@ -56,7 +57,7 @@ export function buildRecipe(id: string, name: string, source: WorkflowRecipe["so
 }
 
 const UNSAFE = /delete|remove|destroy|send|submit|pay|purchase|buy|transfer|withdraw|deposit|wire|upload|invite|share|account|password|sign.?in|log.?in|mfa|otp|verify/i;
-const STEP_KINDS = new Set<WorkflowStep["kind"]>(["navigate", "click", "input", "select", "press"]);
+const STEP_KINDS = new Set<WorkflowStep["kind"]>(["navigate", "wait", "click", "input", "select", "press"]);
 /** A replay recipe is deliberately narrower than interactive agent actions. */
 export function replayBlockReason(step: WorkflowStep): string | null {
   if (!STEP_KINDS.has(step.kind)) return "unknown workflow step kind";
@@ -66,6 +67,7 @@ export function replayBlockReason(step: WorkflowStep): string | null {
   if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "target looks like a sensitive or irreversible action";
   if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "step has no semantic target";
   if (step.kind === "select" && !step.options?.length) return "select step has no selected option";
+  if (step.kind === "wait" && !step.waitFor) return "wait step has no condition";
   if (step.kind === "navigate" && !step.url) return "navigation has no URL";
   return null;
 }
