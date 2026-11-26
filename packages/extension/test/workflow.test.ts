@@ -47,6 +47,10 @@ describe("workflow capture (#68, #69)", () => {
     expect(replayBlockReason({ kind: "click", locator: { role: "button", name: "Download report" } })).toBeNull();
   });
 
+  it("defensively rejects a malformed recipe with a fixed credential value", () => {
+    expect(replayBlockReason({ kind: "input", locator: { role: "textbox", name: "Password" }, value: { kind: "fixed", value: "not-a-real-secret" } })).toMatch(/sensitive/i);
+  });
+
   it("uses stable, structured stop reasons", () => {
     expect(replayBlockCode({ kind: "input", locator: { role: "textbox", name: "Password" }, value: { kind: "omit" } })).toBe("SENSITIVE_ACTION");
     expect(replayBlockCode({ kind: "click" })).toBe("AMBIGUOUS_TARGET");
