@@ -73,7 +73,9 @@ export function requirementsFor(tool: ToolLike, params: Record<string, unknown>)
   if (sensitive === "g") sensitive = undefined;
   if (tool.name === "nav.goto") return { level: level ?? "act", sensitive, urlSource: "param", needsTab: false, tabOptional: true };
   if (tool.name === "downloads.read") return { level: null, sensitive: sensitive ?? "e", urlSource: "download", needsTab: false };
-  if (NO_TAB.has(tool.name)) return { level: null, sensitive, urlSource: "none", needsTab: false };
+  // Most no-tab tools are level none, but policy mutation / repair review are deliberately
+  // full-capability commands and must still pass through the token-cap check.
+  if (NO_TAB.has(tool.name)) return { level, sensitive, urlSource: "none", needsTab: false };
   if (tool.name === "cookies.get") return { level, sensitive, urlSource: "tab-or-param", needsTab: true };
   return { level, sensitive, urlSource: level || sensitive ? "tab" : "none", needsTab: true };
 }
