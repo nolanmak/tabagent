@@ -101,6 +101,8 @@ export interface RouterDeps<S = unknown> {
   sensitivePaths?(tool: string, params: Record<string, unknown>, tabId: number | undefined, url: string): Promise<string[]>;
   feed?(e: FeedEvent): void;
   onInflight?(n: number): void;
+  /** Optional workflow recorder. It only receives a successful, already-authorized command. */
+  recordWorkflowStep?(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string): void | Promise<void>;
   now?(): number;
 }
 
@@ -151,6 +153,8 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
     case "tabs":
       if (p.action === "attach") return `take over your tab "${(attach?.title ?? "").slice(0, 60)}"`;
       return `tabs ${p.action}`;
+    case "policy.denylist_change":
+      return `change denylist: ${Array.isArray(p.changes) ? p.changes.map((c: any) => `${c.op} ${c.glob}`).join(", ") : ""}; reason: ${String(p.reason ?? "").slice(0, 160)}`;
     default:
       return tool;
   }
@@ -161,6 +165,7 @@ const REASONS: Record<string, string> = {
   d: "Can include session credentials",
   e: "Moves a local file between your computer and the page",
   f: "Adopting a tab you opened gives the agent your page and its sign-ins",
+  p: "Changes which sites every agent is blocked from using",
 };
 
 export function createRouter<S>(deps: RouterDeps<S>) {
@@ -255,7 +260,9 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         deps.feed?.({ ...feedBase(), params: (await buildAudit({ tool: tool.name, action, origin, params, outcome: "ok", redact })).params, status: "running" });
         const h = deps.handler(tool.name);
         if (!h) throw new RouterError("UNSUPPORTED", `No handler for ${tool.name} in this extension version`);
-        return h({ s: session, meta: cmd.session, p: params, tool, tabId, url, cmdId: cmd.id });
+        const result = await h({ s: session, meta: cmd.session, p: params, tool, tabId, url, cmdId: cmd.id });
+        await deps.recordWorkflowStep?.(tabId, tool.name, params, url);
+        return result;
       };
       const result = await Promise.race([run(), aborted]);
       return await finish(true, result);

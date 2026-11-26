@@ -22,6 +22,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
+import { listWorkflows, recordAgent, recordManual, reviewWorkflow } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve"];
@@ -139,6 +140,7 @@ export const router = createRouter<Session>({
   },
   feed: (e) => feedPush(e),
   onInflight: () => refreshBadge(),
+  recordWorkflowStep: recordAgent,
 });
 
 // ---------------------------------------------------------------------------
@@ -320,8 +322,13 @@ async function uiState() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) return false;
+  const manualEvent = msg?.type === "workflow.manual_event" && sender.id === chrome.runtime.id && sender.tab?.id != null;
+  if (!manualEvent && (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("")))) return false;
   (async () => {
+    if (manualEvent) {
+      recordManual(sender.tab!.id!, msg.event);
+      return { ok: true };
+    }
     switch (msg?.type) {
       case "ui.state":
         return uiState();
@@ -364,6 +371,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         const s = await updateSettings(patch);
         return { ok: true, settings: publicSettings(s) };
       }
+      case "ui.workflow.list":
+        return { workflows: await listWorkflows() };
+      case "ui.workflow.review":
+        return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true) };
     }
     return { error: "unknown message" };
   })().then(reply, (e) => reply({ error: String((e as Error)?.message ?? e) }));

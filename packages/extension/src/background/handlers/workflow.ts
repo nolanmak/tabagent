@@ -1,0 +1,14 @@
+import { listWorkflows, startCapture, stopCapture } from "../workflows";
+
+export const workflowHandlers = {
+  "workflow.capture_start": async ({ tabId, p }: any) => {
+    if (tabId == null) throw new Error("Workflow capture needs a tab");
+    await startCapture(tabId, p.source, p.name);
+    return { started: true, tabId, source: p.source };
+  },
+  "workflow.capture_stop": async ({ tabId }: any) => {
+    if (tabId == null) throw new Error("Workflow capture needs a tab");
+    return { recipe: await stopCapture(tabId) };
+  },
+  "workflow.list": async () => ({ workflows: await listWorkflows() }),
+};

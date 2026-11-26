@@ -168,6 +168,11 @@ describe("sensitive gate (D18)", () => {
   it("devAllowSensitive passes a-e without prompting", () => {
     for (const c of ["a", "b", "c", "d", "e"] as const) expect(resolve(full({ devAllowSensitive: true }), req({ sensitive: c })).decision).toBe("allow");
   });
+  it("denylist policy changes always ask: neither YOLO, developer mode nor Always persists an approval", () => {
+    const on = full({ devAllowSensitive: true, yolo: true });
+    expect(resolve(on, req({ url: "", level: "full", sensitive: "p" }))).toMatchObject({ decision: "ask", kind: "sensitive", category: "p" });
+    expect(applySensitiveAnswer(on, A, "p", "always")).toBe(on);
+  });
   it("once / deny on a sensitive prompt change nothing", () => {
     const st = full();
     expect(applySensitiveAnswer(st, A, "c", "once")).toBe(st);

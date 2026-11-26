@@ -12,7 +12,7 @@ export type ToolLevel = Level | "none";
 export const LEVEL_RANK: Record<Level | "deny", number> = { deny: 0, read: 1, act: 2, full: 3 };
 
 /** D18 categories: a sensitive form submit, b risky click, c arbitrary JS, d credential read, e local file transfer, f tabs attach. */
-export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f";
+export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f" | "p";
 export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   a: "Submitting a form with password, card or SSN-like fields",
   b: "Click that looks like purchase, delete, send or transfer",
@@ -20,9 +20,10 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   d: "Reading credentials (cookies, storage, network headers/bodies)",
   e: "Transferring a local file (upload or reading a download)",
   f: "Taking over one of your tabs",
+  p: "Changing the TabAgent denylist",
 };
 
-export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth";
+export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth" | "policy" | "workflow";
 export type Profile = "core" | "forms" | "data" | "dev" | "full" | "auth";
 export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full", "auth"];
 
@@ -712,6 +713,59 @@ export const TOOLS = [
     handledBy: "both",
   }),
   // ---------------- session ----------------
+  def({
+    name: "policy.denylist_change",
+    group: "policy",
+    description: "Request an exact add/remove change to the extension denylist. Always requires a visible extension approval; YOLO and saved site permissions do not bypass it.",
+    params: z.object({
+      changes: z.array(z.object({ op: z.enum(["add", "remove"]), glob: z.string() })).min(1).max(50),
+      reason: z.string().min(1).max(500),
+    }),
+    result: loose({ denylist: z.array(z.string()), applied: z.array(z.object({ op: z.enum(["add", "remove"]), glob: z.string() })) }),
+    level: "full",
+    sensitive: "p",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  // ---------------- workflow ----------------
+  def({
+    name: "workflow.capture_start",
+    group: "workflow",
+    description: "Start recording an agent-run or manual browser task in this tab into a reviewable recipe. Secret, password, card and MFA values are omitted.",
+    params: z.object({ tabId, source: z.enum(["agent", "manual"]), name: z.string().min(1).max(120) }),
+    result: loose({ started: z.boolean(), tabId: z.number(), source: z.enum(["agent", "manual"]) }),
+    level: "act",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "workflow.capture_stop",
+    group: "workflow",
+    description: "Stop a capture and save a draft recipe. Review it before any replay or schedule.",
+    params: z.object({ tabId }),
+    result: loose({ recipe: z.unknown() }),
+    level: "act",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "workflow.list",
+    group: "workflow",
+    description: "List locally stored workflow recipes and their review state.",
+    params: z.object({}),
+    result: loose({ workflows: z.array(z.unknown()) }),
+    level: "none",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
   def({
     name: "session.info",
     group: "session",

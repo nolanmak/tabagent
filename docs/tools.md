@@ -53,6 +53,10 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`downloads.list`](#downloadslist) | `downloads_list` | none | — | data | supported | extension |
 | [`downloads.wait`](#downloadswait) | `downloads_wait` | none | — | data | supported | extension |
 | [`downloads.read`](#downloadsread) | `downloads_read` | none | e | data | supported | both |
+| [`policy.denylist_change`](#policydenylist_change) | `policy_denylist_change` | full | p | full only | supported | extension |
+| [`workflow.capture_start`](#workflowcapture_start) | `workflow_capture_start` | act | — | full only | supported | extension |
+| [`workflow.capture_stop`](#workflowcapture_stop) | `workflow_capture_stop` | act | — | full only | supported | extension |
+| [`workflow.list`](#workflowlist) | `workflow_list` | none | — | full only | supported | extension |
 | [`session.info`](#sessioninfo) | `session_info` | none | — | full only | supported | extension |
 | [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
@@ -591,6 +595,51 @@ MCP name `downloads_read` · level none · profiles data · lite supported · se
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `id` | number | yes |  |
+
+## policy
+
+### policy.denylist_change
+
+Request an exact add/remove change to the extension denylist. Always requires a visible extension approval; YOLO and saved site permissions do not bypass it.
+
+MCP name `policy_denylist_change` · level full · profiles full only · lite supported · sensitive p · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `changes` | object[] | yes |  |
+| `reason` | string | yes |  |
+
+## workflow
+
+### workflow.capture_start
+
+Start recording an agent-run or manual browser task in this tab into a reviewable recipe. Secret, password, card and MFA values are omitted.
+
+MCP name `workflow_capture_start` · level act · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | number |  | Default: active tab |
+| `source` | "agent" \| "manual" | yes |  |
+| `name` | string | yes |  |
+
+### workflow.capture_stop
+
+Stop a capture and save a draft recipe. Review it before any replay or schedule.
+
+MCP name `workflow_capture_stop` · level act · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | number |  | Default: active tab |
+
+### workflow.list
+
+List locally stored workflow recipes and their review state.
+
+MCP name `workflow_list` · level none · profiles full only · lite supported · handled by extension
+
+No parameters.
 
 ## session
 
