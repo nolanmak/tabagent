@@ -112,6 +112,18 @@ test("#67 policy.denylist_change shows the exact diff and cannot weaken hard sig
   expect(login.text).toContain("never signs in");
 });
 
+test("#67 rejecting a denylist change leaves extension policy unchanged", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
+  const c = await h.mcp({ label: "policy-deny-e2e", profile: "full" });
+  const before = await settings(h);
+  const denied = await h.answerPrompt("deny", () => h.call(c, "policy.denylist_change", {
+    changes: [{ op: "remove", glob: "*.chase.com" }],
+    reason: "this must not apply when denied",
+  }));
+  expect(denied.result.text).toContain("PERMISSION_DENIED");
+  expect((await settings(h)).denylist).toEqual(before.denylist);
+});
+
 test("#13 login form: submit with a password prompts; deny leaves the page unchanged; feed masks the password", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
   const c = await h.mcp({ label: "login" });
