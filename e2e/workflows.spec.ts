@@ -42,7 +42,9 @@ test("#68 manual capture records trusted user events without raw secrets", async
   const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
   await h.ok(c, "nav.goto", { tabId, url: `${h.A}/index.html` });
   await h.ok(c, "workflow.capture_start", { tabId, source: "manual", name: "manual fixture task" });
-  const page = h.ctx.pages().find((p) => p.url().includes("/index.html"));
+  // The harness shares one browser context across the serial E2E suite; choose the tab this
+  // test just opened, not an earlier fixture page left by another test.
+  const page = h.ctx.pages().filter((p) => p.url().includes("/index.html")).at(-1);
   if (!page) throw new Error("fixture tab not found");
   await page.click("#counter");
   await page.locator('input[aria-label="Search"]').fill("manual widgets");
