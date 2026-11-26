@@ -648,7 +648,7 @@ No parameters.
 
 ### workflow.run
 
-Run a user-reviewed low-risk recipe in an owned tab. Stops for secrets, sign-in, MFA, risky actions, missing targets, or ambiguous repairs.
+Run a user-reviewed low-risk recipe in an owned tab. Supply values only for user-reviewed input parameters; stops for secrets, sign-in, MFA, risky actions, missing targets, or ambiguous repairs.
 
 MCP name `workflow_run` · level act · profiles full only · lite supported · handled by extension
 
@@ -656,6 +656,7 @@ MCP name `workflow_run` · level act · profiles full only · lite supported · 
 |---|---|---|---|
 | `id` | string | yes |  |
 | `tabId` | number |  | Default: active tab |
+| `inputs` | object |  |  |
 
 ### workflow.schedule
 
