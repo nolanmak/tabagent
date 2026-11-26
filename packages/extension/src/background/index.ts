@@ -335,7 +335,7 @@ function stoppedTabs() {
 
 async function uiState() {
   const s = await getSettings();
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {

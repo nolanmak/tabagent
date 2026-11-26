@@ -96,6 +96,13 @@ function renderFeed() {
   $("feed").innerHTML = state.feed.slice().reverse().map(feedLine).join("") || `<li class="muted">Nothing yet.</li>`;
 }
 
+function renderWorkflows() {
+  const list: any[] = state.workflows ?? [];
+  $("workflows").innerHTML = list
+    .map((w) => `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span></span>${w.status === "draft" ? `<button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button>` : ""}</li>`)
+    .join("") || `<li class="muted">No captured recipes yet.</li>`;
+}
+
 function renderSettings() {
   const s = state.settings;
   ($("onSessionEnd") as HTMLSelectElement).value = s.onSessionEnd;
@@ -126,6 +133,7 @@ function render() {
   renderHandoffs();
   renderSessions();
   renderFeed();
+  renderWorkflows();
   renderSettings();
 }
 
@@ -191,6 +199,10 @@ $("handoffs").addEventListener("click", (e) => {
 $("sessions").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.end) send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
+});
+$("workflows").addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest("button");
+  if (b?.dataset.reviewWorkflow) send({ type: "ui.workflow.review", id: b.dataset.reviewWorkflow, approve: true }).then(refresh);
 });
 
 const patch = (p: unknown) => send({ type: "ui.settings", patch: p }).then(refresh);

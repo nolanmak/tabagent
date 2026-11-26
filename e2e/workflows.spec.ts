@@ -17,7 +17,8 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
 
   const panel = await h.openPanel();
   try {
-    await panel.evaluate(async (id) => chrome.runtime.sendMessage({ type: "ui.workflow.review", id, approve: true }), recipe.id);
+    await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
+    await expect(panel.locator("#workflows")).toContainText("reviewed");
   } finally {
     await panel.close();
   }
