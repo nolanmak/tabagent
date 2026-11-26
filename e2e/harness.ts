@@ -231,8 +231,9 @@ export class Harness {
         await item.waitFor({ timeout: 10000 });
         const title = await item.locator(".ptitle").textContent();
         const reasons = await item.locator(".preasons").textContent();
+        const summary = await item.locator(".psummary").textContent();
         await item.locator(`button[data-a="${answer}"]`).click();
-        return { result: await resP, title, reasons, prompt };
+        return { result: await resP, title, reasons, summary, prompt };
       } finally {
         await panel.close().catch(() => {});
       }

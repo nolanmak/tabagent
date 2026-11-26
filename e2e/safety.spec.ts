@@ -93,6 +93,25 @@ test("#12 denylist (editable) and hard-denied pages (not unlockable)", async ({ 
   await h.sw.evaluate((list) => (globalThis as any).__tabagent.updateSettings({ denylist: list }), s.denylist);
 });
 
+test("#67 policy.denylist_change shows the exact diff and cannot weaken hard sign-in blocks", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
+  const c = await h.mcp({ label: "policy-e2e", profile: "full,auth" });
+  const change = await h.answerPrompt("once", () => h.ok(c, "policy.denylist_change", {
+    changes: [{ op: "remove", glob: "*.chase.com" }],
+    reason: "test a reviewed statement workflow",
+  }));
+  expect(change.prompt.sensitive.category).toBe("p");
+  // The prompt UI rendered the exact summary; this is not a semantic/fuzzy approval.
+  expect(change.summary).toContain("remove *.chase.com");
+  expect(change.summary).toContain("test a reviewed statement workflow");
+  expect((change.result as any).json.status).toBe("applied");
+  expect((await settings(h)).denylist).not.toContain("*.chase.com");
+  // Removing an editable rule never unlocks the hard automated-auth boundary.
+  await h.setPolicies({ [h.A]: "full", [h.B]: "full", "https://www.chase.com": "full" }, { devAllowSensitive: false });
+  const login = await h.call(c, "auth.login", { tabId: (await h.ok(c, "tabs", { action: "new", url: "https://www.chase.com/" })).json.tabId });
+  expect(login.text).toContain("never signs in");
+});
+
 test("#13 login form: submit with a password prompts; deny leaves the page unchanged; feed masks the password", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
   const c = await h.mcp({ label: "login" });
