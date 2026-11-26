@@ -37,7 +37,7 @@ interface Note {
   used: boolean;
 }
 
-type Waiter = { sessionId: string; id?: number; resolve: (d: DlRecord | null) => void; timer: ReturnType<typeof setTimeout> };
+type Waiter = { sessionId: string; id?: number; after?: number; resolve: (d: DlRecord | null) => void; timer: ReturnType<typeof setTimeout> };
 
 export class DownloadTracker {
   private byId = new Map<number, DlRecord>();
@@ -85,7 +85,7 @@ export class DownloadTracker {
 
   private notify(d: DlRecord) {
     for (const w of [...this.waiters]) {
-      if (w.sessionId === d.sessionId && (w.id == null || w.id === d.id)) {
+      if (w.sessionId === d.sessionId && (w.id == null || w.id === d.id) && (w.after == null || d.createdAt >= w.after)) {
         this.waiters.delete(w);
         clearTimeout(w.timer);
         w.resolve(d);
@@ -105,6 +105,11 @@ export class DownloadTracker {
     return this.list(sessionId).filter((d) => d.createdAt >= ts);
   }
 
+  /** Downloads started in a browser tab, including user-initiated captures with no agent session. */
+  sinceTab(tabId: number, ts: number): DlRecord[] {
+    return [...this.byId.values()].filter((d) => d.tabId === tabId && d.createdAt >= ts);
+  }
+
   /** Next completed download of the session (or of `id`), or null on timeout. */
   waitNext(sessionId: string, timeoutMs: number, id?: number): Promise<DlRecord | null> {
     if (id != null) {
@@ -116,6 +121,23 @@ export class DownloadTracker {
       const w: Waiter = {
         sessionId,
         id,
+        resolve,
+        timer: setTimeout(() => {
+          if (this.waiters.delete(w)) resolve(null);
+        }, timeoutMs),
+      };
+      this.waiters.add(w);
+    });
+  }
+
+  /** A completed download attributed to this session after a workflow run began. */
+  waitAfter(sessionId: string, after: number, timeoutMs: number): Promise<DlRecord | null> {
+    const existing = this.list(sessionId).find((d) => d.createdAt >= after && d.state === "complete");
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve) => {
+      const w: Waiter = {
+        sessionId,
+        after,
         resolve,
         timer: setTimeout(() => {
           if (this.waiters.delete(w)) resolve(null);

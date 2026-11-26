@@ -34,7 +34,7 @@ const TABS_ACTIONS: Record<string, { level: Level | "none"; sensitive?: Sensitiv
   attach: { level: "read", sensitive: "f" },
 };
 
-const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f", "g"]);
+const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f", "g", "p", "r"]);
 
 /** Where the URL being authorized comes from. */
 export type UrlSource = "tab" | "param" | "tab-or-param" | "download" | "attach-target" | "none";
@@ -51,7 +51,7 @@ export interface Requirements {
 }
 
 /** Tools that work without a session tab. */
-const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end"]);
+const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end", "policy.denylist_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair"]);
 
 export function requirementsFor(tool: ToolLike, params: Record<string, unknown>): Requirements {
   const levelOf = (l: Level | "none" | undefined) => (l && l !== "none" ? l : null);
@@ -73,7 +73,9 @@ export function requirementsFor(tool: ToolLike, params: Record<string, unknown>)
   if (sensitive === "g") sensitive = undefined;
   if (tool.name === "nav.goto") return { level: level ?? "act", sensitive, urlSource: "param", needsTab: false, tabOptional: true };
   if (tool.name === "downloads.read") return { level: null, sensitive: sensitive ?? "e", urlSource: "download", needsTab: false };
-  if (NO_TAB.has(tool.name)) return { level: null, sensitive, urlSource: "none", needsTab: false };
+  // Most no-tab tools are level none, but policy mutation / repair review are deliberately
+  // full-capability commands and must still pass through the token-cap check.
+  if (NO_TAB.has(tool.name)) return { level, sensitive, urlSource: "none", needsTab: false };
   if (tool.name === "cookies.get") return { level, sensitive, urlSource: "tab-or-param", needsTab: true };
   return { level, sensitive, urlSource: level || sensitive ? "tab" : "none", needsTab: true };
 }

@@ -42,11 +42,13 @@ function promptHtml(p: any) {
         ? `${p.sensitive.description} · on ${p.origin}`
         : `on ${p.origin}`;
   const isAuth = p.sensitive?.category === "g";
-  const always = p.kind === "attach" ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
+  const oneShot = p.kind === "attach" || p.sensitive?.category === "p" || p.sensitive?.category === "r";
+  const always = oneShot ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
   const left = Math.max(0, Math.round((p.expires - Date.now()) / 1000));
   return `<li class="prompt-item" data-prompt-id="${esc(p.promptId)}">
     <div class="ptitle">${esc(title)}</div>
     <div class="muted small pdetail">${esc(detail)}</div>
+    <div class="muted small psummary">${esc(p.summary)}</div>
     <ul class="preasons reasons">${(p.reasons ?? []).map((r: string) => `<li>${esc(r)}</li>`).join("")}</ul>
     <div class="muted small">Tool: ${esc(p.tool)} · <span class="countdown" data-expires="${Number(p.expires)}">${left}s</span></div>
     <div class="actions"><button data-a="deny" data-id="${esc(p.promptId)}">Deny</button>${always}<button data-a="once" data-id="${esc(p.promptId)}" class="primary">Allow once</button></div>
@@ -94,6 +96,31 @@ function renderFeed() {
   $("feed").innerHTML = state.feed.slice().reverse().map(feedLine).join("") || `<li class="muted">Nothing yet.</li>`;
 }
 
+function renderWorkflows() {
+  const list: any[] = state.workflows ?? [];
+  const manual = (state.activeCaptures ?? []).find((capture: any) => capture.source === "manual");
+  $("manualCaptureStart").hidden = !!manual;
+  $("manualCaptureStop").hidden = !manual;
+  $("manualCaptureState").textContent = manual ? `Recording tab ${manual.tabId}` : "";
+  const tabSelect = $("manualCaptureTab") as HTMLSelectElement;
+  tabSelect.disabled = !!manual;
+  const previous = tabSelect.value;
+  tabSelect.innerHTML = (state.workflowTabs ?? []).map((tab: any) => `<option value="${Number(tab.id)}">${esc(tab.title).slice(0, 80)}</option>`).join("") || `<option value="">No web tabs available</option>`;
+  if ([...tabSelect.options].some((option) => option.value === previous)) tabSelect.value = previous;
+  $("workflows").innerHTML = list
+    .map((w) => {
+      const steps = (w.steps ?? []).map((step: any, index: number) => {
+        const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
+        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? step.key : step.kind === "download" ? (step.download?.mime ?? step.download?.extension ?? "artifact") : target;
+        const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
+        const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
+        return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
+      }).join("");
+      return `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}<ol class="workflow-steps">${steps}</ol></span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`;
+    })
+    .join("") || `<li class="muted">No captured recipes yet.</li>`;
+}
+
 function renderSettings() {
   const s = state.settings;
   ($("onSessionEnd") as HTMLSelectElement).value = s.onSessionEnd;
@@ -124,6 +151,7 @@ function render() {
   renderHandoffs();
   renderSessions();
   renderFeed();
+  renderWorkflows();
   renderSettings();
 }
 
@@ -190,6 +218,25 @@ $("sessions").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.end) send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
 });
+$("workflows").addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest("button");
+  if (b?.dataset.deleteWorkflowStep) {
+    send({ type: "ui.workflow.remove_step", id: b.dataset.deleteWorkflowStep, index: Number(b.dataset.stepIndex) }).then(refresh);
+    return;
+  }
+  if (b?.dataset.parameterizeWorkflowStep) {
+    send({ type: "ui.workflow.parameterize_step", id: b.dataset.parameterizeWorkflowStep, index: Number(b.dataset.stepIndex) }).then(refresh);
+    return;
+  }
+  if (b?.dataset.reviewWorkflow) {
+    const id = b.dataset.reviewWorkflow;
+    const key = document.querySelector<HTMLInputElement>(`input[data-dedupe-key="${CSS.escape(id)}"]`)?.value;
+    const urlIncludes = document.querySelector<HTMLInputElement>(`input[data-url-assertion="${CSS.escape(id)}"]`)?.value;
+    send({ type: "ui.workflow.review", id, approve: true, dedupeKey: key, urlIncludes }).then(refresh);
+  }
+});
+$("manualCaptureStart").addEventListener("click", () => send({ type: "ui.workflow.manual_start", tabId: Number(($("manualCaptureTab") as HTMLSelectElement).value) }).then(refresh));
+$("manualCaptureStop").addEventListener("click", () => send({ type: "ui.workflow.manual_stop" }).then(refresh));
 
 const patch = (p: unknown) => send({ type: "ui.settings", patch: p }).then(refresh);
 const sites = () => structuredClone(state.settings.sites ?? {}) as Record<string, any>;

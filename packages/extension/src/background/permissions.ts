@@ -168,7 +168,7 @@ export async function requireSite(meta: SessionMeta, url: string, level: Level, 
   return authorize({ meta, url, level, tool, summary, reasons: [] });
 }
 
-const CATS = new Set(["a", "b", "c", "d", "e", "f", "g"]);
+const CATS = new Set(["a", "b", "c", "d", "e", "f", "g", "p", "r"]);
 
 export interface SensitiveOpts {
   tabId?: number;

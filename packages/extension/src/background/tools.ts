@@ -11,6 +11,8 @@ import { fileHandlers } from "./handlers/files";
 import { formHandlers } from "./handlers/forms";
 import { navHandlers } from "./handlers/nav";
 import { pageHandlers } from "./handlers/page";
+import { policyHandlers } from "./handlers/policy";
+import { workflowHandlers } from "./handlers/workflow";
 import type { Ctx } from "./tabctx";
 
 export type { Ctx, TabCtx } from "./tabctx";
@@ -27,4 +29,6 @@ export const handlers: Record<string, Handler> = {
   ...devHandlers,
   ...fileHandlers,
   ...dialogHandlers,
+  ...policyHandlers,
+  ...workflowHandlers,
 };

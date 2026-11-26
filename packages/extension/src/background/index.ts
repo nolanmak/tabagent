@@ -22,6 +22,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
+import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve"];
@@ -139,6 +140,9 @@ export const router = createRouter<Session>({
   },
   feed: (e) => feedPush(e),
   onInflight: () => refreshBadge(),
+  captureWorkflowStep: captureAgentStep,
+  recordWorkflowStep: recordAgent,
+  policySnapshot: async () => (await getSettings()).denylist.map((glob) => glob.trim().toLowerCase()).filter(Boolean).sort().join("\u0000"),
 });
 
 // ---------------------------------------------------------------------------
@@ -202,7 +206,18 @@ function hideBanner(tabId: number) {
 }
 
 function promptEventData(p: PromptInfo) {
-  return { promptId: p.promptId, sessionId: p.sessionId, sessionLabel: p.sessionLabel, kind: p.kind, origin: p.origin, level: p.level, category: p.sensitive?.category, tool: p.tool };
+  return {
+    promptId: p.promptId,
+    sessionId: p.sessionId,
+    sessionLabel: p.sessionLabel,
+    kind: p.kind,
+    origin: p.origin,
+    level: p.level,
+    category: p.sensitive?.category,
+    tool: p.tool,
+    // Policy changes are audited with their exact canonical diff and stated reason.
+    ...(p.sensitive?.category === "p" ? { summary: p.summary } : {}),
+  };
 }
 
 onPrompt((ev) => {
@@ -278,6 +293,7 @@ async function kill() {
   prompts.dropAll("killed");
   rejectAllFiles(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
   fireKilled();
+  await discardAllCaptures();
   endAllHandoffs();
   for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
@@ -296,6 +312,10 @@ async function resume() {
 
 chrome.commands.onCommand.addListener((c) => {
   if (c === "kill-switch") kill();
+});
+chrome.tabs.onRemoved.addListener((tabId) => void discardCapture(tabId));
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === "loading" && change.url) recordManualNavigation(tabId, change.url);
 });
 
 // ---------------------------------------------------------------------------
@@ -316,12 +336,18 @@ function stoppedTabs() {
 
 async function uiState() {
   const s = await getSettings();
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
+  const workflowTabs = (await chrome.tabs.query({})).filter((tab) => tab.id != null && /^https?:/i.test(tab.pendingUrl || tab.url || "")).map((tab) => ({ id: tab.id!, title: tab.title || tab.url || `Tab ${tab.id}`, url: tab.pendingUrl || tab.url || "" }));
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) return false;
+  const manualEvent = msg?.type === "workflow.manual_event" && sender.id === chrome.runtime.id && sender.tab?.id != null;
+  if (!manualEvent && (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("")))) return false;
   (async () => {
+    if (manualEvent) {
+      recordManual(sender.tab!.id!, msg.event);
+      return { ok: true };
+    }
     switch (msg?.type) {
       case "ui.state":
         return uiState();
@@ -364,6 +390,33 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         const s = await updateSettings(patch);
         return { ok: true, settings: publicSettings(s) };
       }
+      case "ui.workflow.list":
+        return { workflows: await listWorkflows() };
+      case "ui.workflow.review":
+      {
+        const workflow = await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined, typeof msg.urlIncludes === "string" ? msg.urlIncludes : undefined);
+        sendEvent("workflow.review", { recipeId: workflow.id, status: workflow.status, decision: msg.approve === true ? "approved" : "draft" });
+        return { workflow };
+      }
+      case "ui.workflow.remove_step":
+        return { workflow: await removeWorkflowStep(String(msg.id), Number(msg.index)) };
+      case "ui.workflow.parameterize_step":
+        return { workflow: await parameterizeWorkflowStep(String(msg.id), Number(msg.index)) };
+      case "ui.workflow.manual_start": {
+        const tabId = Number(msg.tabId);
+        const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => undefined) : undefined;
+        if (!tab?.id || !/^https?:/i.test(tab.pendingUrl || tab.url || "")) throw new Error("Select a normal web tab before starting manual capture");
+        await startCapture(tab.id, "manual", "Manual browser task");
+        sendEvent("workflow.capture", { action: "started", source: "manual", tabId: tab.id });
+        return { capture: { tabId: tab.id, source: "manual" } };
+      }
+      case "ui.workflow.manual_stop": {
+        const capture = listActiveCaptures().find((entry) => entry.source === "manual");
+        if (!capture) throw new Error("No manual capture is active");
+        const recipe = await stopCapture(capture.tabId);
+        sendEvent("workflow.capture", { action: "stopped", source: "manual", tabId: capture.tabId, recipeId: recipe.id, steps: recipe.steps.length });
+        return { recipe };
+      }
     }
     return { error: "unknown message" };
   })().then(reply, (e) => reply({ error: String((e as Error)?.message ?? e) }));
@@ -377,6 +430,11 @@ chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() =>
 chrome.alarms.create("tabagent-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "tabagent-reconnect") bridge.tick();
+  if (a.name === "tabagent-workflows") {
+    void runDueSchedules(new Date(), bridge.connected()).then((runs) => {
+      for (const run of runs) sendEvent("workflow.run", { runId: run.id, recipeId: run.recipeId, state: run.state, reason: run.reason ?? "" });
+    });
+  }
 });
 chrome.runtime.onStartup.addListener(() => bridge.connect());
 chrome.runtime.onInstalled.addListener(() => bridge.connect());
@@ -406,5 +464,6 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   stoppedTabs,
   debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
   attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
+  runDueSchedules,
 };
 export type { Status };
