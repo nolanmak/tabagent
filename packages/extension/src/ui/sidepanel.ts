@@ -108,7 +108,7 @@ function renderWorkflows() {
   tabSelect.innerHTML = (state.workflowTabs ?? []).map((tab: any) => `<option value="${Number(tab.id)}">${esc(tab.title).slice(0, 80)}</option>`).join("") || `<option value="">No web tabs available</option>`;
   if ([...tabSelect.options].some((option) => option.value === previous)) tabSelect.value = previous;
   $("workflows").innerHTML = list
-    .map((w) => `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}</span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`)
+    .map((w) => `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}</span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`)
     .join("") || `<li class="muted">No captured recipes yet.</li>`;
 }
 
@@ -214,7 +214,8 @@ $("workflows").addEventListener("click", (e) => {
   if (b?.dataset.reviewWorkflow) {
     const id = b.dataset.reviewWorkflow;
     const key = document.querySelector<HTMLInputElement>(`input[data-dedupe-key="${CSS.escape(id)}"]`)?.value;
-    send({ type: "ui.workflow.review", id, approve: true, dedupeKey: key }).then(refresh);
+    const urlIncludes = document.querySelector<HTMLInputElement>(`input[data-url-assertion="${CSS.escape(id)}"]`)?.value;
+    send({ type: "ui.workflow.review", id, approve: true, dedupeKey: key, urlIncludes }).then(refresh);
   }
 });
 $("manualCaptureStart").addEventListener("click", () => send({ type: "ui.workflow.manual_start", tabId: Number(($("manualCaptureTab") as HTMLSelectElement).value) }).then(refresh));

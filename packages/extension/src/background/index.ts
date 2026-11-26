@@ -392,7 +392,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "ui.workflow.list":
         return { workflows: await listWorkflows() };
       case "ui.workflow.review":
-        return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined) };
+        return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined, typeof msg.urlIncludes === "string" ? msg.urlIncludes : undefined) };
       case "ui.workflow.manual_start": {
         const tabId = Number(msg.tabId);
         const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => undefined) : undefined;

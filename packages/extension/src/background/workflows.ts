@@ -1,6 +1,6 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { buildRecipe, chooseLocatorCandidate, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
+import { assertionsPass, buildRecipe, chooseLocatorCandidate, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
@@ -102,7 +102,7 @@ export async function listWorkflows() {
   return (await load()).map((r) => ({ ...r, steps: [...r.steps] }));
 }
 
-export async function reviewWorkflow(id: string, approve: boolean, dedupeKey?: string) {
+export async function reviewWorkflow(id: string, approve: boolean, dedupeKey?: string, urlIncludes?: string) {
   const all = await load();
   const recipe = all.find((r) => r.id === id);
   if (!recipe) throw new Error(`No workflow recipe "${id}"`);
@@ -111,6 +111,8 @@ export async function reviewWorkflow(id: string, approve: boolean, dedupeKey?: s
     const key = dedupeKey?.trim().slice(0, 200);
     if (key) recipe.dedupeKey = key;
     else delete recipe.dedupeKey;
+    const expectedUrl = urlIncludes?.trim().slice(0, 500);
+    recipe.assertions = expectedUrl ? [{ kind: "url_includes", value: expectedUrl }] : [];
   }
   await save();
   return recipe;
@@ -204,6 +206,9 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
       else if (step.kind === "input") await drv.fill(found!.ref, (step.value as any).value);
       else if (step.kind === "press") await drv.press(step.key ?? "");
     }
+    const finalTab = await chrome.tabs.get(tabId);
+    const finalUrl = finalTab.pendingUrl || finalTab.url || "";
+    if (!assertionsPass(recipe.assertions, finalUrl)) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: "one or more reviewed postconditions did not pass", reasonCode: "ASSERTION_FAILED" });
     return finish({ state: "succeeded" as const, endedAt: Date.now() });
   } catch (e) {
     const reason = String((e as Error).message ?? e).slice(0, 300);
