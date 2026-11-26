@@ -111,7 +111,7 @@ function renderWorkflows() {
     .map((w) => {
       const steps = (w.steps ?? []).map((step: any, index: number) => {
         const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
-        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? step.key : target;
+        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? step.key : step.kind === "download" ? (step.download?.mime ?? step.download?.extension ?? "artifact") : target;
         const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
         const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
         return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;

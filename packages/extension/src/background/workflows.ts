@@ -2,7 +2,7 @@
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
 import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
-import { downloadAfter } from "./downloads";
+import { downloadAfter, downloadsFromTabSince } from "./downloads";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
 import { getSession, resolveTab } from "./sessions";
@@ -47,6 +47,26 @@ export async function stopCapture(tabId: number): Promise<WorkflowRecipe> {
   if (!capture) throw new Error("No workflow capture is active for this tab");
   active.delete(tabId);
   if (capture.source === "manual") await removeManualListener(tabId);
+  // A manual capture does not have a bridge command envelope for downloads.
+  // Resolve only browser-attributed metadata at stop time; filenames, URLs, and bytes
+  // never become raw recipe fields beyond the typed, non-sensitive expectation below.
+  if (capture.source === "manual") {
+    for (const output of downloadsFromTabSince(tabId, capture.startedAt)) {
+      const event = downloadCaptureEvent(output);
+      const existing = event?.download && capture.events.find((candidate) => candidate.kind === "download" && (
+        (candidate.download?.extension && candidate.download.extension === event.download?.extension) ||
+        (candidate.download?.mime && candidate.download.mime === event.download?.mime)
+      ));
+      // If there is exactly one declared direct-download click, it is safe to enrich
+      // that checkpoint with the browser's MIME/size metadata even when Chrome hid
+      // the final filename. Multiple downloads remain separate rather than guessed.
+      const onlyDownload = capture.events.filter((candidate) => candidate.kind === "download").length === 1
+        ? capture.events.find((candidate) => candidate.kind === "download")
+        : undefined;
+      if (event && (existing || onlyDownload)) (existing ?? onlyDownload)!.download = { ...event.download, ...(existing ?? onlyDownload)!.download };
+      else if (event) capture.events.push(event);
+    }
+  }
   const recipe = buildRecipe(crypto.randomUUID(), capture.name, sourceFor(capture), capture.events, Date.now());
   const all = await load();
   recipes = [...all, recipe];
@@ -108,13 +128,18 @@ export function recordAgent(captured: unknown, result?: unknown) {
   if (!capture || capture.source !== "agent") return;
   if (item?.event) capture.events.push(item.event);
   if (item?.download) {
-    const output = result as { filename?: unknown; mime?: unknown; bytes?: unknown } | undefined;
-    const filename = typeof output?.filename === "string" ? output.filename : "";
-    const extension = filename.match(/\.([a-z0-9]{1,12})$/i)?.[1]?.toLowerCase();
-    const mime = typeof output?.mime === "string" ? output.mime.slice(0, 120) : undefined;
-    const bytes = typeof output?.bytes === "number" && Number.isFinite(output.bytes) && output.bytes >= 0 ? output.bytes : undefined;
-    if (extension || mime) capture.events.push({ kind: "download", download: { ...(extension ? { extension } : {}), ...(mime ? { mime } : {}), ...(bytes != null ? { bytes } : {}) } });
+    const event = downloadCaptureEvent(result);
+    if (event) capture.events.push(event);
   }
+}
+
+function downloadCaptureEvent(result: unknown): CaptureEvent | undefined {
+  const output = result as { filename?: unknown; mime?: unknown; bytes?: unknown } | undefined;
+  const filename = typeof output?.filename === "string" ? output.filename : "";
+  const extension = filename.match(/\.([a-z0-9]{1,12})$/i)?.[1]?.toLowerCase();
+  const mime = typeof output?.mime === "string" ? output.mime.slice(0, 120) : undefined;
+  const bytes = typeof output?.bytes === "number" && Number.isFinite(output.bytes) && output.bytes >= 0 ? output.bytes : undefined;
+  return extension || mime ? { kind: "download", download: { ...(extension ? { extension } : {}), ...(mime ? { mime } : {}), ...(bytes != null ? { bytes } : {}) } } : undefined;
 }
 
 export async function listWorkflows() {
@@ -318,7 +343,16 @@ async function installManualListener(tabId: number) {
         return { role, name, label, selector: id, value: control.value };
       };
       const send = (event: unknown) => chrome.runtime.sendMessage({ type: "workflow.manual_event", event });
-      const click = (e: Event) => e.target instanceof Element && send({ kind: "click", url: location.href, target: target(e.target) });
+      const click = (e: Event) => {
+        if (!(e.target instanceof Element)) return;
+        send({ kind: "click", url: location.href, target: target(e.target) });
+        // Direct download anchors expose an extension without retaining their href or name.
+        // Response-triggered downloads are additionally collected from chrome.downloads at stop.
+        const anchor = e.target.closest("a[download]") as HTMLAnchorElement | null;
+        const candidate = anchor?.getAttribute("download") || anchor?.pathname || "";
+        const extension = candidate.match(/\.([a-z0-9]{1,12})$/i)?.[1]?.toLowerCase();
+        if (extension) send({ kind: "download", download: { extension } });
+      };
       const change = (e: Event) => {
         if (!(e.target instanceof Element)) return;
         if (e.target instanceof HTMLSelectElement) {

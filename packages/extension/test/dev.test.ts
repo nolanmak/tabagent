@@ -172,6 +172,12 @@ describe("download attribution (D31)", () => {
     t.onCreated({ id: 2, url: "http://a.test/b", filename: "", state: "complete" }, 5000);
     expect(t.since("S1", 4000).map((d) => d.id)).toEqual([2]);
   });
+  it("sinceTab() also supports an explicitly armed manual capture with no session", () => {
+    const t = new DownloadTracker(() => undefined);
+    t.noteTabDownload(7, "http://a.test/manual", 1000);
+    t.onCreated({ id: 1, url: "http://a.test/manual", filename: "/d/report.csv", state: "complete" }, 1000);
+    expect(t.sinceTab(7, 900).map((d) => d.id)).toEqual([1]);
+  });
   it("waitAfter ignores an earlier artifact and resolves only a workflow-run download", async () => {
     const t = new DownloadTracker(owner);
     t.noteTabDownload(1, "http://a.test/old", 1000);

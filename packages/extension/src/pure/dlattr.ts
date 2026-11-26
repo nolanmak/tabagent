@@ -105,6 +105,11 @@ export class DownloadTracker {
     return this.list(sessionId).filter((d) => d.createdAt >= ts);
   }
 
+  /** Downloads started in a browser tab, including user-initiated captures with no agent session. */
+  sinceTab(tabId: number, ts: number): DlRecord[] {
+    return [...this.byId.values()].filter((d) => d.tabId === tabId && d.createdAt >= ts);
+  }
+
   /** Next completed download of the session (or of `id`), or null on timeout. */
   waitNext(sessionId: string, timeoutMs: number, id?: number): Promise<DlRecord | null> {
     if (id != null) {

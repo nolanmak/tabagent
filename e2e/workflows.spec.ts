@@ -108,3 +108,28 @@ test("#68/#69 agent capture replays a metadata-only download checkpoint", async 
   const replay = await h.ok(c, "workflow.run", { id: recipe.id, tabId });
   expect(replay.json.run.state, JSON.stringify(replay.json.run)).toBe("succeeded");
 });
+
+test("#68 manual capture records a tab-attributed download without its filename or URL", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "manual-download-e2e" });
+  const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
+  await h.ok(c, "nav.goto", { tabId, url: `${h.A}/downloads.html` });
+  const panel = await h.openPanel();
+  try {
+    await panel.locator("#manualCaptureTab").selectOption(String(tabId));
+    await panel.locator("#manualCaptureStart").click();
+    const page = h.ctx.pages().filter((p) => p.url().includes("/downloads.html")).at(-1);
+    if (!page) throw new Error("fixture tab not found");
+    await Promise.all([page.waitForEvent("download"), page.click("#txt")]);
+    await page.waitForTimeout(200);
+    await panel.locator("#manualCaptureStop").click();
+    await expect(panel.locator("#workflows")).toContainText("download: application/octet-stream");
+  } finally {
+    await panel.close();
+  }
+  const recipe = (await h.ok(c, "workflow.list", {})).json.workflows.at(-1);
+  const downloads = recipe.steps.filter((step: any) => step.kind === "download");
+  expect(downloads).toHaveLength(1);
+  expect(downloads[0].download).toMatchObject({ mime: "application/octet-stream" });
+  expect(JSON.stringify(downloads)).not.toMatch(/notes\.txt|https?:/i);
+});

@@ -24,6 +24,11 @@ export function downloadsSince(sessionId: string, ts: number) {
   return list.map(wireDownload);
 }
 
+/** Tab-attributed downloads for manual workflow capture; does not require an agent session. */
+export function downloadsFromTabSince(tabId: number, ts: number) {
+  return tracker.sinceTab(tabId, ts - 1000).map(wireDownload);
+}
+
 export function getDownload(id: number) {
   return tracker.get(id);
 }
