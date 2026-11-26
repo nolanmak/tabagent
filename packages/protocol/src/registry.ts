@@ -770,8 +770,8 @@ export const TOOLS = [
   def({
     name: "workflow.run",
     group: "workflow",
-    description: "Run a user-reviewed low-risk recipe in an owned tab. Stops for secrets, sign-in, MFA, risky actions, missing targets, or ambiguous repairs.",
-    params: z.object({ id: z.string().uuid(), tabId }),
+    description: "Run a user-reviewed low-risk recipe in an owned tab. Supply values only for user-reviewed input parameters; stops for secrets, sign-in, MFA, risky actions, missing targets, or ambiguous repairs.",
+    params: z.object({ id: z.string().uuid(), tabId, inputs: z.record(z.string(), z.string().max(1000)).optional() }),
     result: loose({ run: z.unknown() }),
     level: "act",
     pageContent: [],

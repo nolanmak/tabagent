@@ -112,7 +112,9 @@ function renderWorkflows() {
       const steps = (w.steps ?? []).map((step: any, index: number) => {
         const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
         const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? step.key : target;
-        return `<li class="small">${esc(step.kind)}: ${esc(detail)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>` : ""}</li>`;
+        const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
+        const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
+        return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
       }).join("");
       return `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}<ol class="workflow-steps">${steps}</ol></span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`;
     })
@@ -220,6 +222,10 @@ $("workflows").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.deleteWorkflowStep) {
     send({ type: "ui.workflow.remove_step", id: b.dataset.deleteWorkflowStep, index: Number(b.dataset.stepIndex) }).then(refresh);
+    return;
+  }
+  if (b?.dataset.parameterizeWorkflowStep) {
+    send({ type: "ui.workflow.parameterize_step", id: b.dataset.parameterizeWorkflowStep, index: Number(b.dataset.stepIndex) }).then(refresh);
     return;
   }
   if (b?.dataset.reviewWorkflow) {

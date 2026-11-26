@@ -19,6 +19,8 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   try {
     await expect(panel.locator("#workflows")).toContainText("click: Click me");
     await expect(panel.locator(`button[data-delete-workflow-step="${recipe.id}"]`)).toHaveCount(3);
+    await panel.locator(`button[data-parameterize-workflow-step="${recipe.id}"]`).click();
+    await expect(panel.locator("#workflows")).toContainText("{{SEARCH}}");
     await panel.locator(`input[data-dedupe-key="${recipe.id}"]`).fill("fixture-report-v1");
     await panel.locator(`input[data-url-assertion="${recipe.id}"]`).fill("/index.html");
     await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
@@ -26,7 +28,7 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   } finally {
     await panel.close();
   }
-  const replay = await h.ok(c, "workflow.run", { id: recipe.id, tabId });
+  const replay = await h.ok(c, "workflow.run", { id: recipe.id, tabId, inputs: { "{{SEARCH}}": "widgets" } });
   expect(replay.json.run.state, JSON.stringify(replay.json.run)).toBe("succeeded");
   const history = await h.ok(c, "workflow.runs", { id: recipe.id });
   expect(history.json.runs.at(-1).state).toBe("succeeded");

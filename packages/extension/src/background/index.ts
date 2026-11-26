@@ -22,7 +22,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
-import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
+import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve"];
@@ -395,6 +395,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined, typeof msg.urlIncludes === "string" ? msg.urlIncludes : undefined) };
       case "ui.workflow.remove_step":
         return { workflow: await removeWorkflowStep(String(msg.id), Number(msg.index)) };
+      case "ui.workflow.parameterize_step":
+        return { workflow: await parameterizeWorkflowStep(String(msg.id), Number(msg.index)) };
       case "ui.workflow.manual_start": {
         const tabId = Number(msg.tabId);
         const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => undefined) : undefined;

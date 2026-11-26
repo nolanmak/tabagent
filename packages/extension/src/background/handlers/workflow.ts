@@ -13,7 +13,7 @@ export const workflowHandlers = {
   "workflow.list": async () => ({ workflows: await listWorkflows() }),
   "workflow.run": async ({ tabId, p, meta }: any) => {
     if (tabId == null) throw new Error("Workflow replay needs an owned tab");
-    return { run: await runWorkflow(p.id, tabId, meta) };
+    return { run: await runWorkflow(p.id, tabId, meta, p.inputs ?? {}) };
   },
   "workflow.schedule": async ({ tabId, p, meta }: any) => ({ schedule: await scheduleWorkflow(p.id, tabId, meta, p.cron, p.timeZone) }),
   "workflow.unschedule": async ({ p }: any) => { await unscheduleWorkflow(p.id); return { ok: true }; },

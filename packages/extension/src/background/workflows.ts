@@ -1,6 +1,6 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
+import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
@@ -130,6 +130,20 @@ export async function removeWorkflowStep(id: string, index: number) {
   return recipe;
 }
 
+/** Replace a saved draft literal with an explicit caller-supplied placeholder. */
+export async function parameterizeWorkflowStep(id: string, index: number) {
+  const recipe = (await load()).find((entry) => entry.id === id);
+  const step = recipe?.steps[index];
+  if (!recipe || !step) throw new Error("Workflow step was not found");
+  if (recipe.status !== "draft") throw new Error("Only draft recipes can be edited");
+  if (step.kind !== "input" || step.value?.kind !== "fixed") throw new Error("Only fixed input steps can become parameters");
+  const label = step.locator?.name || step.locator?.label || "input";
+  const token = label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 80) || "INPUT";
+  step.value = { kind: "parameter", placeholder: `{{${token}}}` };
+  await save();
+  return recipe;
+}
+
 export async function listWorkflowRuns(recipeId?: string) {
   return (await loadRuns()).filter((r) => !recipeId || r.recipeId === recipeId).map((r) => ({ ...r, repairs: [...r.repairs] }));
 }
@@ -197,7 +211,7 @@ async function findRef(tabId: number, url: string, locator: Locator): Promise<{ 
 }
 
 /** Execute a reviewed, low-risk recipe in an already-owned tab. Every navigated origin is re-authorized. */
-export async function runWorkflow(recipeId: string, tabId: number, meta: any): Promise<WorkflowRun> {
+export async function runWorkflow(recipeId: string, tabId: number, meta: any, inputs: Record<string, string> = {}): Promise<WorkflowRun> {
   const recipe = (await load()).find((r) => r.id === recipeId);
   if (!recipe) throw new Error(`No workflow recipe "${recipeId}"`);
   const priorRuns = await loadRuns();
@@ -229,7 +243,11 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
       if (found?.repair && step.locator) run.repairs.push({ id: crypto.randomUUID(), step: i, from: step.locator, to: found.repair });
       const drv = await driverFor(tabId, url);
       if (step.kind === "click") await drv.click(found!.ref);
-      else if (step.kind === "input") await drv.fill(found!.ref, (step.value as any).value);
+      else if (step.kind === "input") {
+        const value = resolveReplayInput(step.value!, inputs);
+        if (value == null) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: required input parameter was not provided`, reasonCode: "ASSERTION_FAILED" });
+        await drv.fill(found!.ref, value);
+      }
       else if (step.kind === "select") await drv.call("selectOptions", [step.options!], { ref: found!.ref });
       else if (step.kind === "press") await drv.press(step.key ?? "");
     }

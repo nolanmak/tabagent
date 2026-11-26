@@ -1,6 +1,6 @@
 /** Browser-independent recipe capture, redaction, and bounded locator healing. */
 export type Locator = { role?: string; name?: string; label?: string; text?: string; selector?: string; context?: string };
-export type InputValue = { kind: "fixed"; value: string } | { kind: "secret-ref"; placeholder: string } | { kind: "omit" };
+export type InputValue = { kind: "fixed"; value: string } | { kind: "parameter"; placeholder: string } | { kind: "secret-ref"; placeholder: string } | { kind: "omit" };
 export type WorkflowStep = { kind: "navigate" | "click" | "input" | "select" | "press"; url?: string; locator?: Locator; value?: InputValue; options?: string[]; key?: string };
 export type WorkflowAssertion = { kind: "url_includes"; value: string };
 export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; values?: string[]; key?: string };
@@ -16,6 +16,14 @@ export function classifyInput(name: string, value: string): InputValue {
   if (OMIT.test(name) || /^\d{13,19}$/.test(value.replace(/[ -]/g, ""))) return { kind: "omit" };
   if (SECRET.test(name)) return { kind: "secret-ref", placeholder: `{{${name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_")}}}` };
   return { kind: "fixed", value: value.slice(0, 1000) };
+}
+
+/** Parameters are explicitly named in recipe review; no value is retained in the recipe. */
+export function resolveReplayInput(value: InputValue | undefined, inputs: Record<string, string>) {
+  if (!value) return null;
+  if (value.kind === "fixed") return value.value;
+  if (value.kind === "parameter") return inputs[value.placeholder] ?? null;
+  return null;
 }
 
 function locator(target: CaptureEvent["target"]): Locator | undefined {
@@ -52,7 +60,8 @@ const STEP_KINDS = new Set<WorkflowStep["kind"]>(["navigate", "click", "input", 
 /** A replay recipe is deliberately narrower than interactive agent actions. */
 export function replayBlockReason(step: WorkflowStep): string | null {
   if (!STEP_KINDS.has(step.kind)) return "unknown workflow step kind";
-  if (step.kind === "input" && step.value?.kind !== "fixed") return "input needs a secret, or was intentionally omitted";
+  if (step.kind === "input" && !step.value) return "input has no value";
+  if (step.kind === "input" && (step.value?.kind === "secret-ref" || step.value?.kind === "omit")) return "input needs a secret, or was intentionally omitted";
   if (step.kind === "input" && OMIT.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "input target looks sensitive, so its value cannot be replayed";
   if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "target looks like a sensitive or irreversible action";
   if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "step has no semantic target";
@@ -64,7 +73,7 @@ export function replayBlockReason(step: WorkflowStep): string | null {
 /** Machine-readable counterpart to replayBlockReason for history, CLI and notifications. */
 export function replayBlockCode(step: WorkflowStep): WorkflowRunReason | null {
   if (!STEP_KINDS.has(step.kind)) return "SENSITIVE_ACTION";
-  if (step.kind === "input" && step.value?.kind !== "fixed") return "SENSITIVE_ACTION";
+  if (step.kind === "input" && (!step.value || step.value.kind === "secret-ref" || step.value.kind === "omit")) return "SENSITIVE_ACTION";
   if (step.kind === "input" && OMIT.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "SENSITIVE_ACTION";
   if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "SENSITIVE_ACTION";
   if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "AMBIGUOUS_TARGET";
