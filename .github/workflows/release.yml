@@ -46,7 +46,7 @@ jobs:
           mkdir -p release
           (cd packages/extension/dist && zip -r -X "../../../release/tabagent-extension-${{ inputs.tag }}.zip" .)
       - name: Check zipped manifest permissions match the justifications
-        run: npx vitest run --project release test/release/store-permissions.test.ts
+        run: ./node_modules/.bin/vitest run --project release test/release/store-permissions.test.ts
 
       # npm build: the bridge bundles the dev-keyed extension for `tabagent extension path`.
       - run: npm run build
