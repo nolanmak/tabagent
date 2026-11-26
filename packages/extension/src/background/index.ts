@@ -22,7 +22,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
-import { captureAgentStep, discardAllCaptures, discardCapture, listWorkflows, recordAgent, recordManual, recordManualNavigation, reviewWorkflow, runDueSchedules } from "./workflows";
+import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, recordAgent, recordManual, recordManualNavigation, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve"];
@@ -335,7 +335,8 @@ function stoppedTabs() {
 
 async function uiState() {
   const s = await getSettings();
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
+  const workflowTabs = (await chrome.tabs.query({})).filter((tab) => tab.id != null && /^https?:/i.test(tab.pendingUrl || tab.url || "")).map((tab) => ({ id: tab.id!, title: tab.title || tab.url || `Tab ${tab.id}`, url: tab.pendingUrl || tab.url || "" }));
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -392,6 +393,18 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return { workflows: await listWorkflows() };
       case "ui.workflow.review":
         return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined) };
+      case "ui.workflow.manual_start": {
+        const tabId = Number(msg.tabId);
+        const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => undefined) : undefined;
+        if (!tab?.id || !/^https?:/i.test(tab.pendingUrl || tab.url || "")) throw new Error("Select a normal web tab before starting manual capture");
+        await startCapture(tab.id, "manual", "Manual browser task");
+        return { capture: { tabId: tab.id, source: "manual" } };
+      }
+      case "ui.workflow.manual_stop": {
+        const capture = listActiveCaptures().find((entry) => entry.source === "manual");
+        if (!capture) throw new Error("No manual capture is active");
+        return { recipe: await stopCapture(capture.tabId) };
+      }
     }
     return { error: "unknown message" };
   })().then(reply, (e) => reply({ error: String((e as Error)?.message ?? e) }));

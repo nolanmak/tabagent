@@ -73,6 +73,11 @@ export async function discardCapture(tabId: number) {
 }
 export async function discardAllCaptures() { await Promise.all([...active.keys()].map(discardCapture)); }
 
+/** Minimal capture state for the extension UI; events themselves stay private until stopped. */
+export function listActiveCaptures() {
+  return [...active.entries()].map(([tabId, capture]) => ({ tabId, source: capture.source, name: capture.name, startedAt: capture.startedAt }));
+}
+
 export async function captureAgentStep(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string): Promise<{ tabId: number; event: CaptureEvent } | undefined> {
   if (tabId == null || tool.startsWith("workflow.")) return;
   const capture = active.get(tabId);
