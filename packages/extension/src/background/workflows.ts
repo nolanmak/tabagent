@@ -145,15 +145,25 @@ export async function scheduleWorkflow(recipeId: string, tabId: number, meta: an
 }
 export async function unscheduleWorkflow(id: string) { schedules = (await loadSchedules()).filter((s) => s.id !== id); await saveSchedules(); }
 /** Invoked from the extension alarm. A missed minute is never replayed (no catch-up). */
-async function runDueSchedulesOnce(now: Date) {
+async function recordScheduledBlock(recipeId: string, reasonCode: WorkflowRunReason, reason: string) {
+  const run: WorkflowRun = { id: crypto.randomUUID(), recipeId, startedAt: Date.now(), endedAt: Date.now(), state: "blocked", reasonCode, reason, repairs: [] };
+  runs = [...(await loadRuns()).slice(-99), run];
+  await saveRuns();
+  return run;
+}
+
+async function runDueSchedulesOnce(now: Date, extensionConnected: boolean) {
   const minute = Math.floor(now.getTime() / 60_000); const due: WorkflowRun[] = [];
-  for (const s of await loadSchedules()) if (s.enabled && s.lastMinute !== minute && cronMatches(s.cron, now, s.timeZone)) { s.lastMinute = minute; due.push(await runWorkflow(s.recipeId, s.tabId, s.meta)); }
+  for (const s of await loadSchedules()) if (s.enabled && s.lastMinute !== minute && cronMatches(s.cron, now, s.timeZone)) {
+    s.lastMinute = minute;
+    due.push(extensionConnected ? await runWorkflow(s.recipeId, s.tabId, s.meta) : await recordScheduledBlock(s.recipeId, "NO_EXTENSION", "the paired extension bridge is offline"));
+  }
   await saveSchedules(); return due;
 }
 
-export function runDueSchedules(now = new Date()) {
+export function runDueSchedules(now = new Date(), extensionConnected = true) {
   if (scheduleTick) return scheduleTick;
-  scheduleTick = runDueSchedulesOnce(now).finally(() => { scheduleTick = null; });
+  scheduleTick = runDueSchedulesOnce(now, extensionConnected).finally(() => { scheduleTick = null; });
   return scheduleTick;
 }
 

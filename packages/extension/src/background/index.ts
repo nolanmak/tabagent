@@ -419,7 +419,7 @@ chrome.alarms.create("tabagent-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "tabagent-reconnect") bridge.tick();
   if (a.name === "tabagent-workflows") {
-    void runDueSchedules().then((runs) => {
+    void runDueSchedules(new Date(), bridge.connected()).then((runs) => {
       for (const run of runs) sendEvent("workflow.run", { runId: run.id, recipeId: run.recipeId, state: run.state, reason: run.reason ?? "" });
     });
   }
