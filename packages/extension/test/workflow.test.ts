@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
+import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, repairCanPersist, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
 
 describe("workflow capture (#68, #69)", () => {
   it("redacts secrets and retains a semantic locator instead of a raw DOM snapshot", () => {
@@ -87,5 +87,11 @@ describe("workflow capture (#68, #69)", () => {
   it("requires every reviewed URL postcondition", () => {
     expect(assertionsPass([{ kind: "url_includes", value: "/reports" }], "https://app.example/reports/2026")).toBe(true);
     expect(assertionsPass([{ kind: "url_includes", value: "/reports" }], "https://app.example/settings")).toBe(false);
+  });
+
+  it("only persists a repair from a postcondition-verified run", () => {
+    expect(repairCanPersist("succeeded")).toBe(true);
+    expect(repairCanPersist("blocked")).toBe(false);
+    expect(repairCanPersist("failed")).toBe(false);
   });
 });
