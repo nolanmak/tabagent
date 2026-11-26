@@ -1,4 +1,4 @@
-import { listWorkflows, runWorkflow, startCapture, stopCapture } from "../workflows";
+import { listWorkflows, runWorkflow, scheduleWorkflow, startCapture, stopCapture, unscheduleWorkflow } from "../workflows";
 
 export const workflowHandlers = {
   "workflow.capture_start": async ({ tabId, p }: any) => {
@@ -15,4 +15,6 @@ export const workflowHandlers = {
     if (tabId == null) throw new Error("Workflow replay needs an owned tab");
     return { run: await runWorkflow(p.id, tabId, meta) };
   },
+  "workflow.schedule": async ({ tabId, p, meta }: any) => ({ schedule: await scheduleWorkflow(p.id, tabId, meta, p.cron, p.timeZone) }),
+  "workflow.unschedule": async ({ p }: any) => { await unscheduleWorkflow(p.id); return { ok: true }; },
 };

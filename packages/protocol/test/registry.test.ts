@@ -101,6 +101,8 @@ const LEVELS: Record<string, string> = {
   "workflow.capture_stop": "act",
   "workflow.list": "none",
   "workflow.run": "act",
+  "workflow.schedule": "act",
+  "workflow.unschedule": "none",
   "session.info": "none",
   "session.permissions": "none",
   "session.end": "none",

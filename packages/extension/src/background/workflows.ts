@@ -3,6 +3,8 @@
 import { buildRecipe, chooseLocatorCandidate, replayBlockReason, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe } from "../pure/workflow";
 import { driverFor } from "./driver";
 import { requireSite } from "./permissions";
+import { cronMatches, parseCron } from "../pure/cron";
+import { getSession, resolveTab } from "./sessions";
 
 type CaptureSource = "agent" | "manual";
 type ActiveCapture = { source: CaptureSource; name: string; events: CaptureEvent[]; startedAt: number };
@@ -10,6 +12,8 @@ const active = new Map<number, ActiveCapture>();
 let recipes: WorkflowRecipe[] | null = null;
 export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; repairs: { step: number; from: Locator; to: Locator }[] };
 let runs: WorkflowRun[] = [];
+export type WorkflowSchedule = { id: string; recipeId: string; tabId: number; meta: any; cron: string; timeZone: string; enabled: boolean; lastMinute?: number };
+let schedules: WorkflowSchedule[] | null = null;
 
 async function load() {
   if (!recipes) recipes = ((await chrome.storage.local.get("workflows")).workflows as WorkflowRecipe[] | undefined) ?? [];
@@ -18,6 +22,8 @@ async function load() {
 async function save() {
   await chrome.storage.local.set({ workflows: recipes ?? [] });
 }
+async function loadSchedules() { if (!schedules) schedules = ((await chrome.storage.local.get("workflowSchedules")).workflowSchedules as WorkflowSchedule[] | undefined) ?? []; return schedules; }
+async function saveSchedules() { await chrome.storage.local.set({ workflowSchedules: schedules ?? [] }); }
 
 function sourceFor(c: ActiveCapture): WorkflowRecipe["source"] {
   return c.source;
@@ -77,6 +83,24 @@ export async function reviewWorkflow(id: string, approve: boolean) {
 export async function listWorkflowRuns(recipeId?: string) {
   return runs.filter((r) => !recipeId || r.recipeId === recipeId).map((r) => ({ ...r, repairs: [...r.repairs] }));
 }
+export async function listWorkflowSchedules() { return (await loadSchedules()).map((s) => ({ ...s, meta: undefined })); }
+export async function scheduleWorkflow(recipeId: string, tabId: number, meta: any, cron: string, timeZone: string) {
+  const recipe = (await load()).find((r) => r.id === recipeId);
+  if (!recipe) throw new Error(`No workflow recipe "${recipeId}"`);
+  if (recipe.status !== "reviewed") throw new Error("Only reviewed recipes can be scheduled");
+  parseCron(cron); new Intl.DateTimeFormat("en-US", { timeZone }).format();
+  const schedule: WorkflowSchedule = { id: crypto.randomUUID(), recipeId, tabId, meta: { id: meta.id, label: meta.label, cap: meta.cap, sites: meta.sites }, cron, timeZone, enabled: true };
+  schedules = [...await loadSchedules(), schedule]; await saveSchedules();
+  await chrome.alarms.create("tabagent-workflows", { periodInMinutes: 1 });
+  return schedule;
+}
+export async function unscheduleWorkflow(id: string) { schedules = (await loadSchedules()).filter((s) => s.id !== id); await saveSchedules(); }
+/** Invoked from the extension alarm. A missed minute is never replayed (no catch-up). */
+export async function runDueSchedules(now = new Date()) {
+  const minute = Math.floor(now.getTime() / 60_000); const due: WorkflowRun[] = [];
+  for (const s of await loadSchedules()) if (s.enabled && s.lastMinute !== minute && cronMatches(s.cron, now, s.timeZone)) { s.lastMinute = minute; due.push(await runWorkflow(s.recipeId, s.tabId, s.meta)); }
+  await saveSchedules(); return due;
+}
 
 async function findRef(tabId: number, url: string, locator: Locator): Promise<{ ref: string; repair?: Locator } | null> {
   const drv = await driverFor(tabId, url);
@@ -100,13 +124,16 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
   if (recipe.status !== "reviewed") return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: "recipe has not been reviewed in the extension" });
   run.state = "running";
   try {
+    // A scheduled recipe never gains access merely because it remembers a tab id.
+    // The original session must still exist and still own that tab.
+    await resolveTab(await getSession(meta), tabId);
     for (let i = 0; i < recipe.steps.length; i++) {
       run.step = i;
       const step = recipe.steps[i];
       const blocked = replayBlockReason(step);
       if (blocked) return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: ${blocked}` });
       const tab = await chrome.tabs.get(tabId);
-      let url = tab.pendingUrl || tab.url || "";
+      const url = tab.pendingUrl || tab.url || "";
       if (step.kind === "navigate") {
         await requireSite(meta, step.url!, "act", "workflow.run", `replay workflow navigation to ${step.url}`);
         await (await driverFor(tabId, step.url!)).navigate(step.url!, "load", 30_000);

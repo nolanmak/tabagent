@@ -57,6 +57,9 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`workflow.capture_start`](#workflowcapture_start) | `workflow_capture_start` | act | — | full only | supported | extension |
 | [`workflow.capture_stop`](#workflowcapture_stop) | `workflow_capture_stop` | act | — | full only | supported | extension |
 | [`workflow.list`](#workflowlist) | `workflow_list` | none | — | full only | supported | extension |
+| [`workflow.run`](#workflowrun) | `workflow_run` | act | — | full only | supported | extension |
+| [`workflow.schedule`](#workflowschedule) | `workflow_schedule` | act | — | full only | supported | extension |
+| [`workflow.unschedule`](#workflowunschedule) | `workflow_unschedule` | none | — | full only | supported | extension |
 | [`session.info`](#sessioninfo) | `session_info` | none | — | full only | supported | extension |
 | [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
@@ -640,6 +643,40 @@ List locally stored workflow recipes and their review state.
 MCP name `workflow_list` · level none · profiles full only · lite supported · handled by extension
 
 No parameters.
+
+### workflow.run
+
+Run a user-reviewed low-risk recipe in an owned tab. Stops for secrets, sign-in, MFA, risky actions, missing targets, or ambiguous repairs.
+
+MCP name `workflow_run` · level act · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes |  |
+| `tabId` | number |  | Default: active tab |
+
+### workflow.schedule
+
+Schedule a reviewed low-risk recipe using five-field cron and an IANA timezone. Missed runs are not replayed.
+
+MCP name `workflow_schedule` · level act · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes |  |
+| `tabId` | number |  | Default: active tab |
+| `cron` | string | yes |  |
+| `timeZone` | string | yes |  |
+
+### workflow.unschedule
+
+Disable a saved workflow schedule.
+
+MCP name `workflow_unschedule` · level none · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes |  |
 
 ## session
 

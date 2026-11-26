@@ -51,7 +51,7 @@ export interface Requirements {
 }
 
 /** Tools that work without a session tab. */
-const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end", "policy.denylist_change", "workflow.list"]);
+const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end", "policy.denylist_change", "workflow.list", "workflow.unschedule"]);
 
 export function requirementsFor(tool: ToolLike, params: Record<string, unknown>): Requirements {
   const levelOf = (l: Level | "none" | undefined) => (l && l !== "none" ? l : null);

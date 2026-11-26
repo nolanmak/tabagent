@@ -22,7 +22,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
-import { listWorkflows, recordAgent, recordManual, reviewWorkflow } from "./workflows";
+import { listWorkflows, recordAgent, recordManual, reviewWorkflow, runDueSchedules } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve"];
@@ -388,6 +388,7 @@ chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() =>
 chrome.alarms.create("tabagent-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "tabagent-reconnect") bridge.tick();
+  if (a.name === "tabagent-workflows") void runDueSchedules();
 });
 chrome.runtime.onStartup.addListener(() => bridge.connect());
 chrome.runtime.onInstalled.addListener(() => bridge.connect());

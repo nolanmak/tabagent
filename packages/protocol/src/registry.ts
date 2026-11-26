@@ -778,6 +778,8 @@ export const TOOLS = [
     lite: "supported",
     handledBy: "extension",
   }),
+  def({ name: "workflow.schedule", group: "workflow", description: "Schedule a reviewed low-risk recipe using five-field cron and an IANA timezone. Missed runs are not replayed.", params: z.object({ id: z.string().uuid(), tabId, cron: z.string(), timeZone: z.string() }), result: loose({ schedule: z.unknown() }), level: "act", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
+  def({ name: "workflow.unschedule", group: "workflow", description: "Disable a saved workflow schedule.", params: z.object({ id: z.string().uuid() }), result: loose({ ok: z.boolean() }), level: "none", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
   def({
     name: "session.info",
     group: "session",
