@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
+import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
 
 describe("workflow capture (#68, #69)", () => {
   it("redacts secrets and retains a semantic locator instead of a raw DOM snapshot", () => {
@@ -56,5 +56,10 @@ describe("workflow capture (#68, #69)", () => {
     expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-10", state: "succeeded" }])).toBe(false);
     expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-11", state: "failed" }])).toBe(false);
     expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-11", state: "succeeded" }])).toBe(true);
+  });
+
+  it("requires every reviewed URL postcondition", () => {
+    expect(assertionsPass([{ kind: "url_includes", value: "/reports" }], "https://app.example/reports/2026")).toBe(true);
+    expect(assertionsPass([{ kind: "url_includes", value: "/reports" }], "https://app.example/settings")).toBe(false);
   });
 });
