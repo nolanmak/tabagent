@@ -80,6 +80,11 @@ export function assertionsPass(assertions: readonly WorkflowAssertion[] | undefi
   return (assertions ?? []).every((assertion) => assertion.kind === "url_includes" && url.includes(assertion.value));
 }
 
+/** A locator patch is trustworthy only after all reviewed postconditions passed. */
+export function repairCanPersist(state: RunState) {
+  return state === "succeeded";
+}
+
 const norm = (v: string | undefined) => (v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 const similarity = (a: string | undefined, b: string | undefined) => {
   const x = norm(a);

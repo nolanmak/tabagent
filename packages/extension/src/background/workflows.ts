@@ -1,6 +1,6 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { assertionsPass, buildRecipe, chooseLocatorCandidate, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
+import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
@@ -138,6 +138,7 @@ export async function reviewRepair(recipeId: string, repairId: string, decision:
   const repair = run?.repairs.find((x) => x.id === repairId);
   const recipe = (await load()).find((r) => r.id === recipeId);
   if (!run || !repair || !recipe) throw new Error("Repair proposal not found");
+  if (decision === "accept" && !repairCanPersist(run.state)) throw new Error("Only repairs from a successful, postcondition-verified run can be accepted");
   repair.decision = decision;
   if (decision === "accept" && recipe.steps[repair.step]) recipe.steps[repair.step].locator = repair.to;
   await save();
