@@ -102,7 +102,9 @@ jobs:
         with: { name: dist, path: packages/ }
       - run: chmod +x packages/bridge/dist/cli.js
       - run: npx playwright install --with-deps chromium
-      - run: npx playwright test --trace retain-on-failure
+      # Through the package script, not npx: npx runs behind Socket Firewall's
+      # proxy, which cannot reach the fixture hosts the browser maps locally.
+      - run: npm run e2e -- --trace retain-on-failure
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
