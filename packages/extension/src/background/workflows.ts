@@ -14,6 +14,9 @@ export type WorkflowRun = { id: string; recipeId: string; startedAt: number; end
 let runs: WorkflowRun[] | null = null;
 export type WorkflowSchedule = { id: string; recipeId: string; tabId: number; meta: any; cron: string; timeZone: string; enabled: boolean; lastMinute?: number };
 let schedules: WorkflowSchedule[] | null = null;
+// Chrome alarms and test/manual ticks may arrive together. Loading storage is async, so the
+// lastMinute guard alone is not a mutex; serialize a tick to prevent duplicate cron runs.
+let scheduleTick: Promise<WorkflowRun[]> | null = null;
 
 async function load() {
   if (!recipes) recipes = ((await chrome.storage.local.get("workflows")).workflows as WorkflowRecipe[] | undefined) ?? [];
@@ -130,10 +133,16 @@ export async function scheduleWorkflow(recipeId: string, tabId: number, meta: an
 }
 export async function unscheduleWorkflow(id: string) { schedules = (await loadSchedules()).filter((s) => s.id !== id); await saveSchedules(); }
 /** Invoked from the extension alarm. A missed minute is never replayed (no catch-up). */
-export async function runDueSchedules(now = new Date()) {
+async function runDueSchedulesOnce(now: Date) {
   const minute = Math.floor(now.getTime() / 60_000); const due: WorkflowRun[] = [];
   for (const s of await loadSchedules()) if (s.enabled && s.lastMinute !== minute && cronMatches(s.cron, now, s.timeZone)) { s.lastMinute = minute; due.push(await runWorkflow(s.recipeId, s.tabId, s.meta)); }
   await saveSchedules(); return due;
+}
+
+export function runDueSchedules(now = new Date()) {
+  if (scheduleTick) return scheduleTick;
+  scheduleTick = runDueSchedulesOnce(now).finally(() => { scheduleTick = null; });
+  return scheduleTick;
 }
 
 async function findRef(tabId: number, url: string, locator: Locator): Promise<{ ref: string; repair?: Locator } | null> {

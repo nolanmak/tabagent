@@ -29,8 +29,11 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
 
   await h.ok(c, "workflow.schedule", { id: recipe.id, tabId, cron: "* * * * *", timeZone: "UTC" });
   const before = history.json.runs.length;
-  await h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules());
-  await h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules()); // same minute: no duplicate/catch-up
+  // Alarm delivery and a foreground tick can overlap. The cron minute still has exactly one run.
+  await Promise.all([
+    h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules()),
+    h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules()),
+  ]);
   const scheduled = await h.ok(c, "workflow.runs", { id: recipe.id });
   expect(scheduled.json.runs).toHaveLength(before + 1);
   expect(scheduled.json.runs.at(-1).state).toBe("succeeded");
