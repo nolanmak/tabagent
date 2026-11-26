@@ -29,6 +29,9 @@ jobs:
           node-version: "22"
           cache: npm
           registry-url: "https://registry.npmjs.org"
+      - name: Socket Firewall in front of npm, npx and pnpm (github-ci-security)
+        if: runner.os == 'Linux'
+        run: bash .github/security/install-tools.sh sfw
       - run: npm ci
       - run: npm run check-versions -- --tag "${{ inputs.tag }}"
       - run: npm run lint
@@ -43,7 +46,7 @@ jobs:
           mkdir -p release
           (cd packages/extension/dist && zip -r -X "../../../release/tabagent-extension-${{ inputs.tag }}.zip" .)
       - name: Check zipped manifest permissions match the justifications
-        run: npx vitest run --project release test/release/store-permissions.test.ts
+        run: ./node_modules/.bin/vitest run --project release test/release/store-permissions.test.ts
 
       # npm build: the bridge bundles the dev-keyed extension for `tabagent extension path`.
       - run: npm run build

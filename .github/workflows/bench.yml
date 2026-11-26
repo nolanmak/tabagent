@@ -31,6 +31,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22", cache: npm }
+      - name: Socket Firewall in front of npm, npx and pnpm (github-ci-security)
+        if: runner.os == 'Linux'
+        run: bash .github/security/install-tools.sh sfw
       - run: npm ci
       - run: npm run build
       - run: npx playwright install --with-deps chromium

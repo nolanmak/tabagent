@@ -1,0 +1,16 @@
+# gitleaks findings reviewed 2026-11-25 and judged not secrets. One fingerprint
+# (commit:file:rule:line) each, so a new occurrence is still flagged.
+# public reCAPTCHA/CAPTCHA test site key or fixture
+f683f5da878c2d04d243db113b43bbab0cbef1dc:e2e/fixtures/captcha-recaptcha.html:generic-api-key:19
+# public reCAPTCHA/CAPTCHA test site key or fixture
+f683f5da878c2d04d243db113b43bbab0cbef1dc:packages/extension/test/pagelib-captcha.test.ts:generic-api-key:19
+# public reCAPTCHA/CAPTCHA test site key or fixture
+28eef5df1266a3fde418fee1acf5d5db48d8d96d:packages/protocol/test/captcha.test.ts:generic-api-key:38
+# public reCAPTCHA/CAPTCHA test site key or fixture
+28eef5df1266a3fde418fee1acf5d5db48d8d96d:packages/bridge/test/captcha-providers.test.ts:generic-api-key:7
+# public reCAPTCHA/CAPTCHA test site key or fixture
+28eef5df1266a3fde418fee1acf5d5db48d8d96d:packages/bridge/test/captcha-providers.test.ts:generic-api-key:30
+# Chrome extension public key; public by design
+176a3b6568c5847d57aafaa2f2fab6155fc0437e:packages/extension/manifest.json:generic-api-key:7
+# Chrome extension public key; public by design
+cb8c8e403413b7be6aa7c586123ad1c4ff229d1c:packages/extension/manifest.json:generic-api-key:7
