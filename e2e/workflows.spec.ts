@@ -28,6 +28,8 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   } finally {
     await panel.close();
   }
+  const missingInput = await h.ok(c, "workflow.run", { id: recipe.id, tabId });
+  expect(missingInput.json.run).toMatchObject({ state: "blocked", reasonCode: "ASSERTION_FAILED" });
   const replay = await h.ok(c, "workflow.run", { id: recipe.id, tabId, inputs: { "{{SEARCH}}": "widgets" } });
   expect(replay.json.run.state, JSON.stringify(replay.json.run)).toBe("succeeded");
   const history = await h.ok(c, "workflow.runs", { id: recipe.id });
