@@ -118,6 +118,17 @@ export async function reviewWorkflow(id: string, approve: boolean, dedupeKey?: s
   return recipe;
 }
 
+/** The user may trim a draft before review, but reviewed recipes are immutable except repairs. */
+export async function removeWorkflowStep(id: string, index: number) {
+  const recipe = (await load()).find((entry) => entry.id === id);
+  if (!recipe) throw new Error(`No workflow recipe "${id}"`);
+  if (recipe.status !== "draft") throw new Error("Only draft recipes can be edited");
+  if (!Number.isInteger(index) || index < 0 || index >= recipe.steps.length) throw new Error("Workflow step was not found");
+  recipe.steps.splice(index, 1);
+  await save();
+  return recipe;
+}
+
 export async function listWorkflowRuns(recipeId?: string) {
   return (await loadRuns()).filter((r) => !recipeId || r.recipeId === recipeId).map((r) => ({ ...r, repairs: [...r.repairs] }));
 }

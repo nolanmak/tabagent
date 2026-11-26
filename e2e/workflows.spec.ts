@@ -17,6 +17,8 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
 
   const panel = await h.openPanel();
   try {
+    await expect(panel.locator("#workflows")).toContainText("click: Click me");
+    await expect(panel.locator(`button[data-delete-workflow-step="${recipe.id}"]`)).toHaveCount(3);
     await panel.locator(`input[data-dedupe-key="${recipe.id}"]`).fill("fixture-report-v1");
     await panel.locator(`input[data-url-assertion="${recipe.id}"]`).fill("/index.html");
     await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();

@@ -108,7 +108,14 @@ function renderWorkflows() {
   tabSelect.innerHTML = (state.workflowTabs ?? []).map((tab: any) => `<option value="${Number(tab.id)}">${esc(tab.title).slice(0, 80)}</option>`).join("") || `<option value="">No web tabs available</option>`;
   if ([...tabSelect.options].some((option) => option.value === previous)) tabSelect.value = previous;
   $("workflows").innerHTML = list
-    .map((w) => `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}</span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`)
+    .map((w) => {
+      const steps = (w.steps ?? []).map((step: any, index: number) => {
+        const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
+        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? step.key : target;
+        return `<li class="small">${esc(step.kind)}: ${esc(detail)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>` : ""}</li>`;
+      }).join("");
+      return `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}<ol class="workflow-steps">${steps}</ol></span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`;
+    })
     .join("") || `<li class="muted">No captured recipes yet.</li>`;
 }
 
@@ -211,6 +218,10 @@ $("sessions").addEventListener("click", (e) => {
 });
 $("workflows").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
+  if (b?.dataset.deleteWorkflowStep) {
+    send({ type: "ui.workflow.remove_step", id: b.dataset.deleteWorkflowStep, index: Number(b.dataset.stepIndex) }).then(refresh);
+    return;
+  }
   if (b?.dataset.reviewWorkflow) {
     const id = b.dataset.reviewWorkflow;
     const key = document.querySelector<HTMLInputElement>(`input[data-dedupe-key="${CSS.escape(id)}"]`)?.value;
