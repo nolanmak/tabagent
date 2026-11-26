@@ -31,6 +31,15 @@ describe("workflow capture (#68, #69)", () => {
     expect(chooseLocatorCandidate(wanted, candidates)).toMatchObject({ selector: "#new", score: expect.any(Number) });
   });
 
+  it("self-heals a small label addition only with the same role and a clear margin", () => {
+    const wanted = { role: "button", name: "Download statement", selector: "#old" };
+    const candidates: LocatorCandidate[] = [
+      { role: "button", name: "Download statement PDF", selector: "#new" },
+      { role: "button", name: "Contact support", selector: "#other" },
+    ];
+    expect(chooseLocatorCandidate(wanted, candidates)).toMatchObject({ selector: "#new" });
+  });
+
   it("does not self-heal an ambiguous or low-confidence target", () => {
     const wanted = { role: "button", name: "Download", selector: "#old" };
     const same: LocatorCandidate[] = [
