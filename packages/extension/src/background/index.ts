@@ -392,7 +392,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "ui.workflow.list":
         return { workflows: await listWorkflows() };
       case "ui.workflow.review":
-        return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined, typeof msg.urlIncludes === "string" ? msg.urlIncludes : undefined) };
+      {
+        const workflow = await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined, typeof msg.urlIncludes === "string" ? msg.urlIncludes : undefined);
+        sendEvent("workflow.review", { recipeId: workflow.id, status: workflow.status, decision: msg.approve === true ? "approved" : "draft" });
+        return { workflow };
+      }
       case "ui.workflow.remove_step":
         return { workflow: await removeWorkflowStep(String(msg.id), Number(msg.index)) };
       case "ui.workflow.parameterize_step":
@@ -402,12 +406,15 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => undefined) : undefined;
         if (!tab?.id || !/^https?:/i.test(tab.pendingUrl || tab.url || "")) throw new Error("Select a normal web tab before starting manual capture");
         await startCapture(tab.id, "manual", "Manual browser task");
+        sendEvent("workflow.capture", { action: "started", source: "manual", tabId: tab.id });
         return { capture: { tabId: tab.id, source: "manual" } };
       }
       case "ui.workflow.manual_stop": {
         const capture = listActiveCaptures().find((entry) => entry.source === "manual");
         if (!capture) throw new Error("No manual capture is active");
-        return { recipe: await stopCapture(capture.tabId) };
+        const recipe = await stopCapture(capture.tabId);
+        sendEvent("workflow.capture", { action: "stopped", source: "manual", tabId: capture.tabId, recipeId: recipe.id, steps: recipe.steps.length });
+        return { recipe };
       }
     }
     return { error: "unknown message" };
