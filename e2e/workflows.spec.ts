@@ -40,6 +40,10 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   expect(scheduled.json.runs).toHaveLength(before + 1);
   expect(scheduled.json.runs.at(-1).state).toBe("skipped");
   expect(scheduled.json.runs.at(-1).dedupeKey).toBe("fixture-report-v1");
+
+  await h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules(new Date(Date.now() + 60_000), false));
+  const offline = await h.ok(c, "workflow.runs", { id: recipe.id });
+  expect(offline.json.runs.at(-1)).toMatchObject({ state: "blocked", reasonCode: "NO_EXTENSION" });
 });
 
 test("#68 manual capture records trusted user events without raw secrets", async ({ h }) => {
