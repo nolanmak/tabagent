@@ -304,3 +304,21 @@ describe("DA1 credential readback (security review H1)", () => {
     expect(JSON.stringify(r)).not.toContain("hunter2-secret");
   });
 });
+
+describe("workflow capture hook", () => {
+  it("nav.goto without tabId is captured against the session's current tab", async () => {
+    const captureWorkflowStep = vi.fn(async () => undefined);
+    const w = world({ captureWorkflowStep, resolveTab: async (_s, id) => id ?? 1 });
+    const r = await w.router.handle(cmd("nav.goto", { url: "https://a.example/x" }));
+    expect(r.ok).toBe(true);
+    expect(captureWorkflowStep).toHaveBeenCalledWith(1, "nav.goto", expect.objectContaining({ url: "https://a.example/x" }), "https://a.example/x", "s1");
+  });
+  it("nav.goto in a session with no tabs still runs; capture gets no tab", async () => {
+    const captureWorkflowStep = vi.fn(async () => undefined);
+    const w = world({ captureWorkflowStep });
+    const r = await w.router.handle(cmd("nav.goto", { url: "https://a.example/x" }));
+    expect(r.ok).toBe(true);
+    expect(captureWorkflowStep).toHaveBeenCalledWith(undefined, "nav.goto", expect.anything(), "https://a.example/x", "s1");
+    expect(w.handlers["nav.goto"]).toHaveBeenCalled();
+  });
+});

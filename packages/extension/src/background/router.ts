@@ -253,7 +253,11 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         // The D17 chokepoint: exactly one authorize() per command, before any handler.
         // authorize() asks about the site first and the sensitive category second.
         await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: req.sensitive && REASONS[req.sensitive] ? [REASONS[req.sensitive]] : [] });
-        const captured = await deps.captureWorkflowStep?.(tabId, tool.name, params, url, cmd.session.id);
+        // nav.goto resolves its tab inside the handler, so look up the session's current tab here
+        // for capture only. No tab yet means nothing can be capturing; the handler still runs.
+        let captureTab = tabId;
+        if (captureTab == null && tool.name === "nav.goto" && deps.captureWorkflowStep) captureTab = await deps.resolveTab(session, params.tabId as number | undefined).catch(() => undefined);
+        const captured = await deps.captureWorkflowStep?.(captureTab, tool.name, params, url, cmd.session.id);
         if (req.sensitive && deps.holdApproval && origin) release = deps.holdApproval(cmd.session.id, origin, req.sensitive);
         if (deps.sensitivePaths) {
           try {
