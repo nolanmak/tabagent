@@ -182,8 +182,11 @@ async function findRef(tabId: number, url: string, locator: Locator): Promise<{ 
   const drv = await driverFor(tabId, url);
   const by = locator.role ? "role" : locator.label ? "label" : locator.text ? "text" : locator.selector ? "css" : "text";
   const value = locator.role ?? locator.label ?? locator.text ?? locator.selector ?? locator.name ?? "";
-  const matches = await drv.find({ by, value, ...(locator.role && locator.name ? { name: locator.name } : {}) } as any);
+  let matches = await drv.find({ by, value, ...(locator.role && locator.name ? { name: locator.name } : {}) } as any);
   if (matches.matches.length === 1) return { ref: matches.matches[0].ref };
+  // Exact role/name lookup failed or is ambiguous. Search only within the original role
+  // before scoring a repair; never broaden to arbitrary controls on the page.
+  if (locator.role) matches = await drv.find({ by: "role", value: locator.role } as any);
   const candidates = matches.matches.map((m: any) => ({ role: m.role ?? locator.role ?? "", name: m.name ?? "", selector: m.selector ?? "" }));
   const repaired = chooseLocatorCandidate(locator, candidates);
   if (!repaired) return null;

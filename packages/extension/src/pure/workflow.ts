@@ -97,6 +97,8 @@ export function chooseLocatorCandidate(wanted: Locator, candidates: readonly Loc
     })
     .sort((a, b) => b.score - a.score);
   const best = ranked[0];
-  if (!best || best.score < 0.85 || (ranked[1] && best.score - ranked[1].score < 0.15)) return null;
+  // A same-role candidate sharing most of the semantic name is a bounded repair; the
+  // substantial runner-up margin prevents a near-tie from becoming an unattended click.
+  if (!best || best.score < 0.65 || (ranked[1] && best.score - ranked[1].score < 0.15)) return null;
   return best;
 }
