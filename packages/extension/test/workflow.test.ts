@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, repairCanPersist, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
+import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, repairCanPersist, replayBlockCode, replayBlockReason, resolveReplayInput, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
 
 describe("workflow capture (#68, #69)", () => {
   it("redacts secrets and retains a semantic locator instead of a raw DOM snapshot", () => {
@@ -29,6 +29,11 @@ describe("workflow capture (#68, #69)", () => {
       locator: { role: "combobox", name: "Report period" },
       options: ["2026-11"],
     });
+  });
+
+  it("resolves a reviewed input parameter only from a supplied run input", () => {
+    expect(resolveReplayInput({ kind: "parameter", placeholder: "{{REPORT_PERIOD}}" }, { "{{REPORT_PERIOD}}": "2026-11" })).toBe("2026-11");
+    expect(resolveReplayInput({ kind: "parameter", placeholder: "{{REPORT_PERIOD}}" }, {})).toBeNull();
   });
 
   it("self-heals only an unambiguous high-confidence semantic match", () => {
