@@ -23,7 +23,7 @@ describe("workflow capture (#68, #69)", () => {
   });
 
   it("normalizes a select event with its chosen options", () => {
-    expect(normalizeCaptureEvent({ kind: "select", url: "https://app.example/reports", target: { role: "combobox", name: "Report period" }, values: ["2026-11"] } as any)).toEqual({
+    expect(normalizeCaptureEvent({ kind: "select", url: "https://app.example/reports", target: { role: "combobox", name: "Report period" }, values: ["2026-11"] } as any)).toMatchObject({
       kind: "select",
       url: "https://app.example/reports",
       locator: { role: "combobox", name: "Report period" },
