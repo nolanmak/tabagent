@@ -29,6 +29,9 @@ jobs:
           node-version: "22"
           cache: npm
           registry-url: "https://registry.npmjs.org"
+      - name: Socket Firewall in front of npm, npx and pnpm (github-ci-security)
+        if: runner.os == 'Linux'
+        run: bash .github/security/install-tools.sh sfw
       - run: npm ci
       - run: npm run check-versions -- --tag "${{ inputs.tag }}"
       - run: npm run lint
