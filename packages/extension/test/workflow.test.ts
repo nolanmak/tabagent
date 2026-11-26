@@ -22,6 +22,15 @@ describe("workflow capture (#68, #69)", () => {
     expect(classifyInput("Search", "wireless headphones")).toEqual({ kind: "fixed", value: "wireless headphones" });
   });
 
+  it("normalizes a select event with its chosen options", () => {
+    expect(normalizeCaptureEvent({ kind: "select", url: "https://app.example/reports", target: { role: "combobox", name: "Report period" }, values: ["2026-11"] } as any)).toEqual({
+      kind: "select",
+      url: "https://app.example/reports",
+      locator: { role: "combobox", name: "Report period" },
+      options: ["2026-11"],
+    });
+  });
+
   it("self-heals only an unambiguous high-confidence semantic match", () => {
     const wanted = { role: "button", name: "Download statement", selector: "#old" };
     const candidates: LocatorCandidate[] = [
