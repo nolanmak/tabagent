@@ -12,7 +12,7 @@ export type ToolLevel = Level | "none";
 export const LEVEL_RANK: Record<Level | "deny", number> = { deny: 0, read: 1, act: 2, full: 3 };
 
 /** D18 categories: a sensitive form submit, b risky click, c arbitrary JS, d credential read, e local file transfer, f tabs attach. */
-export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f" | "p";
+export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f" | "p" | "r";
 export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   a: "Submitting a form with password, card or SSN-like fields",
   b: "Click that looks like purchase, delete, send or transfer",
@@ -21,6 +21,7 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   e: "Transferring a local file (upload or reading a download)",
   f: "Taking over one of your tabs",
   p: "Changing the TabAgent denylist",
+  r: "Accepting a proposed workflow repair",
 };
 
 export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth" | "policy" | "workflow";
@@ -780,6 +781,8 @@ export const TOOLS = [
   }),
   def({ name: "workflow.schedule", group: "workflow", description: "Schedule a reviewed low-risk recipe using five-field cron and an IANA timezone. Missed runs are not replayed.", params: z.object({ id: z.string().uuid(), tabId, cron: z.string(), timeZone: z.string() }), result: loose({ schedule: z.unknown() }), level: "act", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
   def({ name: "workflow.unschedule", group: "workflow", description: "Disable a saved workflow schedule.", params: z.object({ id: z.string().uuid() }), result: loose({ ok: z.boolean() }), level: "none", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
+  def({ name: "workflow.runs", group: "workflow", description: "List inspectable local run history for workflow recipes.", params: z.object({ id: z.string().uuid().optional() }), result: loose({ runs: z.array(z.unknown()) }), level: "none", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
+  def({ name: "workflow.review_repair", group: "workflow", description: "Accept or reject a proposed locator repair after inspecting the run.", params: z.object({ recipeId: z.string().uuid(), repairId: z.string().uuid(), decision: z.enum(["accept", "reject"]) }), result: loose({ repair: z.unknown(), recipe: z.unknown() }), level: "full", sensitive: "r", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
   def({
     name: "session.info",
     group: "session",

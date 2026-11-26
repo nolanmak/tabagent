@@ -10,8 +10,8 @@ type CaptureSource = "agent" | "manual";
 type ActiveCapture = { source: CaptureSource; name: string; events: CaptureEvent[]; startedAt: number };
 const active = new Map<number, ActiveCapture>();
 let recipes: WorkflowRecipe[] | null = null;
-export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; repairs: { step: number; from: Locator; to: Locator }[] };
-let runs: WorkflowRun[] = [];
+export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; repairs: { id: string; step: number; from: Locator; to: Locator; decision?: "accept" | "reject" }[] };
+let runs: WorkflowRun[] | null = null;
 export type WorkflowSchedule = { id: string; recipeId: string; tabId: number; meta: any; cron: string; timeZone: string; enabled: boolean; lastMinute?: number };
 let schedules: WorkflowSchedule[] | null = null;
 
@@ -24,6 +24,8 @@ async function save() {
 }
 async function loadSchedules() { if (!schedules) schedules = ((await chrome.storage.local.get("workflowSchedules")).workflowSchedules as WorkflowSchedule[] | undefined) ?? []; return schedules; }
 async function saveSchedules() { await chrome.storage.local.set({ workflowSchedules: schedules ?? [] }); }
+async function loadRuns() { if (!runs) runs = ((await chrome.storage.local.get("workflowRuns")).workflowRuns as WorkflowRun[] | undefined) ?? []; return runs; }
+async function saveRuns() { await chrome.storage.local.set({ workflowRuns: runs ?? [] }); }
 
 function sourceFor(c: ActiveCapture): WorkflowRecipe["source"] {
   return c.source;
@@ -51,6 +53,22 @@ export function recordManual(tabId: number, event: CaptureEvent) {
   const capture = active.get(tabId);
   if (capture?.source === "manual") capture.events.push(event);
 }
+
+/** Navigation is part of manual capture even though the old document's listeners are gone. */
+export function recordManualNavigation(tabId: number, url: string) {
+  const capture = active.get(tabId);
+  if (capture?.source === "manual" && /^https?:/i.test(url)) capture.events.push({ kind: "navigate", url });
+}
+
+/** Kill/tab close discards armed, unsaved capture material. */
+export async function discardCapture(tabId: number) {
+  const capture = active.get(tabId);
+  if (!capture) return false;
+  active.delete(tabId);
+  if (capture.source === "manual") await removeManualListener(tabId).catch(() => {});
+  return true;
+}
+export async function discardAllCaptures() { await Promise.all([...active.keys()].map(discardCapture)); }
 
 export async function recordAgent(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string) {
   if (tabId == null || tool.startsWith("workflow.")) return;
@@ -81,7 +99,18 @@ export async function reviewWorkflow(id: string, approve: boolean) {
 }
 
 export async function listWorkflowRuns(recipeId?: string) {
-  return runs.filter((r) => !recipeId || r.recipeId === recipeId).map((r) => ({ ...r, repairs: [...r.repairs] }));
+  return (await loadRuns()).filter((r) => !recipeId || r.recipeId === recipeId).map((r) => ({ ...r, repairs: [...r.repairs] }));
+}
+export async function reviewRepair(recipeId: string, repairId: string, decision: "accept" | "reject") {
+  const run = (await loadRuns()).find((r) => r.recipeId === recipeId && r.repairs.some((x) => x.id === repairId));
+  const repair = run?.repairs.find((x) => x.id === repairId);
+  const recipe = (await load()).find((r) => r.id === recipeId);
+  if (!run || !repair || !recipe) throw new Error("Repair proposal not found");
+  repair.decision = decision;
+  if (decision === "accept" && recipe.steps[repair.step]) recipe.steps[repair.step].locator = repair.to;
+  await save();
+  await saveRuns();
+  return { repair, recipe };
 }
 export async function listWorkflowSchedules() { return (await loadSchedules()).map((s) => ({ ...s, meta: undefined })); }
 export async function scheduleWorkflow(recipeId: string, tabId: number, meta: any, cron: string, timeZone: string) {
@@ -120,8 +149,9 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
   const recipe = (await load()).find((r) => r.id === recipeId);
   if (!recipe) throw new Error(`No workflow recipe "${recipeId}"`);
   const run: WorkflowRun = { id: crypto.randomUUID(), recipeId, startedAt: Date.now(), state: "queued", repairs: [] };
-  runs = [...runs.slice(-99), run];
-  if (recipe.status !== "reviewed") return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: "recipe has not been reviewed in the extension" });
+  runs = [...(await loadRuns()).slice(-99), run];
+  const finish = async <T extends Partial<WorkflowRun>>(patch: T) => { Object.assign(run, patch); await saveRuns(); return run; };
+  if (recipe.status !== "reviewed") return finish({ state: "blocked" as const, endedAt: Date.now(), reason: "recipe has not been reviewed in the extension" });
   run.state = "running";
   try {
     // A scheduled recipe never gains access merely because it remembers a tab id.
@@ -131,7 +161,7 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
       run.step = i;
       const step = recipe.steps[i];
       const blocked = replayBlockReason(step);
-      if (blocked) return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: ${blocked}` });
+      if (blocked) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: ${blocked}` });
       const tab = await chrome.tabs.get(tabId);
       const url = tab.pendingUrl || tab.url || "";
       if (step.kind === "navigate") {
@@ -141,16 +171,16 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
       }
       await requireSite(meta, url, "act", "workflow.run", `replay workflow step ${i + 1}`);
       const found = step.locator ? await findRef(tabId, url, step.locator) : null;
-      if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !found) return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous` });
-      if (found?.repair && step.locator) run.repairs.push({ step: i, from: step.locator, to: found.repair });
+      if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !found) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous` });
+      if (found?.repair && step.locator) run.repairs.push({ id: crypto.randomUUID(), step: i, from: step.locator, to: found.repair });
       const drv = await driverFor(tabId, url);
       if (step.kind === "click") await drv.click(found!.ref);
       else if (step.kind === "input") await drv.fill(found!.ref, (step.value as any).value);
       else if (step.kind === "press") await drv.press(step.key ?? "");
     }
-    return Object.assign(run, { state: "succeeded" as const, endedAt: Date.now() });
+    return finish({ state: "succeeded" as const, endedAt: Date.now() });
   } catch (e) {
-    return Object.assign(run, { state: "failed" as const, endedAt: Date.now(), reason: String((e as Error).message ?? e).slice(0, 300) });
+    return finish({ state: "failed" as const, endedAt: Date.now(), reason: String((e as Error).message ?? e).slice(0, 300) });
   }
 }
 

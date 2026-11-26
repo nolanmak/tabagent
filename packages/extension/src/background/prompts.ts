@@ -16,6 +16,7 @@ export const CATEGORY_TEXT: Record<SensitiveCategory, string> = {
   f: "Take over a tab you opened",
   g: "Sign in to a site with one of your saved accounts",
   p: "Change the TabAgent denylist",
+  r: "Accept a proposed workflow repair",
 };
 
 export interface PromptInfo {

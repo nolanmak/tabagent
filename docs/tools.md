@@ -60,6 +60,8 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`workflow.run`](#workflowrun) | `workflow_run` | act | — | full only | supported | extension |
 | [`workflow.schedule`](#workflowschedule) | `workflow_schedule` | act | — | full only | supported | extension |
 | [`workflow.unschedule`](#workflowunschedule) | `workflow_unschedule` | none | — | full only | supported | extension |
+| [`workflow.runs`](#workflowruns) | `workflow_runs` | none | — | full only | supported | extension |
+| [`workflow.review_repair`](#workflowreview_repair) | `workflow_review_repair` | full | r | full only | supported | extension |
 | [`session.info`](#sessioninfo) | `session_info` | none | — | full only | supported | extension |
 | [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
@@ -677,6 +679,28 @@ MCP name `workflow_unschedule` · level none · profiles full only · lite suppo
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `id` | string | yes |  |
+
+### workflow.runs
+
+List inspectable local run history for workflow recipes.
+
+MCP name `workflow_runs` · level none · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `id` | string |  |  |
+
+### workflow.review_repair
+
+Accept or reject a proposed locator repair after inspecting the run.
+
+MCP name `workflow_review_repair` · level full · profiles full only · lite supported · sensitive r · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `recipeId` | string | yes |  |
+| `repairId` | string | yes |  |
+| `decision` | "accept" \| "reject" | yes |  |
 
 ## session
 

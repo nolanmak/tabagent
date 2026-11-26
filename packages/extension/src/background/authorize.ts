@@ -34,7 +34,7 @@ const TABS_ACTIONS: Record<string, { level: Level | "none"; sensitive?: Sensitiv
   attach: { level: "read", sensitive: "f" },
 };
 
-const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f", "g", "p"]);
+const CATEGORIES = new Set(["a", "b", "c", "d", "e", "f", "g", "p", "r"]);
 
 /** Where the URL being authorized comes from. */
 export type UrlSource = "tab" | "param" | "tab-or-param" | "download" | "attach-target" | "none";
@@ -51,7 +51,7 @@ export interface Requirements {
 }
 
 /** Tools that work without a session tab. */
-const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end", "policy.denylist_change", "workflow.list", "workflow.unschedule"]);
+const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end", "policy.denylist_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair"]);
 
 export function requirementsFor(tool: ToolLike, params: Record<string, unknown>): Requirements {
   const levelOf = (l: Level | "none" | undefined) => (l && l !== "none" ? l : null);

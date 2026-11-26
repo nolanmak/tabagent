@@ -7,9 +7,9 @@
 export type Level = "read" | "act" | "full";
 export type StoredPolicy = Level | "deny";
 /** D18 categories. a/b are detected dynamically by handlers; c-f are static per registry. */
-export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "p";
+export type SensitiveCategory = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "p" | "r";
 /** a-e pre-approve per origin; f (attach), g (auth), p (policy) never persist a grant. */
-export type PreapprovableCategory = Exclude<SensitiveCategory, "f" | "g" | "p">;
+export type PreapprovableCategory = Exclude<SensitiveCategory, "f" | "g" | "p" | "r">;
 
 export const LEVELS: Level[] = ["read", "act", "full"];
 export const RANK: Record<StoredPolicy, number> = { deny: 0, read: 1, act: 2, full: 3 };
@@ -227,7 +227,7 @@ function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | 
     return { decision: "ask", kind: "sensitive", origin, category: "g" };
   }
   const key = origin ?? (isBlank(req.url) ? "about:blank" : req.url);
-  if (cat !== "f" && cat !== "p") {
+  if (cat !== "f" && cat !== "p" && cat !== "r") {
     if (state.devAllowSensitive || state.yolo) return { decision: "allow", origin };
     if (origin && state.sites[origin]?.preapproved?.[cat]) return { decision: "allow", origin };
   }
@@ -258,7 +258,7 @@ export function applySiteAnswer(state: PolicyState, sessionId: string, origin: s
 
 /** Sensitive prompt answer: only "always" changes state (per-origin per-category pre-approval, never f). */
 export function applySensitiveAnswer(state: PolicyState, origin: string, category: SensitiveCategory, answer: Answer, accountId?: string): PolicyState {
-  if (answer !== "always" || category === "f" || category === "p" || !originOf(origin)) return state;
+  if (answer !== "always" || category === "f" || category === "p" || category === "r" || !originOf(origin)) return state;
   if (category === "g") {
     if (!accountId) return state;
     const e = state.sites[origin] ?? {};

@@ -22,7 +22,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
-import { listWorkflows, recordAgent, recordManual, reviewWorkflow, runDueSchedules } from "./workflows";
+import { discardAllCaptures, discardCapture, listWorkflows, recordAgent, recordManual, recordManualNavigation, reviewWorkflow, runDueSchedules } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve"];
@@ -280,6 +280,7 @@ async function kill() {
   prompts.dropAll("killed");
   rejectAllFiles(new TabAgentError("KILLED", "The user stopped all agents with the TabAgent kill switch"));
   fireKilled();
+  await discardAllCaptures();
   endAllHandoffs();
   for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
@@ -298,6 +299,10 @@ async function resume() {
 
 chrome.commands.onCommand.addListener((c) => {
   if (c === "kill-switch") kill();
+});
+chrome.tabs.onRemoved.addListener((tabId) => void discardCapture(tabId));
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === "loading" && change.url) recordManualNavigation(tabId, change.url);
 });
 
 // ---------------------------------------------------------------------------

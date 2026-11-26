@@ -1,4 +1,4 @@
-import { listWorkflows, runWorkflow, scheduleWorkflow, startCapture, stopCapture, unscheduleWorkflow } from "../workflows";
+import { listWorkflowRuns, listWorkflows, reviewRepair, runWorkflow, scheduleWorkflow, startCapture, stopCapture, unscheduleWorkflow } from "../workflows";
 
 export const workflowHandlers = {
   "workflow.capture_start": async ({ tabId, p }: any) => {
@@ -17,4 +17,6 @@ export const workflowHandlers = {
   },
   "workflow.schedule": async ({ tabId, p, meta }: any) => ({ schedule: await scheduleWorkflow(p.id, tabId, meta, p.cron, p.timeZone) }),
   "workflow.unschedule": async ({ p }: any) => { await unscheduleWorkflow(p.id); return { ok: true }; },
+  "workflow.runs": async ({ p }: any) => ({ runs: await listWorkflowRuns(p.id) }),
+  "workflow.review_repair": async ({ p }: any) => reviewRepair(p.recipeId, p.repairId, p.decision),
 };

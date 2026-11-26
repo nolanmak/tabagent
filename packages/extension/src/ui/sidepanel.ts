@@ -42,11 +42,13 @@ function promptHtml(p: any) {
         ? `${p.sensitive.description} · on ${p.origin}`
         : `on ${p.origin}`;
   const isAuth = p.sensitive?.category === "g";
-  const always = p.kind === "attach" ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
+  const oneShot = p.kind === "attach" || p.sensitive?.category === "p" || p.sensitive?.category === "r";
+  const always = oneShot ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
   const left = Math.max(0, Math.round((p.expires - Date.now()) / 1000));
   return `<li class="prompt-item" data-prompt-id="${esc(p.promptId)}">
     <div class="ptitle">${esc(title)}</div>
     <div class="muted small pdetail">${esc(detail)}</div>
+    <div class="muted small psummary">${esc(p.summary)}</div>
     <ul class="preasons reasons">${(p.reasons ?? []).map((r: string) => `<li>${esc(r)}</li>`).join("")}</ul>
     <div class="muted small">Tool: ${esc(p.tool)} · <span class="countdown" data-expires="${Number(p.expires)}">${left}s</span></div>
     <div class="actions"><button data-a="deny" data-id="${esc(p.promptId)}">Deny</button>${always}<button data-a="once" data-id="${esc(p.promptId)}" class="primary">Allow once</button></div>

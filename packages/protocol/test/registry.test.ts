@@ -103,6 +103,8 @@ const LEVELS: Record<string, string> = {
   "workflow.run": "act",
   "workflow.schedule": "act",
   "workflow.unschedule": "none",
+  "workflow.runs": "none",
+  "workflow.review_repair": "full",
   "session.info": "none",
   "session.permissions": "none",
   "session.end": "none",
@@ -160,7 +162,7 @@ describe("D18 static sensitivity", () => {
   });
   it("no other tool is statically sensitive", () => {
     const statics = tools.filter((t) => t.sensitive || Object.values(t.actions ?? {}).some((a) => a.sensitive)).map((t) => t.name);
-    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "storage.get", "tabs"].sort());
+    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "storage.get", "tabs", "workflow.review_repair"].sort());
   });
 });
 
