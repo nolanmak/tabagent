@@ -15,7 +15,7 @@ export const workflowHandlers = {
     if (tabId == null) throw new Error("Workflow replay needs an owned tab");
     return { run: await runWorkflow(p.id, tabId, meta, p.inputs ?? {}) };
   },
-  "workflow.schedule": async ({ tabId, p, meta }: any) => ({ schedule: await scheduleWorkflow(p.id, tabId, meta, p.cron, p.timeZone) }),
+  "workflow.schedule": async ({ tabId, p, meta }: any) => ({ schedule: await scheduleWorkflow(p.id, tabId, meta, p.cron, p.timeZone, p.inputs ?? {}) }),
   "workflow.unschedule": async ({ p }: any) => { await unscheduleWorkflow(p.id); return { ok: true }; },
   "workflow.runs": async ({ p }: any) => ({ runs: await listWorkflowRuns(p.id) }),
   "workflow.review_repair": async ({ p }: any) => reviewRepair(p.recipeId, p.repairId, p.decision),

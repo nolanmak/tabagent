@@ -91,6 +91,18 @@ export function shouldSkipDuplicate(key: string | undefined, priorRuns: readonly
   return !!key && priorRuns.some((run) => run.state === "succeeded" && run.dedupeKey === key);
 }
 
+/** Resolve a reviewed idempotency template from explicit run inputs only. */
+export function resolveDedupeKey(template: string | undefined, inputs: Record<string, string>) {
+  if (!template) return undefined;
+  let missing = false;
+  const value = template.replace(/\{\{[A-Z][A-Z0-9_]*\}\}/g, (placeholder) => {
+    const input = inputs[placeholder];
+    if (input == null) { missing = true; return placeholder; }
+    return input;
+  });
+  return missing ? null : value;
+}
+
 export function assertionsPass(assertions: readonly WorkflowAssertion[] | undefined, url: string) {
   return (assertions ?? []).every((assertion) => assertion.kind === "url_includes" && url.includes(assertion.value));
 }

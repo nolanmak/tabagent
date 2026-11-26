@@ -660,7 +660,7 @@ MCP name `workflow_run` · level act · profiles full only · lite supported · 
 
 ### workflow.schedule
 
-Schedule a reviewed low-risk recipe using five-field cron and an IANA timezone. Missed runs are not replayed.
+Schedule a reviewed low-risk recipe using five-field cron and an IANA timezone. Inputs are explicit reviewed parameter values; missed runs are not replayed.
 
 MCP name `workflow_schedule` · level act · profiles full only · lite supported · handled by extension
 
@@ -670,6 +670,7 @@ MCP name `workflow_schedule` · level act · profiles full only · lite supporte
 | `tabId` | number |  | Default: active tab |
 | `cron` | string | yes |  |
 | `timeZone` | string | yes |  |
+| `inputs` | object |  |  |
 
 ### workflow.unschedule
 

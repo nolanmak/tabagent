@@ -1,6 +1,6 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
+import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
 import { downloadAfter, downloadsFromTabSince } from "./downloads";
 import { requireSite } from "./permissions";
@@ -14,7 +14,7 @@ const active = new Map<number, ActiveCapture>();
 let recipes: WorkflowRecipe[] | null = null;
 export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; reasonCode?: WorkflowRunReason; dedupeKey?: string; repairs: { id: string; step: number; from: Locator; to: Locator; decision?: "accept" | "reject" }[] };
 let runs: WorkflowRun[] | null = null;
-export type WorkflowSchedule = { id: string; recipeId: string; tabId: number; meta: any; cron: string; timeZone: string; enabled: boolean; lastMinute?: number };
+export type WorkflowSchedule = { id: string; recipeId: string; tabId: number; meta: any; inputs: Record<string, string>; cron: string; timeZone: string; enabled: boolean; lastMinute?: number };
 let schedules: WorkflowSchedule[] | null = null;
 // Chrome alarms and test/manual ticks may arrive together. Loading storage is async, so the
 // lastMinute guard alone is not a mutex; serialize a tick to prevent duplicate cron runs.
@@ -203,12 +203,12 @@ export async function reviewRepair(recipeId: string, repairId: string, decision:
   return { repair, recipe };
 }
 export async function listWorkflowSchedules() { return (await loadSchedules()).map((s) => ({ ...s, meta: undefined })); }
-export async function scheduleWorkflow(recipeId: string, tabId: number, meta: any, cron: string, timeZone: string) {
+export async function scheduleWorkflow(recipeId: string, tabId: number, meta: any, cron: string, timeZone: string, inputs: Record<string, string> = {}) {
   const recipe = (await load()).find((r) => r.id === recipeId);
   if (!recipe) throw new Error(`No workflow recipe "${recipeId}"`);
   if (recipe.status !== "reviewed") throw new Error("Only reviewed recipes can be scheduled");
   parseCron(cron); new Intl.DateTimeFormat("en-US", { timeZone }).format();
-  const schedule: WorkflowSchedule = { id: crypto.randomUUID(), recipeId, tabId, meta: { id: meta.id, label: meta.label, cap: meta.cap, sites: meta.sites }, cron, timeZone, enabled: true };
+  const schedule: WorkflowSchedule = { id: crypto.randomUUID(), recipeId, tabId, meta: { id: meta.id, label: meta.label, cap: meta.cap, sites: meta.sites }, inputs, cron, timeZone, enabled: true };
   schedules = [...await loadSchedules(), schedule]; await saveSchedules();
   await chrome.alarms.create("tabagent-workflows", { periodInMinutes: 1 });
   return schedule;
@@ -226,7 +226,7 @@ async function runDueSchedulesOnce(now: Date, extensionConnected: boolean) {
   const minute = Math.floor(now.getTime() / 60_000); const due: WorkflowRun[] = [];
   for (const s of await loadSchedules()) if (s.enabled && s.lastMinute !== minute && cronMatches(s.cron, now, s.timeZone)) {
     s.lastMinute = minute;
-    due.push(extensionConnected ? await runWorkflow(s.recipeId, s.tabId, s.meta) : await recordScheduledBlock(s.recipeId, "NO_EXTENSION", "the paired extension bridge is offline"));
+    due.push(extensionConnected ? await runWorkflow(s.recipeId, s.tabId, s.meta, s.inputs) : await recordScheduledBlock(s.recipeId, "NO_EXTENSION", "the paired extension bridge is offline"));
   }
   await saveSchedules(); return due;
 }
@@ -258,11 +258,13 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any, in
   const recipe = (await load()).find((r) => r.id === recipeId);
   if (!recipe) throw new Error(`No workflow recipe "${recipeId}"`);
   const priorRuns = await loadRuns();
-  const run: WorkflowRun = { id: crypto.randomUUID(), recipeId, startedAt: Date.now(), state: "queued", ...(recipe.dedupeKey ? { dedupeKey: recipe.dedupeKey } : {}), repairs: [] };
+  const resolvedDedupeKey = resolveDedupeKey(recipe.dedupeKey, inputs);
+  const run: WorkflowRun = { id: crypto.randomUUID(), recipeId, startedAt: Date.now(), state: "queued", ...(typeof resolvedDedupeKey === "string" ? { dedupeKey: resolvedDedupeKey } : {}), repairs: [] };
   runs = [...priorRuns.slice(-99), run];
   const finish = async <T extends Partial<WorkflowRun>>(patch: T) => { Object.assign(run, patch); await saveRuns(); return run; };
   if (recipe.status !== "reviewed") return finish({ state: "blocked" as const, endedAt: Date.now(), reason: "recipe has not been reviewed in the extension" });
-  if (shouldSkipDuplicate(recipe.dedupeKey, priorRuns.filter((candidate) => candidate.recipeId === recipeId))) return finish({ state: "skipped" as const, endedAt: Date.now(), reason: "a completed run already has this recipe's dedupe key" });
+  if (resolvedDedupeKey === null) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: "a required dedupe-key input was not provided", reasonCode: "ASSERTION_FAILED" });
+  if (shouldSkipDuplicate(resolvedDedupeKey, priorRuns.filter((candidate) => candidate.recipeId === recipeId))) return finish({ state: "skipped" as const, endedAt: Date.now(), reason: "a completed run already has this recipe's dedupe key" });
   run.state = "running";
   try {
     // A scheduled recipe never gains access merely because it remembers a tab id.

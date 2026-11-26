@@ -22,7 +22,7 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
     await expect(panel.locator(`button[data-delete-workflow-step="${recipe.id}"]`)).toHaveCount(4);
     await panel.locator(`button[data-parameterize-workflow-step="${recipe.id}"]`).click();
     await expect(panel.locator("#workflows")).toContainText("{{SEARCH}}");
-    await panel.locator(`input[data-dedupe-key="${recipe.id}"]`).fill("fixture-report-v1");
+    await panel.locator(`input[data-dedupe-key="${recipe.id}"]`).fill("fixture-{{SEARCH}}");
     await panel.locator(`input[data-url-assertion="${recipe.id}"]`).fill("/index.html");
     await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
     await expect(panel.locator("#workflows")).toContainText("reviewed");
@@ -36,7 +36,7 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   const history = await h.ok(c, "workflow.runs", { id: recipe.id });
   expect(history.json.runs.at(-1).state).toBe("succeeded");
 
-  await h.ok(c, "workflow.schedule", { id: recipe.id, tabId, cron: "* * * * *", timeZone: "UTC" });
+  await h.ok(c, "workflow.schedule", { id: recipe.id, tabId, cron: "* * * * *", timeZone: "UTC", inputs: { "{{SEARCH}}": "widgets" } });
   const before = history.json.runs.length;
   // Alarm delivery and a foreground tick can overlap. The cron minute still has exactly one run.
   await Promise.all([
@@ -46,7 +46,7 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   const scheduled = await h.ok(c, "workflow.runs", { id: recipe.id });
   expect(scheduled.json.runs).toHaveLength(before + 1);
   expect(scheduled.json.runs.at(-1).state).toBe("skipped");
-  expect(scheduled.json.runs.at(-1).dedupeKey).toBe("fixture-report-v1");
+  expect(scheduled.json.runs.at(-1).dedupeKey).toBe("fixture-widgets");
 
   await h.sw.evaluate(() => (globalThis as any).__tabagent.runDueSchedules(new Date(Date.now() + 60_000), false));
   const offline = await h.ok(c, "workflow.runs", { id: recipe.id });

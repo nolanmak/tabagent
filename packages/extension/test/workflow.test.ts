@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, repairCanPersist, replayBlockCode, replayBlockReason, resolveReplayInput, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
+import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
 
 describe("workflow capture (#68, #69)", () => {
   it("redacts secrets and retains a semantic locator instead of a raw DOM snapshot", () => {
@@ -99,6 +99,12 @@ describe("workflow capture (#68, #69)", () => {
     expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-10", state: "succeeded" }])).toBe(false);
     expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-11", state: "failed" }])).toBe(false);
     expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-11", state: "succeeded" }])).toBe(true);
+  });
+
+  it("resolves an idempotency key from declared run inputs", () => {
+    expect(resolveDedupeKey("statement-{{PERIOD}}", { "{{PERIOD}}": "2026-11" })).toBe("statement-2026-11");
+    expect(resolveDedupeKey("statement-{{PERIOD}}", {})).toBeNull();
+    expect(resolveDedupeKey("static-key", {})).toBe("static-key");
   });
 
   it("requires every reviewed URL postcondition", () => {
