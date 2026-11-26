@@ -47,8 +47,10 @@ export function buildRecipe(id: string, name: string, source: WorkflowRecipe["so
 }
 
 const UNSAFE = /delete|remove|destroy|send|submit|pay|purchase|buy|transfer|withdraw|deposit|wire|upload|invite|share|account|password|sign.?in|log.?in|mfa|otp|verify/i;
+const STEP_KINDS = new Set<WorkflowStep["kind"]>(["navigate", "click", "input", "select", "press"]);
 /** A replay recipe is deliberately narrower than interactive agent actions. */
 export function replayBlockReason(step: WorkflowStep): string | null {
+  if (!STEP_KINDS.has(step.kind)) return "unknown workflow step kind";
   if (step.kind === "input" && step.value?.kind !== "fixed") return "input needs a secret, or was intentionally omitted";
   if (step.kind === "input" && OMIT.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "input target looks sensitive, so its value cannot be replayed";
   if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "target looks like a sensitive or irreversible action";
@@ -59,6 +61,7 @@ export function replayBlockReason(step: WorkflowStep): string | null {
 
 /** Machine-readable counterpart to replayBlockReason for history, CLI and notifications. */
 export function replayBlockCode(step: WorkflowStep): WorkflowRunReason | null {
+  if (!STEP_KINDS.has(step.kind)) return "SENSITIVE_ACTION";
   if (step.kind === "input" && step.value?.kind !== "fixed") return "SENSITIVE_ACTION";
   if (step.kind === "input" && OMIT.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "SENSITIVE_ACTION";
   if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "SENSITIVE_ACTION";

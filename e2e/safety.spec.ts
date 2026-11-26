@@ -120,7 +120,7 @@ test("#67 rejecting a denylist change leaves extension policy unchanged", async 
     changes: [{ op: "remove", glob: "*.chase.com" }],
     reason: "this must not apply when denied",
   }));
-  expect(denied.result.text).toContain("PERMISSION_DENIED");
+  expect((denied.result as any).text).toContain("PERMISSION_DENIED");
   expect((await settings(h)).denylist).toEqual(before.denylist);
 });
 
