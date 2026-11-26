@@ -722,7 +722,7 @@ export const TOOLS = [
       changes: z.array(z.object({ op: z.enum(["add", "remove"]), glob: z.string() })).min(1).max(50),
       reason: z.string().min(1).max(500),
     }),
-    result: loose({ denylist: z.array(z.string()), applied: z.array(z.object({ op: z.enum(["add", "remove"]), glob: z.string() })) }),
+    result: loose({ status: z.literal("applied"), denylist: z.array(z.string()), applied: z.array(z.object({ op: z.enum(["add", "remove"]), glob: z.string() })) }),
     level: "full",
     sensitive: "p",
     pageContent: [],

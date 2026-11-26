@@ -8,6 +8,6 @@ export const policyHandlers = {
     const current = await getSettings();
     const result = applyDenylistChanges(current.denylist, changes);
     if (result.applied.length) await updateSettings({ denylist: result.denylist });
-    return result;
+    return { status: "applied", ...result };
   },
 };

@@ -204,7 +204,18 @@ function hideBanner(tabId: number) {
 }
 
 function promptEventData(p: PromptInfo) {
-  return { promptId: p.promptId, sessionId: p.sessionId, sessionLabel: p.sessionLabel, kind: p.kind, origin: p.origin, level: p.level, category: p.sensitive?.category, tool: p.tool };
+  return {
+    promptId: p.promptId,
+    sessionId: p.sessionId,
+    sessionLabel: p.sessionLabel,
+    kind: p.kind,
+    origin: p.origin,
+    level: p.level,
+    category: p.sensitive?.category,
+    tool: p.tool,
+    // Policy changes are audited with their exact canonical diff and stated reason.
+    ...(p.sensitive?.category === "p" ? { summary: p.summary } : {}),
+  };
 }
 
 onPrompt((ev) => {
@@ -393,7 +404,11 @@ chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() =>
 chrome.alarms.create("tabagent-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "tabagent-reconnect") bridge.tick();
-  if (a.name === "tabagent-workflows") void runDueSchedules();
+  if (a.name === "tabagent-workflows") {
+    void runDueSchedules().then((runs) => {
+      for (const run of runs) sendEvent("workflow.run", { runId: run.id, recipeId: run.recipeId, state: run.state, reason: run.reason ?? "" });
+    });
+  }
 });
 chrome.runtime.onStartup.addListener(() => bridge.connect());
 chrome.runtime.onInstalled.addListener(() => bridge.connect());
