@@ -4,8 +4,9 @@ export type InputValue = { kind: "fixed"; value: string } | { kind: "secret-ref"
 export type WorkflowStep = { kind: "navigate" | "click" | "input" | "select" | "press"; url?: string; locator?: Locator; value?: InputValue; key?: string };
 export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; key?: string };
 export type LocatorCandidate = Required<Pick<Locator, "role" | "name" | "selector">> & Pick<Locator, "label" | "text" | "context">;
-export type WorkflowRecipe = { version: 1; id: string; name: string; createdAt: number; source: "agent" | "manual" | "mixed"; status: "draft" | "reviewed"; steps: WorkflowStep[]; stopRules: string[] };
-export type RunState = "queued" | "running" | "succeeded" | "blocked" | "failed" | "cancelled";
+export type WorkflowRecipe = { version: 1; id: string; name: string; createdAt: number; source: "agent" | "manual" | "mixed"; status: "draft" | "reviewed"; steps: WorkflowStep[]; stopRules: string[]; /** Human-reviewed key identifying an artifact/outcome that must not repeat. */ dedupeKey?: string };
+export type RunState = "queued" | "running" | "succeeded" | "skipped" | "blocked" | "failed" | "cancelled";
+export type WorkflowRunReason = "NO_EXTENSION" | "AUTH_REQUIRED" | "AMBIGUOUS_TARGET" | "POLICY_DENIED" | "ASSERTION_FAILED" | "SENSITIVE_ACTION";
 
 const OMIT = /pass(word)?|pin|one.?time|otp|mfa|authenticator|verification.?code|cvv|cvc|security.?code|credit.?card|card.?number|ssn|social.?security|routing|account.?number/i;
 const SECRET = /token|api.?key|secret|access.?key|private.?key/i;
@@ -52,6 +53,19 @@ export function replayBlockReason(step: WorkflowStep): string | null {
   if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "step has no semantic target";
   if (step.kind === "navigate" && !step.url) return "navigation has no URL";
   return null;
+}
+
+/** Machine-readable counterpart to replayBlockReason for history, CLI and notifications. */
+export function replayBlockCode(step: WorkflowStep): WorkflowRunReason | null {
+  if (step.kind === "input" && step.value?.kind !== "fixed") return "SENSITIVE_ACTION";
+  if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "SENSITIVE_ACTION";
+  if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "AMBIGUOUS_TARGET";
+  return null;
+}
+
+/** Only completed keys suppress a run; failed/blocked attempts remain safely retryable. */
+export function shouldSkipDuplicate(key: string | undefined, priorRuns: readonly { dedupeKey?: string; state: string }[]) {
+  return !!key && priorRuns.some((run) => run.state === "succeeded" && run.dedupeKey === key);
 }
 
 const norm = (v: string | undefined) => (v ?? "").trim().toLowerCase().replace(/\s+/g, " ");

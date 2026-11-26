@@ -1,6 +1,6 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { buildRecipe, chooseLocatorCandidate, replayBlockReason, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe } from "../pure/workflow";
+import { buildRecipe, chooseLocatorCandidate, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
@@ -10,7 +10,7 @@ type CaptureSource = "agent" | "manual";
 type ActiveCapture = { source: CaptureSource; name: string; events: CaptureEvent[]; startedAt: number };
 const active = new Map<number, ActiveCapture>();
 let recipes: WorkflowRecipe[] | null = null;
-export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; repairs: { id: string; step: number; from: Locator; to: Locator; decision?: "accept" | "reject" }[] };
+export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; reasonCode?: WorkflowRunReason; dedupeKey?: string; repairs: { id: string; step: number; from: Locator; to: Locator; decision?: "accept" | "reject" }[] };
 let runs: WorkflowRun[] | null = null;
 export type WorkflowSchedule = { id: string; recipeId: string; tabId: number; meta: any; cron: string; timeZone: string; enabled: boolean; lastMinute?: number };
 let schedules: WorkflowSchedule[] | null = null;
@@ -97,11 +97,16 @@ export async function listWorkflows() {
   return (await load()).map((r) => ({ ...r, steps: [...r.steps] }));
 }
 
-export async function reviewWorkflow(id: string, approve: boolean) {
+export async function reviewWorkflow(id: string, approve: boolean, dedupeKey?: string) {
   const all = await load();
   const recipe = all.find((r) => r.id === id);
   if (!recipe) throw new Error(`No workflow recipe "${id}"`);
-  if (approve) recipe.status = "reviewed";
+  if (approve) {
+    recipe.status = "reviewed";
+    const key = dedupeKey?.trim().slice(0, 200);
+    if (key) recipe.dedupeKey = key;
+    else delete recipe.dedupeKey;
+  }
   await save();
   return recipe;
 }
@@ -162,10 +167,12 @@ async function findRef(tabId: number, url: string, locator: Locator): Promise<{ 
 export async function runWorkflow(recipeId: string, tabId: number, meta: any): Promise<WorkflowRun> {
   const recipe = (await load()).find((r) => r.id === recipeId);
   if (!recipe) throw new Error(`No workflow recipe "${recipeId}"`);
-  const run: WorkflowRun = { id: crypto.randomUUID(), recipeId, startedAt: Date.now(), state: "queued", repairs: [] };
-  runs = [...(await loadRuns()).slice(-99), run];
+  const priorRuns = await loadRuns();
+  const run: WorkflowRun = { id: crypto.randomUUID(), recipeId, startedAt: Date.now(), state: "queued", ...(recipe.dedupeKey ? { dedupeKey: recipe.dedupeKey } : {}), repairs: [] };
+  runs = [...priorRuns.slice(-99), run];
   const finish = async <T extends Partial<WorkflowRun>>(patch: T) => { Object.assign(run, patch); await saveRuns(); return run; };
   if (recipe.status !== "reviewed") return finish({ state: "blocked" as const, endedAt: Date.now(), reason: "recipe has not been reviewed in the extension" });
+  if (shouldSkipDuplicate(recipe.dedupeKey, priorRuns.filter((candidate) => candidate.recipeId === recipeId))) return finish({ state: "skipped" as const, endedAt: Date.now(), reason: "a completed run already has this recipe's dedupe key" });
   run.state = "running";
   try {
     // A scheduled recipe never gains access merely because it remembers a tab id.
@@ -175,7 +182,7 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
       run.step = i;
       const step = recipe.steps[i];
       const blocked = replayBlockReason(step);
-      if (blocked) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: ${blocked}` });
+      if (blocked) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: ${blocked}`, reasonCode: replayBlockCode(step) ?? "SENSITIVE_ACTION" });
       const tab = await chrome.tabs.get(tabId);
       const url = tab.pendingUrl || tab.url || "";
       if (step.kind === "navigate") {
@@ -185,7 +192,7 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
       }
       await requireSite(meta, url, "act", "workflow.run", `replay workflow step ${i + 1}`);
       const found = step.locator ? await findRef(tabId, url, step.locator) : null;
-      if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !found) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous` });
+      if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !found) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous`, reasonCode: "AMBIGUOUS_TARGET" });
       if (found?.repair && step.locator) run.repairs.push({ id: crypto.randomUUID(), step: i, from: step.locator, to: found.repair });
       const drv = await driverFor(tabId, url);
       if (step.kind === "click") await drv.click(found!.ref);
@@ -194,7 +201,9 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
     }
     return finish({ state: "succeeded" as const, endedAt: Date.now() });
   } catch (e) {
-    return finish({ state: "failed" as const, endedAt: Date.now(), reason: String((e as Error).message ?? e).slice(0, 300) });
+    const reason = String((e as Error).message ?? e).slice(0, 300);
+    const reasonCode: WorkflowRunReason | undefined = /sign.?in|auth|mfa|passkey/i.test(reason) ? "AUTH_REQUIRED" : /permission|deny|scope/i.test(reason) ? "POLICY_DENIED" : undefined;
+    return finish({ state: reasonCode ? "blocked" as const : "failed" as const, endedAt: Date.now(), reason, ...(reasonCode ? { reasonCode } : {}) });
   }
 }
 

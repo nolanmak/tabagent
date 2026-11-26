@@ -17,6 +17,7 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
 
   const panel = await h.openPanel();
   try {
+    await panel.locator(`input[data-dedupe-key="${recipe.id}"]`).fill("fixture-report-v1");
     await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
     await expect(panel.locator("#workflows")).toContainText("reviewed");
   } finally {
@@ -36,7 +37,8 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   ]);
   const scheduled = await h.ok(c, "workflow.runs", { id: recipe.id });
   expect(scheduled.json.runs).toHaveLength(before + 1);
-  expect(scheduled.json.runs.at(-1).state).toBe("succeeded");
+  expect(scheduled.json.runs.at(-1).state).toBe("skipped");
+  expect(scheduled.json.runs.at(-1).dedupeKey).toBe("fixture-report-v1");
 });
 
 test("#68 manual capture records trusted user events without raw secrets", async ({ h }) => {

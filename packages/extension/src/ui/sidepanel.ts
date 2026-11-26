@@ -99,7 +99,7 @@ function renderFeed() {
 function renderWorkflows() {
   const list: any[] = state.workflows ?? [];
   $("workflows").innerHTML = list
-    .map((w) => `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span></span>${w.status === "draft" ? `<button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button>` : ""}</li>`)
+    .map((w) => `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}</span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`)
     .join("") || `<li class="muted">No captured recipes yet.</li>`;
 }
 
@@ -202,7 +202,11 @@ $("sessions").addEventListener("click", (e) => {
 });
 $("workflows").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
-  if (b?.dataset.reviewWorkflow) send({ type: "ui.workflow.review", id: b.dataset.reviewWorkflow, approve: true }).then(refresh);
+  if (b?.dataset.reviewWorkflow) {
+    const id = b.dataset.reviewWorkflow;
+    const key = document.querySelector<HTMLInputElement>(`input[data-dedupe-key="${CSS.escape(id)}"]`)?.value;
+    send({ type: "ui.workflow.review", id, approve: true, dedupeKey: key }).then(refresh);
+  }
 });
 
 const patch = (p: unknown) => send({ type: "ui.settings", patch: p }).then(refresh);

@@ -391,7 +391,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "ui.workflow.list":
         return { workflows: await listWorkflows() };
       case "ui.workflow.review":
-        return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true) };
+        return { workflow: await reviewWorkflow(String(msg.id), msg.approve === true, typeof msg.dedupeKey === "string" ? msg.dedupeKey : undefined) };
     }
     return { error: "unknown message" };
   })().then(reply, (e) => reply({ error: String((e as Error)?.message ?? e) }));
