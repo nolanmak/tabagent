@@ -89,7 +89,7 @@ export interface RouterDeps<S = unknown> {
   authorize(req: AuthorizeRequest): Promise<void>;
   /** Mark a static sensitive approval as valid for the duration of this command. */
   holdApproval?(sessionId: string, origin: string, category: SensitiveCategory): () => void;
-  handler(name: string): ((ctx: { s: S; meta: SessionMetaLike; p: any; tool: any; tabId?: number; url?: string; cmdId: string }) => Promise<unknown>) | undefined;
+  handler(name: string): ((ctx: { s: S; meta: SessionMetaLike; p: any; tool: any; tabId?: number; url?: string; cmdId: string; policySnapshot?: string }) => Promise<unknown>) | undefined;
   /**
    * DA1 (review H1): runs before authorize; throws to refuse a credential read on a tab
    * TabAgent typed a secret into. Nothing (YOLO, pre-approval) overrides it.
@@ -104,6 +104,8 @@ export interface RouterDeps<S = unknown> {
   /** Optional workflow recorder. It only receives a successful, already-authorized command. */
   captureWorkflowStep?(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string, sessionId: string): unknown | Promise<unknown>;
   recordWorkflowStep?(captured: unknown, result: unknown): void | Promise<void>;
+  /** Snapshot used to reject a policy mutation whose displayed diff went stale while prompting. */
+  policySnapshot?(): Promise<string>;
   now?(): number;
 }
 
@@ -247,6 +249,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         }
         origin = url ? originOf(url) : null;
         await deps.guard?.({ tool: tool.name, sensitive: req.sensitive, tabId, url });
+        const policySnapshot = tool.name === "policy.denylist_change" ? await deps.policySnapshot?.() : undefined;
         // The D17 chokepoint: exactly one authorize() per command, before any handler.
         // authorize() asks about the site first and the sensitive category second.
         await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: req.sensitive && REASONS[req.sensitive] ? [REASONS[req.sensitive]] : [] });
@@ -262,7 +265,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         deps.feed?.({ ...feedBase(), params: (await buildAudit({ tool: tool.name, action, origin, params, outcome: "ok", redact })).params, status: "running" });
         const h = deps.handler(tool.name);
         if (!h) throw new RouterError("UNSUPPORTED", `No handler for ${tool.name} in this extension version`);
-        const result = await h({ s: session, meta: cmd.session, p: params, tool, tabId, url, cmdId: cmd.id });
+        const result = await h({ s: session, meta: cmd.session, p: params, tool, tabId, url, cmdId: cmd.id, policySnapshot });
         await deps.recordWorkflowStep?.(captured, result);
         return result;
       };

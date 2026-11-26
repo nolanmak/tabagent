@@ -142,6 +142,7 @@ export const router = createRouter<Session>({
   onInflight: () => refreshBadge(),
   captureWorkflowStep: captureAgentStep,
   recordWorkflowStep: recordAgent,
+  policySnapshot: async () => (await getSettings()).denylist.map((glob) => glob.trim().toLowerCase()).filter(Boolean).sort().join("\u0000"),
 });
 
 // ---------------------------------------------------------------------------
