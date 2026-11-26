@@ -11,7 +11,6 @@ describe("denylist changes (#67)", () => {
     expect(changes).toEqual([
       { op: "remove", glob: "*.bank.example" },
       { op: "add", glob: "payments.example" },
-      { op: "add", glob: "payments.example" },
     ]);
     expect(applyDenylistChanges(["*.bank.example", "other.example"], changes)).toEqual({
       denylist: ["other.example", "payments.example"],
