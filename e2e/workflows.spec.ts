@@ -35,3 +35,24 @@ test("#68/#69 agent capture produces a reviewed recipe that replays safely", asy
   expect(scheduled.json.runs).toHaveLength(before + 1);
   expect(scheduled.json.runs.at(-1).state).toBe("succeeded");
 });
+
+test("#68 manual capture records trusted user events without raw secrets", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "manual-workflow-e2e" });
+  const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
+  await h.ok(c, "nav.goto", { tabId, url: `${h.A}/index.html` });
+  await h.ok(c, "workflow.capture_start", { tabId, source: "manual", name: "manual fixture task" });
+  const page = h.ctx.pages().find((p) => p.url().includes("/index.html"));
+  if (!page) throw new Error("fixture tab not found");
+  await page.click("#counter");
+  await page.locator('input[aria-label="Search"]').fill("manual widgets");
+  await page.locator('input[aria-label="Search"]').press("Tab"); // change event commits the capture
+  await page.waitForTimeout(200); // extension runtime messages are asynchronous
+  const stopped = await h.ok(c, "workflow.capture_stop", { tabId });
+  const recipe = stopped.json.recipe;
+  expect(recipe.source).toBe("manual");
+  expect(recipe.steps.map((s: any) => s.kind)).toContain("click");
+  expect(recipe.steps.map((s: any) => s.kind)).toContain("input");
+  expect(JSON.stringify(recipe)).toContain("manual widgets");
+  expect(JSON.stringify(recipe)).not.toMatch(/password|cookie|otp/i);
+});
