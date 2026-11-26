@@ -83,11 +83,12 @@ export async function captureAgentStep(tabId: number | undefined, tool: string, 
   const capture = active.get(tabId);
   if (!capture || capture.source !== "agent") return;
   if (tool === "nav.goto" && typeof params.url === "string") return { tabId, event: { kind: "navigate", url: params.url } };
-  else if ((tool === "act.click" || tool === "act.type") && typeof params.ref === "string") {
+  else if ((tool === "act.click" || tool === "act.type" || tool === "act.select") && typeof params.ref === "string") {
     const ref = params.ref;
     const info = (await driverFor(tabId, url).then((d) => d.call("info", [], { ref })).catch(() => null)) as { role?: string; name?: string; label?: string; selector?: string } | null;
     const target = info ? { role: info.role, name: info.name, label: info.label, selector: info.selector } : { name: "captured target" };
     if (tool === "act.click") return { tabId, event: { kind: "click", url, target } };
+    if (tool === "act.select" && Array.isArray(params.values) && params.values.every((value) => typeof value === "string")) return { tabId, event: { kind: "select", url, target, values: params.values as string[] } };
     if (typeof params.text === "string") return { tabId, event: { kind: "input", url, target: { ...target, value: params.text } } };
   }
   else if (tool === "act.press" && typeof params.key === "string") return { tabId, event: { kind: "press", url, key: params.key } };
@@ -228,6 +229,7 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any): P
       const drv = await driverFor(tabId, url);
       if (step.kind === "click") await drv.click(found!.ref);
       else if (step.kind === "input") await drv.fill(found!.ref, (step.value as any).value);
+      else if (step.kind === "select") await drv.call("selectOptions", [step.options!], { ref: found!.ref });
       else if (step.kind === "press") await drv.press(step.key ?? "");
     }
     const finalTab = await chrome.tabs.get(tabId);
@@ -258,7 +260,13 @@ async function installManualListener(tabId: number) {
       };
       const send = (event: unknown) => chrome.runtime.sendMessage({ type: "workflow.manual_event", event });
       const click = (e: Event) => e.target instanceof Element && send({ kind: "click", url: location.href, target: target(e.target) });
-      const change = (e: Event) => e.target instanceof Element && send({ kind: "input", url: location.href, target: target(e.target) });
+      const change = (e: Event) => {
+        if (!(e.target instanceof Element)) return;
+        if (e.target instanceof HTMLSelectElement) {
+          const values = Array.from(e.target.selectedOptions).map((option) => option.value || option.textContent || "").filter(Boolean);
+          send({ kind: "select", url: location.href, target: target(e.target), values });
+        } else send({ kind: "input", url: location.href, target: target(e.target) });
+      };
       const keydown = (e: KeyboardEvent) => ["Enter", "Escape", "Tab"].includes(e.key) && send({ kind: "press", url: location.href, key: e.key });
       document.addEventListener("click", click, true);
       document.addEventListener("change", change, true);

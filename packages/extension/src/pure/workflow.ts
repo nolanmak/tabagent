@@ -1,9 +1,9 @@
 /** Browser-independent recipe capture, redaction, and bounded locator healing. */
 export type Locator = { role?: string; name?: string; label?: string; text?: string; selector?: string; context?: string };
 export type InputValue = { kind: "fixed"; value: string } | { kind: "secret-ref"; placeholder: string } | { kind: "omit" };
-export type WorkflowStep = { kind: "navigate" | "click" | "input" | "select" | "press"; url?: string; locator?: Locator; value?: InputValue; key?: string };
+export type WorkflowStep = { kind: "navigate" | "click" | "input" | "select" | "press"; url?: string; locator?: Locator; value?: InputValue; options?: string[]; key?: string };
 export type WorkflowAssertion = { kind: "url_includes"; value: string };
-export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; key?: string };
+export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; values?: string[]; key?: string };
 export type LocatorCandidate = Required<Pick<Locator, "role" | "name" | "selector">> & Pick<Locator, "label" | "text" | "context">;
 export type WorkflowRecipe = { version: 1; id: string; name: string; createdAt: number; source: "agent" | "manual" | "mixed"; status: "draft" | "reviewed"; steps: WorkflowStep[]; assertions?: WorkflowAssertion[]; stopRules: string[]; /** Human-reviewed key identifying an artifact/outcome that must not repeat. */ dedupeKey?: string };
 export type RunState = "queued" | "running" | "succeeded" | "skipped" | "blocked" | "failed" | "cancelled";
@@ -29,6 +29,7 @@ export function normalizeCaptureEvent(event: CaptureEvent): WorkflowStep {
   const target = locator(event.target);
   if (event.kind === "navigate") return { kind: "navigate", url: event.url };
   if (event.kind === "input") return { kind: "input", ...(event.url ? { url: event.url } : {}), ...(target ? { locator: target } : {}), value: classifyInput(event.target?.name ?? event.target?.label ?? "input", event.target?.value ?? "") };
+  if (event.kind === "select") return { kind: "select", ...(event.url ? { url: event.url } : {}), ...(target ? { locator: target } : {}), options: (event.values ?? []).filter((value) => typeof value === "string").map((value) => value.slice(0, 300)).slice(0, 20) };
   if (event.kind === "press") return { kind: "press", ...(event.url ? { url: event.url } : {}), key: event.key ?? "" };
   return { kind: event.kind, ...(event.url ? { url: event.url } : {}), ...(target ? { locator: target } : {}) };
 }
@@ -55,6 +56,7 @@ export function replayBlockReason(step: WorkflowStep): string | null {
   if (step.kind === "input" && OMIT.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "input target looks sensitive, so its value cannot be replayed";
   if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "target looks like a sensitive or irreversible action";
   if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "step has no semantic target";
+  if (step.kind === "select" && !step.options?.length) return "select step has no selected option";
   if (step.kind === "navigate" && !step.url) return "navigation has no URL";
   return null;
 }
