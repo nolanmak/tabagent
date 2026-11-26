@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, replayBlockReason, type LocatorCandidate } from "../src/pure/workflow";
+import { classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, replayBlockCode, replayBlockReason, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
 
 describe("workflow capture (#68, #69)", () => {
   it("redacts secrets and retains a semantic locator instead of a raw DOM snapshot", () => {
@@ -45,5 +45,16 @@ describe("workflow capture (#68, #69)", () => {
     expect(replayBlockReason({ kind: "input", locator: { role: "textbox", name: "API token" }, value: { kind: "secret-ref", placeholder: "{{API_TOKEN}}" } })).toMatch(/secret/i);
     expect(replayBlockReason({ kind: "click", locator: { role: "button", name: "Transfer funds" } })).toMatch(/sensitive/i);
     expect(replayBlockReason({ kind: "click", locator: { role: "button", name: "Download report" } })).toBeNull();
+  });
+
+  it("uses stable, structured stop reasons", () => {
+    expect(replayBlockCode({ kind: "input", locator: { role: "textbox", name: "Password" }, value: { kind: "omit" } })).toBe("SENSITIVE_ACTION");
+    expect(replayBlockCode({ kind: "click" })).toBe("AMBIGUOUS_TARGET");
+  });
+
+  it("skips a recipe only when its reviewed dedupe key completed already", () => {
+    expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-10", state: "succeeded" }])).toBe(false);
+    expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-11", state: "failed" }])).toBe(false);
+    expect(shouldSkipDuplicate("statement-2026-11", [{ dedupeKey: "statement-2026-11", state: "succeeded" }])).toBe(true);
   });
 });
