@@ -767,6 +767,18 @@ export const TOOLS = [
     handledBy: "extension",
   }),
   def({
+    name: "workflow.run",
+    group: "workflow",
+    description: "Run a user-reviewed low-risk recipe in an owned tab. Stops for secrets, sign-in, MFA, risky actions, missing targets, or ambiguous repairs.",
+    params: z.object({ id: z.string().uuid(), tabId }),
+    result: loose({ run: z.unknown() }),
+    level: "act",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  def({
     name: "session.info",
     group: "session",
     description: "This session's id, label, tabs, mode and connection state.",

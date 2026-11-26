@@ -1,4 +1,4 @@
-import { listWorkflows, startCapture, stopCapture } from "../workflows";
+import { listWorkflows, runWorkflow, startCapture, stopCapture } from "../workflows";
 
 export const workflowHandlers = {
   "workflow.capture_start": async ({ tabId, p }: any) => {
@@ -11,4 +11,8 @@ export const workflowHandlers = {
     return { recipe: await stopCapture(tabId) };
   },
   "workflow.list": async () => ({ workflows: await listWorkflows() }),
+  "workflow.run": async ({ tabId, p, meta }: any) => {
+    if (tabId == null) throw new Error("Workflow replay needs an owned tab");
+    return { run: await runWorkflow(p.id, tabId, meta) };
+  },
 };

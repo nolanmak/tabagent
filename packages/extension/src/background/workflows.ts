@@ -1,12 +1,15 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { buildRecipe, type CaptureEvent, type WorkflowRecipe } from "../pure/workflow";
+import { buildRecipe, chooseLocatorCandidate, replayBlockReason, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe } from "../pure/workflow";
 import { driverFor } from "./driver";
+import { requireSite } from "./permissions";
 
 type CaptureSource = "agent" | "manual";
 type ActiveCapture = { source: CaptureSource; name: string; events: CaptureEvent[]; startedAt: number };
 const active = new Map<number, ActiveCapture>();
 let recipes: WorkflowRecipe[] | null = null;
+export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; repairs: { step: number; from: Locator; to: Locator }[] };
+let runs: WorkflowRun[] = [];
 
 async function load() {
   if (!recipes) recipes = ((await chrome.storage.local.get("workflows")).workflows as WorkflowRecipe[] | undefined) ?? [];
@@ -69,6 +72,59 @@ export async function reviewWorkflow(id: string, approve: boolean) {
   if (approve) recipe.status = "reviewed";
   await save();
   return recipe;
+}
+
+export async function listWorkflowRuns(recipeId?: string) {
+  return runs.filter((r) => !recipeId || r.recipeId === recipeId).map((r) => ({ ...r, repairs: [...r.repairs] }));
+}
+
+async function findRef(tabId: number, url: string, locator: Locator): Promise<{ ref: string; repair?: Locator } | null> {
+  const drv = await driverFor(tabId, url);
+  const by = locator.role ? "role" : locator.label ? "label" : locator.text ? "text" : locator.selector ? "css" : "text";
+  const value = locator.role ?? locator.label ?? locator.text ?? locator.selector ?? locator.name ?? "";
+  const matches = await drv.find({ by, value, ...(locator.role && locator.name ? { name: locator.name } : {}) } as any);
+  if (matches.matches.length === 1) return { ref: matches.matches[0].ref };
+  const candidates = matches.matches.map((m: any) => ({ role: m.role ?? locator.role ?? "", name: m.name ?? "", selector: m.selector ?? "" }));
+  const repaired = chooseLocatorCandidate(locator, candidates);
+  if (!repaired) return null;
+  const hit = matches.matches.find((m: any) => m.name === repaired.name && (m.role ?? "") === repaired.role);
+  return hit ? { ref: hit.ref, repair: repaired } : null;
+}
+
+/** Execute a reviewed, low-risk recipe in an already-owned tab. Every navigated origin is re-authorized. */
+export async function runWorkflow(recipeId: string, tabId: number, meta: any): Promise<WorkflowRun> {
+  const recipe = (await load()).find((r) => r.id === recipeId);
+  if (!recipe) throw new Error(`No workflow recipe "${recipeId}"`);
+  const run: WorkflowRun = { id: crypto.randomUUID(), recipeId, startedAt: Date.now(), state: "queued", repairs: [] };
+  runs = [...runs.slice(-99), run];
+  if (recipe.status !== "reviewed") return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: "recipe has not been reviewed in the extension" });
+  run.state = "running";
+  try {
+    for (let i = 0; i < recipe.steps.length; i++) {
+      run.step = i;
+      const step = recipe.steps[i];
+      const blocked = replayBlockReason(step);
+      if (blocked) return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: ${blocked}` });
+      const tab = await chrome.tabs.get(tabId);
+      let url = tab.pendingUrl || tab.url || "";
+      if (step.kind === "navigate") {
+        await requireSite(meta, step.url!, "act", "workflow.run", `replay workflow navigation to ${step.url}`);
+        await (await driverFor(tabId, step.url!)).navigate(step.url!, "load", 30_000);
+        continue;
+      }
+      await requireSite(meta, url, "act", "workflow.run", `replay workflow step ${i + 1}`);
+      const found = step.locator ? await findRef(tabId, url, step.locator) : null;
+      if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !found) return Object.assign(run, { state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous` });
+      if (found?.repair && step.locator) run.repairs.push({ step: i, from: step.locator, to: found.repair });
+      const drv = await driverFor(tabId, url);
+      if (step.kind === "click") await drv.click(found!.ref);
+      else if (step.kind === "input") await drv.fill(found!.ref, (step.value as any).value);
+      else if (step.kind === "press") await drv.press(step.key ?? "");
+    }
+    return Object.assign(run, { state: "succeeded" as const, endedAt: Date.now() });
+  } catch (e) {
+    return Object.assign(run, { state: "failed" as const, endedAt: Date.now(), reason: String((e as Error).message ?? e).slice(0, 300) });
+  }
 }
 
 async function installManualListener(tabId: number) {

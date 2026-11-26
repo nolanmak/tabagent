@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, type LocatorCandidate } from "../src/pure/workflow";
+import { classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, replayBlockReason, type LocatorCandidate } from "../src/pure/workflow";
 
 describe("workflow capture (#68, #69)", () => {
   it("redacts secrets and retains a semantic locator instead of a raw DOM snapshot", () => {
@@ -39,5 +39,11 @@ describe("workflow capture (#68, #69)", () => {
     ];
     expect(chooseLocatorCandidate(wanted, same)).toBeNull();
     expect(chooseLocatorCandidate(wanted, [{ role: "link", name: "Contact us", selector: "#contact" }])).toBeNull();
+  });
+
+  it("stops replay before secrets and irreversible-looking actions", () => {
+    expect(replayBlockReason({ kind: "input", locator: { role: "textbox", name: "API token" }, value: { kind: "secret-ref", placeholder: "{{API_TOKEN}}" } })).toMatch(/secret/i);
+    expect(replayBlockReason({ kind: "click", locator: { role: "button", name: "Transfer funds" } })).toMatch(/sensitive/i);
+    expect(replayBlockReason({ kind: "click", locator: { role: "button", name: "Download report" } })).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ export type WorkflowStep = { kind: "navigate" | "click" | "input" | "select" | "
 export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; key?: string };
 export type LocatorCandidate = Required<Pick<Locator, "role" | "name" | "selector">> & Pick<Locator, "label" | "text" | "context">;
 export type WorkflowRecipe = { version: 1; id: string; name: string; createdAt: number; source: "agent" | "manual" | "mixed"; status: "draft" | "reviewed"; steps: WorkflowStep[]; stopRules: string[] };
+export type RunState = "queued" | "running" | "succeeded" | "blocked" | "failed" | "cancelled";
 
 const OMIT = /pass(word)?|pin|one.?time|otp|mfa|authenticator|verification.?code|cvv|cvc|security.?code|credit.?card|card.?number|ssn|social.?security|routing|account.?number/i;
 const SECRET = /token|api.?key|secret|access.?key|private.?key/i;
@@ -41,6 +42,16 @@ export function buildRecipe(id: string, name: string, source: WorkflowRecipe["so
     steps: events.map(normalizeCaptureEvent),
     stopRules: ["MFA or unexpected sign-in", "ambiguous target", "delete, send, purchase, transfer, upload, or account-setting action"],
   };
+}
+
+const UNSAFE = /delete|remove|destroy|send|submit|pay|purchase|buy|transfer|withdraw|deposit|wire|upload|invite|share|account|password|sign.?in|log.?in|mfa|otp|verify/i;
+/** A replay recipe is deliberately narrower than interactive agent actions. */
+export function replayBlockReason(step: WorkflowStep): string | null {
+  if (step.kind === "input" && step.value?.kind !== "fixed") return "input needs a secret, or was intentionally omitted";
+  if (step.kind === "click" && UNSAFE.test([step.locator?.name, step.locator?.label, step.locator?.text].filter(Boolean).join(" "))) return "target looks like a sensitive or irreversible action";
+  if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "step has no semantic target";
+  if (step.kind === "navigate" && !step.url) return "navigation has no URL";
+  return null;
 }
 
 const norm = (v: string | undefined) => (v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
