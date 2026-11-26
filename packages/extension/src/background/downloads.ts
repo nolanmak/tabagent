@@ -28,5 +28,11 @@ export function getDownload(id: number) {
   return tracker.get(id);
 }
 
+/** Wait for a download created by this session after a workflow run started. */
+export async function downloadAfter(sessionId: string, after: number, timeoutMs: number) {
+  const item = await tracker.waitAfter(sessionId, after, timeoutMs);
+  return item ? wireDownload(item) : undefined;
+}
+
 /** Kept for older callers; attribution no longer depends on the last action. */
 export function noteAction(_sessionId: string) {}

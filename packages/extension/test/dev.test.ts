@@ -172,4 +172,14 @@ describe("download attribution (D31)", () => {
     t.onCreated({ id: 2, url: "http://a.test/b", filename: "", state: "complete" }, 5000);
     expect(t.since("S1", 4000).map((d) => d.id)).toEqual([2]);
   });
+  it("waitAfter ignores an earlier artifact and resolves only a workflow-run download", async () => {
+    const t = new DownloadTracker(owner);
+    t.noteTabDownload(1, "http://a.test/old", 1000);
+    t.onCreated({ id: 1, url: "http://a.test/old", filename: "/d/old.csv", state: "complete" }, 1000);
+    const next = t.waitAfter("S1", 2000, 1000);
+    t.noteTabDownload(1, "http://a.test/new", 2001);
+    t.onCreated({ id: 2, url: "http://a.test/new", filename: "/d/new.csv", state: "in_progress" }, 2001);
+    t.onChanged({ id: 2, state: "complete" });
+    expect((await next)?.id).toBe(2);
+  });
 });

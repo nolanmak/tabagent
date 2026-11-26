@@ -2,13 +2,14 @@
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
 import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
+import { downloadAfter } from "./downloads";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
 import { getSession, resolveTab } from "./sessions";
 import { pollUntil, urlMatcher } from "./wait";
 
 type CaptureSource = "agent" | "manual";
-type ActiveCapture = { source: CaptureSource; name: string; events: CaptureEvent[]; startedAt: number };
+type ActiveCapture = { source: CaptureSource; name: string; events: CaptureEvent[]; startedAt: number; sessionId?: string };
 const active = new Map<number, ActiveCapture>();
 let recipes: WorkflowRecipe[] | null = null;
 export type WorkflowRun = { id: string; recipeId: string; startedAt: number; endedAt?: number; state: RunState; step?: number; reason?: string; reasonCode?: WorkflowRunReason; dedupeKey?: string; repairs: { id: string; step: number; from: Locator; to: Locator; decision?: "accept" | "reject" }[] };
@@ -35,9 +36,9 @@ function sourceFor(c: ActiveCapture): WorkflowRecipe["source"] {
   return c.source;
 }
 
-export async function startCapture(tabId: number, source: CaptureSource, name: string) {
+export async function startCapture(tabId: number, source: CaptureSource, name: string, sessionId?: string) {
   if (active.has(tabId)) throw new Error("A workflow capture is already active for this tab");
-  active.set(tabId, { source, name, events: [], startedAt: Date.now() });
+  active.set(tabId, { source, name, events: [], startedAt: Date.now(), sessionId });
   if (source === "manual") await installManualListener(tabId);
 }
 
@@ -79,8 +80,13 @@ export function listActiveCaptures() {
   return [...active.entries()].map(([tabId, capture]) => ({ tabId, source: capture.source, name: capture.name, startedAt: capture.startedAt }));
 }
 
-export async function captureAgentStep(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string): Promise<{ tabId: number; event: CaptureEvent } | undefined> {
-  if (tabId == null || tool.startsWith("workflow.")) return;
+export async function captureAgentStep(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string, sessionId: string): Promise<{ tabId: number; event?: CaptureEvent; download?: true } | undefined> {
+  if (tool.startsWith("workflow.")) return;
+  if (tool === "downloads.wait") {
+    const entry = [...active.entries()].find(([, capture]) => capture.source === "agent" && capture.sessionId === sessionId);
+    return entry ? { tabId: entry[0], download: true } : undefined;
+  }
+  if (tabId == null) return;
   const capture = active.get(tabId);
   if (!capture || capture.source !== "agent") return;
   if (tool === "nav.goto" && typeof params.url === "string") return { tabId, event: { kind: "navigate", url: params.url } };
@@ -96,9 +102,19 @@ export async function captureAgentStep(tabId: number | undefined, tool: string, 
   else if (tool === "act.press" && typeof params.key === "string") return { tabId, event: { kind: "press", url, key: params.key } };
 }
 
-export function recordAgent(captured: unknown) {
-  const item = captured as { tabId?: number; event?: CaptureEvent } | undefined;
-  if (item?.tabId != null && item.event && active.get(item.tabId)?.source === "agent") active.get(item.tabId)!.events.push(item.event);
+export function recordAgent(captured: unknown, result?: unknown) {
+  const item = captured as { tabId?: number; event?: CaptureEvent; download?: boolean } | undefined;
+  const capture = item?.tabId == null ? undefined : active.get(item.tabId);
+  if (!capture || capture.source !== "agent") return;
+  if (item?.event) capture.events.push(item.event);
+  if (item?.download) {
+    const output = result as { filename?: unknown; mime?: unknown; bytes?: unknown } | undefined;
+    const filename = typeof output?.filename === "string" ? output.filename : "";
+    const extension = filename.match(/\.([a-z0-9]{1,12})$/i)?.[1]?.toLowerCase();
+    const mime = typeof output?.mime === "string" ? output.mime.slice(0, 120) : undefined;
+    const bytes = typeof output?.bytes === "number" && Number.isFinite(output.bytes) && output.bytes >= 0 ? output.bytes : undefined;
+    if (extension || mime) capture.events.push({ kind: "download", download: { ...(extension ? { extension } : {}), ...(mime ? { mime } : {}), ...(bytes != null ? { bytes } : {}) } });
+  }
 }
 
 export async function listWorkflows() {
@@ -240,6 +256,15 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any, in
         continue;
       }
       await requireSite(meta, url, "act", "workflow.run", `replay workflow step ${i + 1}`);
+      if (step.kind === "download") {
+        const timeout = Math.min(Math.max(1, step.timeoutMs ?? 30_000), 120_000);
+        const output = await downloadAfter(meta.id, run.startedAt, timeout);
+        const filename = typeof output?.filename === "string" ? output.filename : "";
+        const extension = filename.match(/\.([a-z0-9]{1,12})$/i)?.[1]?.toLowerCase();
+        const expected = step.download!;
+        if (!output || (expected.extension && extension !== expected.extension) || (expected.mime && output.mime !== expected.mime)) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: expected download artifact did not arrive`, reasonCode: "ASSERTION_FAILED" });
+        continue;
+      }
       if (step.kind === "wait") {
         const timeout = Math.min(Math.max(1, step.timeoutMs ?? 30_000), 120_000);
         const drv = await driverFor(tabId, url);

@@ -1,9 +1,11 @@
 /** Browser-independent recipe capture, redaction, and bounded locator healing. */
 export type Locator = { role?: string; name?: string; label?: string; text?: string; selector?: string; context?: string };
 export type InputValue = { kind: "fixed"; value: string } | { kind: "parameter"; placeholder: string } | { kind: "secret-ref"; placeholder: string } | { kind: "omit" };
-export type WorkflowStep = { kind: "navigate" | "wait" | "click" | "input" | "select" | "press"; url?: string; locator?: Locator; value?: InputValue; options?: string[]; key?: string; waitFor?: "load" | "networkidle" | "selector" | "text" | "url"; waitValue?: string; timeoutMs?: number };
+/** Metadata-only expectation for a download. Names, URLs, and file contents never enter a recipe. */
+export type DownloadExpectation = { extension?: string; mime?: string; bytes?: number };
+export type WorkflowStep = { kind: "navigate" | "wait" | "click" | "input" | "select" | "press" | "download"; url?: string; locator?: Locator; value?: InputValue; options?: string[]; key?: string; waitFor?: "load" | "networkidle" | "selector" | "text" | "url"; waitValue?: string; timeoutMs?: number; download?: DownloadExpectation };
 export type WorkflowAssertion = { kind: "url_includes"; value: string };
-export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; values?: string[]; key?: string };
+export type CaptureEvent = { kind: WorkflowStep["kind"]; url?: string; target?: Locator & { value?: string }; values?: string[]; key?: string; waitFor?: WorkflowStep["waitFor"]; waitValue?: string; timeoutMs?: number; download?: DownloadExpectation };
 export type LocatorCandidate = Required<Pick<Locator, "role" | "name" | "selector">> & Pick<Locator, "label" | "text" | "context">;
 export type WorkflowRecipe = { version: 1; id: string; name: string; createdAt: number; source: "agent" | "manual" | "mixed"; status: "draft" | "reviewed"; steps: WorkflowStep[]; assertions?: WorkflowAssertion[]; stopRules: string[]; /** Human-reviewed key identifying an artifact/outcome that must not repeat. */ dedupeKey?: string };
 export type RunState = "queued" | "running" | "succeeded" | "skipped" | "blocked" | "failed" | "cancelled";
@@ -36,7 +38,8 @@ function locator(target: CaptureEvent["target"]): Locator | undefined {
 export function normalizeCaptureEvent(event: CaptureEvent): WorkflowStep {
   const target = locator(event.target);
   if (event.kind === "navigate") return { kind: "navigate", url: event.url };
-  if (event.kind === "wait") return { kind: "wait", waitFor: (event as any).waitFor, ...(typeof (event as any).waitValue === "string" ? { waitValue: (event as any).waitValue } : {}), timeoutMs: (event as any).timeoutMs };
+  if (event.kind === "wait") return { kind: "wait", waitFor: event.waitFor, ...(typeof event.waitValue === "string" ? { waitValue: event.waitValue } : {}), timeoutMs: event.timeoutMs };
+  if (event.kind === "download") return { kind: "download", download: event.download, timeoutMs: event.timeoutMs };
   if (event.kind === "input") return { kind: "input", ...(event.url ? { url: event.url } : {}), ...(target ? { locator: target } : {}), value: classifyInput(event.target?.name ?? event.target?.label ?? "input", event.target?.value ?? "") };
   if (event.kind === "select") return { kind: "select", ...(event.url ? { url: event.url } : {}), ...(target ? { locator: target } : {}), options: (event.values ?? []).filter((value) => typeof value === "string").map((value) => value.slice(0, 300)).slice(0, 20) };
   if (event.kind === "press") return { kind: "press", ...(event.url ? { url: event.url } : {}), key: event.key ?? "" };
@@ -57,7 +60,7 @@ export function buildRecipe(id: string, name: string, source: WorkflowRecipe["so
 }
 
 const UNSAFE = /delete|remove|destroy|send|submit|pay|purchase|buy|transfer|withdraw|deposit|wire|upload|invite|share|account|password|sign.?in|log.?in|mfa|otp|verify/i;
-const STEP_KINDS = new Set<WorkflowStep["kind"]>(["navigate", "wait", "click", "input", "select", "press"]);
+const STEP_KINDS = new Set<WorkflowStep["kind"]>(["navigate", "wait", "click", "input", "select", "press", "download"]);
 /** A replay recipe is deliberately narrower than interactive agent actions. */
 export function replayBlockReason(step: WorkflowStep): string | null {
   if (!STEP_KINDS.has(step.kind)) return "unknown workflow step kind";
@@ -68,6 +71,7 @@ export function replayBlockReason(step: WorkflowStep): string | null {
   if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !step.locator) return "step has no semantic target";
   if (step.kind === "select" && !step.options?.length) return "select step has no selected option";
   if (step.kind === "wait" && !step.waitFor) return "wait step has no condition";
+  if (step.kind === "download" && !step.download?.extension && !step.download?.mime) return "download has no safe metadata expectation";
   if (step.kind === "navigate" && !step.url) return "navigation has no URL";
   return null;
 }

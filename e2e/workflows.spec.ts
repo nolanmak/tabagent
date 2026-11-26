@@ -81,3 +81,30 @@ test("#68 manual capture records trusted user events without raw secrets", async
   expect(JSON.stringify(recipe)).toContain("manual widgets");
   expect(JSON.stringify(recipe)).not.toMatch(/password|cookie|otp/i);
 });
+
+test("#68/#69 agent capture replays a metadata-only download checkpoint", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "workflow-download-e2e" });
+  const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
+  await h.ok(c, "workflow.capture_start", { tabId, source: "agent", name: "download csv" });
+  await h.ok(c, "nav.goto", { tabId, url: `${h.A}/downloads.html` });
+  const snap = await h.ok(c, "page.snapshot", { tabId });
+  await h.ok(c, "act.click", { tabId, ref: Harness.ref(snap.text, /link "Download CSV"/) });
+  await h.ok(c, "downloads.wait", { timeout: 15000 });
+  const stopped = await h.ok(c, "workflow.capture_stop", { tabId });
+  const recipe = stopped.json.recipe;
+  const checkpoint = recipe.steps.at(-1);
+  // Chrome may provide a generated temporary filename, so MIME is the stable
+  // reviewed expectation here; a usable extension is included when available.
+  expect(checkpoint).toMatchObject({ kind: "download", download: { mime: "text/csv" } });
+  expect(JSON.stringify(checkpoint)).not.toMatch(/data\.csv|https?:/i);
+
+  const panel = await h.openPanel();
+  try {
+    await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
+  } finally {
+    await panel.close();
+  }
+  const replay = await h.ok(c, "workflow.run", { id: recipe.id, tabId });
+  expect(replay.json.run.state, JSON.stringify(replay.json.run)).toBe("succeeded");
+});

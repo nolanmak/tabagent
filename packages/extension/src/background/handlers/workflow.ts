@@ -1,9 +1,9 @@
 import { listWorkflowRuns, listWorkflows, reviewRepair, runWorkflow, scheduleWorkflow, startCapture, stopCapture, unscheduleWorkflow } from "../workflows";
 
 export const workflowHandlers = {
-  "workflow.capture_start": async ({ tabId, p }: any) => {
+  "workflow.capture_start": async ({ tabId, p, meta }: any) => {
     if (tabId == null) throw new Error("Workflow capture needs a tab");
-    await startCapture(tabId, p.source, p.name);
+    await startCapture(tabId, p.source, p.name, meta.id);
     return { started: true, tabId, source: p.source };
   },
   "workflow.capture_stop": async ({ tabId }: any) => {

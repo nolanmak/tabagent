@@ -35,6 +35,14 @@ describe("workflow capture (#68, #69)", () => {
     expect(normalizeCaptureEvent({ kind: "wait", waitFor: "text", waitValue: "Report ready", timeoutMs: 5000 } as any)).toMatchObject({ kind: "wait", waitFor: "text", waitValue: "Report ready", timeoutMs: 5000 });
   });
 
+  it("captures downloads as metadata-only checkpoints", () => {
+    const step = normalizeCaptureEvent({ kind: "download", download: { extension: "csv", mime: "text/csv", bytes: 42 }, timeoutMs: 5000 });
+    expect(step).toEqual({ kind: "download", download: { extension: "csv", mime: "text/csv", bytes: 42 }, timeoutMs: 5000 });
+    expect(JSON.stringify(step)).not.toMatch(/filename|https?:/i);
+    expect(replayBlockReason(step)).toBeNull();
+    expect(replayBlockReason({ kind: "download" })).toMatch(/metadata/i);
+  });
+
   it("resolves a reviewed input parameter only from a supplied run input", () => {
     expect(resolveReplayInput({ kind: "parameter", placeholder: "{{REPORT_PERIOD}}" }, { "{{REPORT_PERIOD}}": "2026-11" })).toBe("2026-11");
     expect(resolveReplayInput({ kind: "parameter", placeholder: "{{REPORT_PERIOD}}" }, {})).toBeNull();
