@@ -254,7 +254,7 @@ describe("Bitwarden provider (bw, #37)", () => {
 // ---------------------------------------------------------------------------
 describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)", () => {
   const KEY = "K".repeat(12) + randomBytes(12).toString("base64url");
-  function memBw() {
+  function memBw(limits: { idleLockMs?: number; maxUnlockMs?: number } = {}) {
     const calls: { args: string[]; env: Record<string, string | undefined> }[] = [];
     let gate: Promise<void> | null = null;
     const items = [bwItem({ id: "item-000001", uris: [{ uri: "https://github.com" }], totp: "seed" })];
@@ -276,7 +276,7 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
     };
     let now = 0;
     const events: string[] = [];
-    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, now: () => now, event: (e, d) => events.push(`${e}:${(d as { reason?: string }).reason ?? ""}`) });
+    const p = new BitwardenProvider({ ...limits, bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, now: () => now, event: (e, d) => events.push(`${e}:${(d as { reason?: string }).reason ?? ""}`) });
     return {
       p,
       calls,
@@ -317,6 +317,16 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
     expect(m.p.unlocked).toBe(true);
     m.advance(2 * MIN);
     await m.p.tick();
+    expect(m.p.unlocked).toBe(false);
+  });
+
+  it("with both limits off (Infinity) it stays unlocked for a month of idling", async () => {
+    const m = memBw({ idleLockMs: Infinity, maxUnlockMs: Infinity });
+    await m.p.setSession(KEY);
+    m.advance(30 * 24 * 60 * MIN);
+    await m.p.tick();
+    expect(m.p.unlocked).toBe(true);
+    await m.p.drop("lock");
     expect(m.p.unlocked).toBe(false);
   });
 

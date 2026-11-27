@@ -9,7 +9,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { TabAgentError, toTabAgentError } from "@tabagent/protocol";
 import { BitwardenProvider } from "./bitwarden";
 import { AuthBridge, type AuthAuditSink, type InFlight } from "./bridge";
-import { bitwardenDataDir, readAuthConfig, type AuthConfig } from "./config";
+import { bitwardenDataDir, lockMs, readAuthConfig, type AuthConfig } from "./config";
 import { OnePasswordProvider } from "./onepassword";
 import type { BridgeProvider } from "./provider";
 import { SmsSource } from "./sms";
@@ -49,8 +49,8 @@ export function createAuth(o: AuthOpts): Auth {
       dataDir: bitwardenDataDir(),
       now: o.now,
       enabled: () => config().providers.includes("bitwarden"),
-      idleLockMs: cfg0.bitwarden.idleLockMinutes * 60_000,
-      maxUnlockMs: cfg0.bitwarden.maxUnlockHours * 3_600_000,
+      idleLockMs: lockMs(cfg0.bitwarden.idleLockMinutes, 60_000),
+      maxUnlockMs: lockMs(cfg0.bitwarden.maxUnlockHours, 3_600_000),
       event: (e, d) => o.audit.event(e, { kind: "auth", ...d }),
     });
   const sms = o.sms ?? new SmsSource({ enabled: () => config().sms });

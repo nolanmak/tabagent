@@ -35,18 +35,22 @@ export function authConfigCommand(rest: string[], path?: string): Out {
   }
   if (key === "auth" || key === "auth.show") {
     const a = readAuthConfig(path);
-    return ok([`providers: ${a.providers.join(", ") || "(none)"}`, `sms: ${a.sms ? "on" : "off"}`, `bitwarden: idle lock ${a.bitwarden.idleLockMinutes} min, max unlock ${a.bitwarden.maxUnlockHours} h${a.bitwarden.bin ? `, bin ${a.bitwarden.bin}` : ""}`]);
+    return ok([`providers: ${a.providers.join(", ") || "(none)"}`, `sms: ${a.sms ? "on" : "off"}`, `bitwarden: idle lock ${a.bitwarden.idleLockMinutes ? `${a.bitwarden.idleLockMinutes} min` : "never"}, max unlock ${a.bitwarden.maxUnlockHours ? `${a.bitwarden.maxUnlockHours} h` : "never"}${a.bitwarden.bin ? `, bin ${a.bitwarden.bin}` : ""}`]);
   }
   if (key === "auth.bitwarden.idleLockMinutes" || key === "auth.bitwarden.maxUnlockHours") {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return fail(`Usage: tabagent config ${key} <number>`);
+    const n = value === "never" || value === "off" ? 0 : Number(value);
+    if (!Number.isFinite(n)) return fail(`Usage: tabagent config ${key} <number>|never`);
     const field = key.split(".")[2] as "idleLockMinutes" | "maxUnlockHours";
     const a = writeAuthConfig((c) => ({ ...c, bitwarden: { ...c.bitwarden, [field]: n } }), path);
     const r = readAuthConfig(path);
     void a;
-    return ok([`${key} = ${r.bitwarden[field]} (restart the bridge to apply)`]);
+    const v = r.bitwarden[field];
+    return ok([
+      `${key} = ${v === 0 ? "never" : v} (restart the bridge to apply)`,
+      ...(v === 0 ? ["With this timer off, an unlocked vault stays open to every agent on this Mac until `tabagent bitwarden lock`, the kill switch, or a bridge restart."] : []),
+    ]);
   }
-  return fail(`Unknown auth setting "${key ?? ""}". Settings: auth.sms on|off, auth.bitwarden.idleLockMinutes <5-240>, auth.bitwarden.maxUnlockHours <1-24>`);
+  return fail(`Unknown auth setting "${key ?? ""}". Settings: auth.sms on|off, auth.bitwarden.idleLockMinutes <5-240|never>, auth.bitwarden.maxUnlockHours <1-24|never>`);
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +180,7 @@ export async function bitwardenCommand(rest: string[], f: Record<string, string 
         "",
         "Risk: while the vault is unlocked, any process running as your macOS user (including a shell-capable",
         "agent such as Claude Code or Codex) can obtain the session key and with it the vault. Use Bitwarden",
-        "with TabAgent only for accounts you would let your agents reach. It locks after 30 idle minutes and 8 hours.",
+        "with TabAgent only for accounts you would let your agents reach. By default it locks after 30 idle minutes and 8 hours (`tabagent config auth.bitwarden.*`).",
       ]);
     }
     case "disable": {
@@ -217,7 +221,7 @@ export async function bitwardenCommand(rest: string[], f: Record<string, string 
       if (!up) return lockAndFail("The TabAgent bridge is not running and could not be started; the vault was locked again.");
       const res = await d.admin?.("POST", { key }).catch(() => null);
       if (!res || res.status !== 204) return lockAndFail(`The bridge refused the session (${res?.body?.error?.message ?? "no answer"}); the vault was locked again.`);
-      return ok([`Bitwarden unlocked for TabAgent. It locks after ${cfg.bitwarden.idleLockMinutes} idle minutes, after ${cfg.bitwarden.maxUnlockHours} hours, on the kill switch, or with \`tabagent bitwarden lock\`.`]);
+      return ok([`Bitwarden unlocked for TabAgent. It locks ${[cfg.bitwarden.idleLockMinutes ? `after ${cfg.bitwarden.idleLockMinutes} idle minutes` : "", cfg.bitwarden.maxUnlockHours ? `after ${cfg.bitwarden.maxUnlockHours} hours` : ""].filter(Boolean).concat("on the kill switch, on a bridge restart, or with \`tabagent bitwarden lock\`").join(", ")}.`]);
     }
     case "lock": {
       await d.admin?.("DELETE").catch(() => null);

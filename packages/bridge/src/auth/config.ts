@@ -25,6 +25,10 @@ export interface AuthConfig {
 export const AUTH_DEFAULTS: AuthConfig = { providers: ["1password"], sms: false, bitwarden: { idleLockMinutes: 30, maxUnlockHours: 8 } };
 
 const clamp = (n: unknown, lo: number, hi: number, d: number) => (typeof n === "number" && Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : d);
+/** 0 turns a Bitwarden lock timer off (the user's explicit choice); anything else clamps to the range. */
+const clampOrOff = (n: unknown, lo: number, hi: number, d: number) => (n === 0 ? 0 : clamp(n, lo, hi, d));
+/** Timer length in ms for the provider; 0 (off) never fires. */
+export const lockMs = (value: number, unitMs: number) => (value === 0 ? Infinity : value * unitMs);
 
 function readRaw(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
@@ -45,8 +49,8 @@ export function readAuthConfig(path = configPath()): AuthConfig {
     sms: a.sms === true,
     bitwarden: {
       ...(typeof bw.bin === "string" && bw.bin ? { bin: bw.bin } : {}),
-      idleLockMinutes: clamp(bw.idleLockMinutes, 5, 240, AUTH_DEFAULTS.bitwarden.idleLockMinutes),
-      maxUnlockHours: clamp(bw.maxUnlockHours, 1, 24, AUTH_DEFAULTS.bitwarden.maxUnlockHours),
+      idleLockMinutes: clampOrOff(bw.idleLockMinutes, 5, 240, AUTH_DEFAULTS.bitwarden.idleLockMinutes),
+      maxUnlockHours: clampOrOff(bw.maxUnlockHours, 1, 24, AUTH_DEFAULTS.bitwarden.maxUnlockHours),
     },
   };
 }
