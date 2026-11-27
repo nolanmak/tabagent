@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Workflow replay</title></head>
+<body>
+<nav><a href="#top">News archive</a> | <a href="#new">new</a></nav>
+<form action="/workflow-replay.html" method="get">
+  <label>Query <input type="text" name="q" aria-label="Query"></label>
+  <label><input type="checkbox" name="hide" value="1"> Hide abstracts</label>
+</form>
+<div id="results"></div>
+<div style="height:4000px"></div>
+<script>
+  const p = new URLSearchParams(location.search);
+  if (p.has("q")) document.getElementById("results").innerHTML = '<p class="result">Results for ' + p.get("q").replace(/[<>&]/g, "") + "</p>";
+</script>
+</body></html>

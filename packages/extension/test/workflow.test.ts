@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
+import { agentCaptureEvent, exactNameMatch, assertionsPass, classifyInput, chooseLocatorCandidate, normalizeCaptureEvent, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type LocatorCandidate } from "../src/pure/workflow";
 
 describe("workflow capture (#68, #69)", () => {
   it("redacts secrets and retains a semantic locator instead of a raw DOM snapshot", () => {
@@ -116,5 +116,55 @@ describe("workflow capture (#68, #69)", () => {
     expect(repairCanPersist("succeeded")).toBe(true);
     expect(repairCanPersist("blocked")).toBe(false);
     expect(repairCanPersist("failed")).toBe(false);
+  });
+
+  describe("agent capture mapping (HN/arXiv/X live tests)", () => {
+    const url = "https://arxiv.org/search/";
+    const box = { role: "textbox", name: "Search term or terms" };
+    it("captures act.fill like act.type", () => {
+      expect(agentCaptureEvent("act.fill", { ref: "e8", value: "LLM agents" }, url, box)).toEqual({ kind: "input", url, target: { ...box, value: "LLM agents" } });
+      expect(agentCaptureEvent("act.type", { ref: "e8", text: "LLM agents" }, url, box)).toEqual({ kind: "input", url, target: { ...box, value: "LLM agents" } });
+    });
+    it("captures act.fill on a select as a select step", () => {
+      const field = { role: "combobox", name: "Field" };
+      expect(agentCaptureEvent("act.fill", { ref: "e9", value: "Title" }, url, field)).toEqual({ kind: "select", url, target: field, values: ["Title"] });
+    });
+    it("captures act.check with the requested state", () => {
+      const radio = { role: "radio", name: "Hide abstracts" };
+      const step = normalizeCaptureEvent(agentCaptureEvent("act.check", { ref: "e11", checked: true }, url, radio)!);
+      expect(step).toEqual({ kind: "check", url, locator: radio, checked: true });
+      expect(replayBlockReason(step)).toBeNull();
+      expect(normalizeCaptureEvent(agentCaptureEvent("act.check", { ref: "e11", checked: false }, url, radio)!)).toMatchObject({ checked: false });
+      expect(normalizeCaptureEvent(agentCaptureEvent("act.check", { ref: "e11" }, url, radio)!)).toMatchObject({ checked: true });
+    });
+    it("blocks replaying a check on a consent or account control", () => {
+      expect(replayBlockReason({ kind: "check", locator: { role: "checkbox", name: "Delete my account" }, checked: true })).toMatch(/sensitive/);
+      expect(replayBlockReason({ kind: "check", checked: true })).toMatch(/target/);
+    });
+    it("keeps the target of a press made on a ref", () => {
+      const step = normalizeCaptureEvent(agentCaptureEvent("act.press", { ref: "e8", key: "Enter" }, url, box)!);
+      expect(step).toEqual({ kind: "press", url, key: "Enter", locator: box });
+      expect(normalizeCaptureEvent(agentCaptureEvent("act.press", { key: "Escape" }, url)!)).toEqual({ kind: "press", url, key: "Escape" });
+    });
+    it("captures page and element scrolls, bounded", () => {
+      expect(normalizeCaptureEvent(agentCaptureEvent("act.scroll", { dy: 2500 }, "https://x.com/search")!)).toEqual({ kind: "scroll", url: "https://x.com/search", dx: 0, dy: 2500 });
+      expect(normalizeCaptureEvent(agentCaptureEvent("act.scroll", { dy: 9e9 }, "https://x.com/")!)).toMatchObject({ dy: 20000 });
+      expect(replayBlockReason({ kind: "scroll", dx: 0, dy: 2500 })).toBeNull();
+      expect(replayBlockReason({ kind: "scroll", dx: 0, dy: 0 })).toMatch(/scroll/);
+    });
+    it("still maps navigation and waits, and ignores reads", () => {
+      expect(agentCaptureEvent("nav.goto", { url: "https://news.ycombinator.com/" }, "")).toEqual({ kind: "navigate", url: "https://news.ycombinator.com/" });
+      expect(agentCaptureEvent("nav.wait", { for: "url", value: "newest", timeout: 15000 }, "")).toEqual({ kind: "wait", waitFor: "url", waitValue: "newest", timeoutMs: 15000 });
+      expect(agentCaptureEvent("nav.wait", { for: "fn", value: "1" }, "")).toBeUndefined();
+      expect(agentCaptureEvent("page.text", {}, url)).toBeUndefined();
+    });
+  });
+
+  it("replay prefers the one exact name when a role lookup also matches substrings", () => {
+    const matches = [{ ref: "e1", role: "link", name: "Hacker News" }, { ref: "e2", role: "link", name: "new" }];
+    expect(exactNameMatch({ role: "link", name: "new" }, matches)).toEqual(matches[1]);
+    expect(exactNameMatch({ role: "link", name: "New " }, matches)).toEqual(matches[1]);
+    expect(exactNameMatch({ role: "link", name: "news" }, matches)).toBeNull();
+    expect(exactNameMatch({ role: "link", name: "x" }, [{ ref: "a", name: "x" }, { ref: "b", name: "x" }])).toBeNull();
   });
 });
