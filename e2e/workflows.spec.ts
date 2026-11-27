@@ -154,6 +154,7 @@ test("agent capture replays check, fill, targeted press and scroll; exact names 
   const panel = await h.openPanel();
   try {
     await expect(panel.locator("#workflows")).toContainText("check: Hide abstracts → on");
+    await expect(panel.locator("#workflows")).toContainText("wait: selector .result");
     await panel.locator(`input[data-url-assertion="${recipe.id}"]`).fill("hide=1");
     await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
     await expect(panel.locator("#workflows")).toContainText("reviewed");
