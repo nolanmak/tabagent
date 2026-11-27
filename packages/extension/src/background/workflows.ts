@@ -1,7 +1,8 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
+import { agentCaptureEvent, exactNameMatch, assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
+import { setCheckState } from "./handlers/check";
 import { downloadAfter, downloadsFromTabSince } from "./downloads";
 import { requireSite } from "./permissions";
 import { cronMatches, parseCron } from "../pure/cron";
@@ -109,17 +110,14 @@ export async function captureAgentStep(tabId: number | undefined, tool: string, 
   if (tabId == null) return;
   const capture = active.get(tabId);
   if (!capture || capture.source !== "agent") return;
-  if (tool === "nav.goto" && typeof params.url === "string") return { tabId, event: { kind: "navigate", url: params.url } };
-  if (tool === "nav.wait" && params.for !== "fn" && ["load", "networkidle", "selector", "text", "url"].includes(String(params.for))) return { tabId, event: { kind: "wait", waitFor: params.for, ...(typeof params.value === "string" ? { waitValue: params.value } : {}), timeoutMs: typeof params.timeout === "number" ? params.timeout : undefined } as any };
-  else if ((tool === "act.click" || tool === "act.type" || tool === "act.select") && typeof params.ref === "string") {
+  let target: Locator | undefined;
+  if (typeof params.ref === "string" && tool.startsWith("act.")) {
     const ref = params.ref;
     const info = (await driverFor(tabId, url).then((d) => d.call("info", [], { ref })).catch(() => null)) as { role?: string; name?: string; label?: string; selector?: string } | null;
-    const target = info ? { role: info.role, name: info.name, label: info.label, selector: info.selector } : { name: "captured target" };
-    if (tool === "act.click") return { tabId, event: { kind: "click", url, target } };
-    if (tool === "act.select" && Array.isArray(params.values) && params.values.every((value) => typeof value === "string")) return { tabId, event: { kind: "select", url, target, values: params.values as string[] } };
-    if (typeof params.text === "string") return { tabId, event: { kind: "input", url, target: { ...target, value: params.text } } };
+    if (info) target = { role: info.role, name: info.name, label: info.label, selector: info.selector };
   }
-  else if (tool === "act.press" && typeof params.key === "string") return { tabId, event: { kind: "press", url, key: params.key } };
+  const event = agentCaptureEvent(tool, params, url, target);
+  return event ? { tabId, event } : undefined;
 }
 
 export function recordAgent(captured: unknown, result?: unknown) {
@@ -243,6 +241,9 @@ async function findRef(tabId: number, url: string, locator: Locator): Promise<{ 
   const value = locator.role ?? locator.label ?? locator.text ?? locator.selector ?? locator.name ?? "";
   let matches = await drv.find({ by, value, ...(locator.role && locator.name ? { name: locator.name } : {}) } as any);
   if (matches.matches.length === 1) return { ref: matches.matches[0].ref };
+  // find() matches names by substring ("new" also hits "Hacker News"); one exact name is not a repair.
+  const exact = exactNameMatch(locator, matches.matches as { ref: string; name?: string; role?: string }[]);
+  if (exact) return { ref: exact.ref };
   // Exact role/name lookup failed or is ambiguous. Search only within the original role
   // before scoring a repair; never broaden to arbitrary controls on the page.
   if (locator.role) matches = await drv.find({ by: "role", value: locator.role } as any);
@@ -306,7 +307,7 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any, in
         continue;
       }
       const found = step.locator ? await findRef(tabId, url, step.locator) : null;
-      if ((step.kind === "click" || step.kind === "input" || step.kind === "select") && !found) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous`, reasonCode: "AMBIGUOUS_TARGET" });
+      if ((step.kind === "click" || step.kind === "input" || step.kind === "select" || step.kind === "check" || (step.kind === "press" && step.locator)) && !found) return finish({ state: "blocked" as const, endedAt: Date.now(), reason: `step ${i + 1}: target was missing or ambiguous`, reasonCode: "AMBIGUOUS_TARGET" });
       if (found?.repair && step.locator) run.repairs.push({ id: crypto.randomUUID(), step: i, from: step.locator, to: found.repair });
       const drv = await driverFor(tabId, url);
       if (step.kind === "click") await drv.click(found!.ref);
@@ -316,7 +317,12 @@ export async function runWorkflow(recipeId: string, tabId: number, meta: any, in
         await drv.fill(found!.ref, value);
       }
       else if (step.kind === "select") await drv.call("selectOptions", [step.options!], { ref: found!.ref });
-      else if (step.kind === "press") await drv.press(step.key ?? "");
+      else if (step.kind === "check") await setCheckState(drv, found!.ref, step.checked !== false);
+      else if (step.kind === "press") {
+        if (found) await drv.focus(found.ref, true);
+        await drv.press(step.key ?? "");
+      }
+      else if (step.kind === "scroll") await drv.scroll(found?.ref, step.dx ?? 0, step.dy ?? 0);
     }
     const finalTab = await chrome.tabs.get(tabId);
     const finalUrl = finalTab.pendingUrl || finalTab.url || "";

@@ -133,3 +133,35 @@ test("#68 manual capture records a tab-attributed download without its filename 
   expect(downloads[0].download).toMatchObject({ mime: "application/octet-stream" });
   expect(JSON.stringify(downloads)).not.toMatch(/notes\.txt|https?:/i);
 });
+
+test("agent capture replays check, fill, targeted press and scroll; exact names are not repairs", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "workflow-replay-kinds" });
+  const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
+  await h.ok(c, "workflow.capture_start", { tabId, source: "agent", name: "replay kinds" });
+  await h.ok(c, "nav.goto", { tabId, url: `${h.A}/workflow-replay.html` });
+  const snap = await h.ok(c, "page.snapshot", { tabId });
+  await h.ok(c, "act.click", { tabId, ref: Harness.ref(snap.text, /link "new"/) });
+  await h.ok(c, "act.fill", { tabId, ref: Harness.ref(snap.text, /textbox "Query"/), value: "widgets" });
+  await h.ok(c, "act.check", { tabId, ref: Harness.ref(snap.text, /checkbox "Hide abstracts"/), checked: true });
+  await h.ok(c, "act.press", { tabId, ref: Harness.ref(snap.text, /textbox "Query"/), key: "Enter" });
+  await h.ok(c, "nav.wait", { tabId, for: "selector", value: ".result" });
+  await h.ok(c, "act.scroll", { tabId, dy: 1200 });
+  const recipe = (await h.ok(c, "workflow.capture_stop", { tabId })).json.recipe;
+  expect(recipe.steps.map((s: any) => s.kind)).toEqual(["navigate", "click", "input", "check", "press", "wait", "scroll"]);
+  expect(recipe.steps[4]).toMatchObject({ key: "Enter", locator: { name: "Query" } });
+
+  const panel = await h.openPanel();
+  try {
+    await expect(panel.locator("#workflows")).toContainText("check: Hide abstracts → on");
+    await panel.locator(`input[data-url-assertion="${recipe.id}"]`).fill("hide=1");
+    await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
+    await expect(panel.locator("#workflows")).toContainText("reviewed");
+  } finally {
+    await panel.close();
+  }
+  await h.ok(c, "nav.goto", { tabId, url: "about:blank" }).catch(() => {});
+  const replay = await h.ok(c, "workflow.run", { id: recipe.id, tabId });
+  expect(replay.json.run.state, JSON.stringify(replay.json.run)).toBe("succeeded");
+  expect(replay.json.run.repairs).toEqual([]);
+});
