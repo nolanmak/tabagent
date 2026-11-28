@@ -1,6 +1,6 @@
 // Send to agent, bridge side (docs/specs/agent-inbox.md). Handles the extension's agents.* / agent.*
 // messages. Only the paired /ext socket reaches this (the daemon checks); there is no REST route (AD2).
-import { agentSendOverLimit, AgentSendSchema, AgentsListSchema, type Agent, type AgentRoute, type AgentSend, type AgentSent, type BridgeToExt } from "@tabagent/protocol";
+import { agentSendOverLimit, AgentSendSchema, CHANNEL_ACK_TIMEOUT_MS, AgentsListSchema, type Agent, type AgentRoute, type AgentSend, type AgentSent, type BridgeToExt } from "@tabagent/protocol";
 import { agentSendAudit } from "./audit";
 import { composeAgentMessage } from "./compose";
 import { parseAgentId, type AgentBase, type AgentLink } from "./discovery";
@@ -23,6 +23,8 @@ export interface AgentsOpts extends DiscoveryOpts {
   /** AD8 piggyback TTL; default $TABAGENT_HOLD_TTL_MS, else 30 min (e2e shortens it). */
   holdTtlMs?: number;
   holdMax?: number;
+  /** AD9: how long to wait for the proxy to ack a channel push (default 5 s). */
+  channelAckTimeoutMs?: number;
 }
 
 /** One piggybacked message waiting for its session's next successful tool result (AD8). */
@@ -150,10 +152,10 @@ export class AgentsBridge {
   private async deliver(req: AgentSend, agent: Agent | null): Promise<Reply> {
     // 1. Fresh re-resolution (AD3).
     if (!agent) return { route: "none", state: "failed", code: "AGENT_GONE", detail: "That agent is no longer running" };
-    // 2. Route (AD6), from the fresh link. The channel route is P3 (#93), so it is never enabled here.
+    // 2. Route (AD6), from the fresh link.
     const stream = this.streamFor(agent);
     const route: AgentRoute = chooseRoute({ vendor: agent.vendor, status: agent.status, linked: agent.linked && !!stream, channels: stream?.channels }, { forceSpawn: req.forceSpawn });
-    if (route !== "queue" && route !== "spawn" && route !== "piggyback") return { route: "none", state: "failed", code: "NO_ROUTE", detail: agent.status === "error" ? `This agent cannot take messages (${agent.statusLabel ?? "error"})` : "No way to deliver to this agent" };
+    if (route === "none") return { route: "none", state: "failed", code: "NO_ROUTE", detail: agent.status === "error" ? `This agent cannot take messages (${agent.statusLabel ?? "error"})` : "No way to deliver to this agent" };
     // 3. Limits (AD13). The kill switch (AD17) is enforced by the worker, which knows the paused state.
     const over = agentSendOverLimit(req);
     if (over) return { route, state: "failed", code: "TOO_LARGE", detail: `The ${over.field} is ${over.length} characters; the limit is ${over.limit}` };
@@ -162,6 +164,7 @@ export class AgentsBridge {
     // 5. Compose (AD12).
     const text = composeAgentMessage(req, { grant });
     // 6. Deliver.
+    if (route === "channel") return this.pushChannel(stream!, text);
     if (route === "piggyback") {
       const s = stream!;
       const held: Held = { requestId: req.requestId, text, req, agent, key: s.key, sessionId: s.sessionId };
@@ -195,6 +198,18 @@ export class AgentsBridge {
     );
     this.watchers.add(w);
     return { route, state: "queued" };
+  }
+
+  /**
+   * AD7/AD9: push `{kind: "channel", content}` on the agent's inbox stream; `sent` once the proxy acks that it
+   * wrote notifications/claude/channel. Unconfirmed: Claude may still drop it, so never `delivered`.
+   */
+  private async pushChannel(s: InboxStream, text: string): Promise<Reply> {
+    const timeoutMs = this.o.channelAckTimeoutMs ?? CHANNEL_ACK_TIMEOUT_MS;
+    const r = await this.inbox.pushAndWait(s.key, { kind: "channel", content: text }, timeoutMs);
+    if (r === "acked") return { route: "channel", state: "sent" };
+    if (r === "timeout") return { route: "channel", state: "failed", code: "CHANNEL_TIMEOUT", detail: `The agent's TabAgent connection did not confirm the message within ${Math.round(timeoutMs / 100) / 10} s` };
+    return { route: "channel", state: "failed", code: "AGENT_GONE", detail: "The agent's TabAgent connection closed" };
   }
 
   /**
