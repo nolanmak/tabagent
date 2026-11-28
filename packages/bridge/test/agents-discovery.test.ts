@@ -106,7 +106,7 @@ describe("route choice (AD6)", () => {
     ["linked claude with channels, busy (the push runs after the current turn)", T("claude", { linked: true, channels: true, status: "busy" }), {}, "channel"],
     ["linked claude with channels, channel route switched off", T("claude", { linked: true, channels: true }), { channelEnabled: false }, "piggyback"],
     ["linked claude with channels, user chose Start new session", T("claude", { linked: true, channels: true }), { forceSpawn: true }, "spawn"],
-    ["unlinked claude claiming channels (no live stream)", T("claude", { channels: true }), {}, "spawn"],
+    ["unlinked claude claiming channels (no live stream)", T("claude", { channels: true }), {}, "none"],
     ["linked codex with channels (Claude only)", T("codex", { linked: true, channels: true }), {}, "piggyback"],
     ["linked claude", T("claude", { linked: true }), {}, "piggyback"],
     ["linked claude, user chose Start new session", T("claude", { linked: true }), { forceSpawn: true }, "spawn"],
