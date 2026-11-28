@@ -152,10 +152,11 @@ to type into a page where agent JavaScript (`js.eval`, `nav.wait` fn) has run.
 
 ### Google sign-in (#79)
 
-TabAgent never signs in on banking and password-manager hosts, whatever the settings. Google sign-in
-(`accounts.google.com`) is different: it is off by default because the host is on the seeded denylist,
-and the user turns it on by removing it from the denylist. Sign-in for `https://accounts.google.com`
-is then on by default; the user can untick it in the side panel to keep it off. Every `auth.login` there still asks for consent unless
+TabAgent never signs in on password-manager hosts, whatever the settings. Google sign-in
+(`accounts.google.com`) and banking sign-in (#100, the banks on the seeded denylist) are different: they are
+off by default because the hosts are on the seeded denylist, and the user turns them on by removing the host
+from the denylist. Sign-in for `https://accounts.google.com` (and every origin under YOLO, #110) is then on by
+default; for a bank outside YOLO the user must also enable sign-in for that origin. Every `auth.login` there still asks for consent unless
 the user ticked "always" for that account. Google account, password and mail pages stay never reachable
 (below). Accepted risk: clicks on Google's account chooser or an OAuth consent screen ("Allow") need only
 the site policy, not the sign-in consent, so an agent with `act` on `accounts.google.com` can grant an app
