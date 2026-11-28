@@ -200,3 +200,106 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Cla
     await p.close();
   }
 });
+
+// P2c (#92, AD14): the context menu writes a pending intent and opens the panel; it never sends. The panel
+// preselects the agent, includes the selection, sends it, and drops it when the user switches tabs.
+test("context menu: intent opens the panel with the agent preselected and the selection included; a tab switch drops it", async ({ w }) => {
+  const T = "019a0000-0000-7000-8000-0000000000d1";
+  const AGENT = `codex:${T}`;
+  const queue: string[] = [];
+  w.codex.threads([codexThread(T, { type: "idle" }, { name: "Menu helper" })]);
+  w.codex.on("thread/queue/add", ({ clientUserMessageId }) => {
+    queue.push(`sub-${clientUserMessageId}`);
+    return { queuedSubmission: { id: `sub-${clientUserMessageId}`, clientUserMessageId, input: [] } };
+  });
+  w.codex.on("thread/queue/list", () => ({ data: queue.map((id) => ({ id })), nextCursor: null }));
+  const sw = w.h.sw;
+
+  // A recent agent shows up in the menu by name, plus Choose…. Wait out the bridge's 5 s list cache.
+  await sw.evaluate((id) => chrome.storage.local.set({ recentAgents: [{ id, name: "Menu helper" }] }), AGENT);
+  let items: any[] = [];
+  await expect
+    .poll(async () => {
+      items = await sw.evaluate(() => (globalThis as any).__tabagent.rebuildMenus());
+      return items.map((i) => i.title);
+    }, { timeout: 15_000, intervals: [1000] })
+    .toEqual(["Send to agent", "Menu helper", "", "Choose…"]);
+  expect(items[0].contexts).toEqual(["page", "selection"]);
+  const agentItem = items.find((i) => i.title === "Menu helper");
+
+  // Select text on a fixture page, then "right-click > Send to agent > Menu helper".
+  const page = await w.h.ctx.newPage();
+  await page.goto(`${w.h.A}/article.html`);
+  const selected = await page.evaluate(() => {
+    const para = document.querySelectorAll("p")[1];
+    getSelection()!.selectAllChildren(para);
+    return getSelection()!.toString();
+  });
+  expect(selected.length).toBeGreaterThan(50);
+  // Its own window: a panel takes only intents for its own window's tabs, and w.panel lives in the first one.
+  const tab: { id: number; windowId: number } = await sw.evaluate(async (url) => {
+    const [t] = await chrome.tabs.query({ url });
+    const win = await chrome.windows.create({ tabId: t.id! });
+    return { id: t.id!, windowId: win!.id! };
+  }, `${w.h.A}/article.html`);
+  const before = w.codex.calls("thread/queue/add").length;
+  await sw.evaluate(([info, t]) => (globalThis as any).__tabagent.contextMenuClick(info, t), [{ menuItemId: agentItem.id, selectionText: selected }, tab] as const);
+  // The menu never sends (AD14): it only wrote the intent.
+  const intent: any = await sw.evaluate(async () => (await chrome.storage.session.get("agentSendIntent")).agentSendIntent);
+  expect(intent).toMatchObject({ agentId: AGENT, tabId: tab.id, selection: selected });
+  expect(w.codex.calls("thread/queue/add").length).toBe(before);
+
+  // The side panel for that window. Playwright cannot reach the real side panel, so open sidepanel.html as a
+  // background tab in the same window: its active tab is still the fixture page, as the real panel's would be.
+  const panelUrl = `chrome-extension://${DEV_EXTENSION_ID}/sidepanel.html`;
+  const [p] = await Promise.all([
+    w.h.ctx.waitForEvent("page", (pg) => pg.url().startsWith(panelUrl)),
+    sw.evaluate(([url, windowId]) => chrome.tabs.create({ url, windowId, active: false }).then(() => undefined), [panelUrl, tab.windowId] as const),
+  ]);
+  try {
+    const row = p.locator(`#agents [data-agent-id="${AGENT}"]`);
+    await expect(row).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+    await expect(p.locator("#agentTarget")).toContainText("Menu helper");
+    await expect(p.locator("#agentSelection")).toBeEnabled();
+    await expect(p.locator("#agentSelection")).toBeChecked();
+    await expect(p.locator("#agentSelectionPreview")).toContainText("Longer paragraph text");
+    // The panel consumed the intent.
+    await expect.poll(() => sw.evaluate(async () => (await chrome.storage.session.get("agentSendIntent")).agentSendIntent ?? null)).toBeNull();
+
+    await p.locator("#agentPrompt").fill("What does this say?");
+    await p.locator("#agentSend").dispatchEvent("click");
+    const line = p.locator("#agentFeed li").filter({ hasText: "Menu helper" });
+    await expect(line.locator(".agent-state")).toHaveText("queued", { timeout: 15_000 });
+    const text: string = w.codex.calls("thread/queue/add").at(-1)!.params.input[0].text;
+    expect(text).toContain("[TabAgent: message from the user via the side panel]\nWhat does this say?");
+    expect(text).toContain("Selected text: <<<PAGE_DATA");
+    expect(text).toContain(selected);
+    // A successful send records the agent as recent.
+    await expect.poll(() => sw.evaluate(async () => ((await chrome.storage.local.get("recentAgents")).recentAgents as { id: string }[] | undefined)?.[0]?.id)).toBe(AGENT);
+
+    // A second intent while the panel is open (storage.onChanged), naming an agent that is gone.
+    await sw.evaluate(([info, t]) => (globalThis as any).__tabagent.contextMenuClick(info, t), [{ menuItemId: String(agentItem.id).replace(AGENT, "codex:gone"), selectionText: "second pick" }, tab] as const);
+    await expect(p.locator("#agentTarget")).toContainText("That agent is no longer running.");
+    await expect(row).toHaveAttribute("aria-selected", "false");
+    await expect(p.locator("#agentSelection")).toBeChecked();
+    await expect(p.locator("#agentSelectionPreview")).toContainText("second pick");
+
+    // Switching to another tab before Send drops the selection and shows which tab will be shared.
+    const other = await w.h.ctx.newPage();
+    await other.goto(`${w.h.A}/index.html`);
+    const otherTitle = await other.title();
+    await sw.evaluate(async ([url, windowId]) => {
+      const [t] = await chrome.tabs.query({ url });
+      if (t.windowId !== windowId) await chrome.tabs.move(t.id!, { windowId, index: -1 });
+      await chrome.tabs.update(t.id!, { active: true });
+    }, [`${w.h.A}/index.html`, tab.windowId] as const);
+    await expect(p.locator("#agentSelection")).toBeDisabled();
+    await expect(p.locator("#agentSelection")).not.toBeChecked();
+    await expect(p.locator("#agentSelectionPreview")).toContainText("dropped: you switched tabs");
+    await expect(p.locator("#agentTabTitle")).toContainText(otherTitle || `${w.h.A}/index.html`);
+    await other.close();
+  } finally {
+    await p.close();
+    await page.close();
+  }
+});

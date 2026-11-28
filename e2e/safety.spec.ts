@@ -106,10 +106,14 @@ test("#67 policy.denylist_change shows the exact diff and cannot weaken hard sig
   expect(change.summary).toContain("test a reviewed statement workflow");
   expect((change.result as any).json.status).toBe("applied");
   expect((await settings(h)).denylist).not.toContain("*.chase.com");
-  // Removing an editable rule never unlocks the hard automated-auth boundary.
-  await h.setPolicies({ [h.A]: "full", [h.B]: "full", "https://www.chase.com": "full" }, { devAllowSensitive: false });
+  // Removing a bank from the denylist alone does not turn sign-in on (#101): the origin still needs it enabled.
+  await h.setPolicies({ [h.A]: "full", [h.B]: "full", "https://www.chase.com": "full", "https://my.1password.com": "full" }, { devAllowSensitive: false });
   const login = await h.call(c, "auth.login", { tabId: (await h.ok(c, "tabs", { action: "new", url: "https://www.chase.com/" })).json.tabId });
-  expect(login.text).toContain("never signs in");
+  expect(login.text).toContain("Sign-in is not enabled");
+  // Password managers stay behind the hard automated-auth boundary even after leaving the denylist.
+  await h.answerPrompt("once", () => h.ok(c, "policy.denylist_change", { changes: [{ op: "remove", glob: "*.1password.com" }], reason: "hard block check" }));
+  const vault = await h.call(c, "tabs", { action: "new", url: "https://my.1password.com/" });
+  expect(vault.text).toContain("never lets agents open");
 });
 
 test("#67 rejecting a denylist change leaves extension policy unchanged", async ({ h }) => {
@@ -163,7 +167,7 @@ test("#104 a denied site change leaves settings unchanged, and YOLO does not ski
   }
 });
 
-test("#104 site changes on password-manager, vault, denylisted or wildcard origins are refused without a prompt", async ({ h }) => {
+test("#104 site changes on password-manager/vault, denylisted or wildcard origins are refused without a prompt", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
   const s = await settings(h);
   await h.sw.evaluate((list) => (globalThis as any).__tabagent.updateSettings({ denylist: list }), [...s.denylist, "blocked.example"]);
@@ -171,7 +175,6 @@ test("#104 site changes on password-manager, vault, denylisted or wildcard origi
     const c = await h.mcp({ label: "site-change-hard", profile: "full" });
     const cases: [string, string, string][] = [
       ["https://my.1password.com", "PERMISSION_DENIED", "passwords, account or mail"],
-      ["https://www.chase.com", "PERMISSION_DENIED", "never signs in"],
       ["https://passwords.google.com", "PERMISSION_DENIED", "passwords, account or mail"],
       ["https://blocked.example", "PERMISSION_DENIED", "policy.denylist_change"],
       ["https://*.example.com", "BAD_REQUEST", "exact origin"],
@@ -359,15 +362,15 @@ test("#118 full never enables sign-in on hard-limited or denylisted hosts, and s
   await h.setPolicies({ [h.B]: "read" }, { paused: false, devAllowSensitive: false, denylist: [...prevDenylist, host] });
   const panel = await h.openPanel();
   await panel.click("#settingsBox summary");
-  await panel.fill("#newOrigin", "https://www.chase.com");
+  await panel.fill("#newOrigin", "https://my.1password.com");
   await panel.selectOption("#newLevel", "full");
   await panel.click("#addSite button[type=submit]");
-  await expect.poll(async () => (await settings(h)).sites["https://www.chase.com"]?.policy).toBe("full");
-  const chase = (await settings(h)).sites["https://www.chase.com"];
-  expect(chase.auth).toBeUndefined();
-  expect(chase.preapproved).toEqual({ a: true, b: true, c: true, d: true, e: true });
-  await expect(panel.locator("#siteLevelNote")).toContainText("never signs in on www.chase.com");
-  await expect(panel.locator(`input[data-auth][data-origin="https://www.chase.com"]`)).not.toBeChecked();
+  await expect.poll(async () => (await settings(h)).sites["https://my.1password.com"]?.policy).toBe("full");
+  const vault = (await settings(h)).sites["https://my.1password.com"];
+  expect(vault.auth).toBeUndefined();
+  expect(vault.preapproved).toEqual({ a: true, b: true, c: true, d: true, e: true });
+  await expect(panel.locator("#siteLevelNote")).toContainText("never lets agents open my.1password.com");
+  await expect(panel.locator(`input[data-auth][data-origin="https://my.1password.com"]`)).not.toBeChecked();
   // Same rule through the row's policy select, for a host on the user's denylist.
   await panel.selectOption(`select[data-policy][data-origin="${h.B}"]`, "full");
   await expect.poll(async () => (await settings(h)).sites[h.B]?.policy).toBe("full");
