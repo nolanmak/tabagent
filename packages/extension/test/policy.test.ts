@@ -212,8 +212,14 @@ describe("auth category g (M6)", () => {
     expect(resolve(on, req({ url: `${o}/v3/signin/identifier`, sensitive: "g", accountId: "x" })).decision).toBe("ask");
     const listed = base({ denylist: ["accounts.google.com"], sites: { [o]: { policy: "act", auth: true } } });
     expect(resolve(listed, req({ url: `${o}/v3/signin/identifier`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
-    const off = base({ denylist: [], sites: { [o]: { policy: "act" } } });
+    const off = base({ denylist: [], sites: { [o]: { policy: "act", auth: false } } });
     expect(resolve(off, req({ url: `${o}/v3/signin/identifier`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("not enabled") });
+  });
+  it("Google sign-in is on by default when the origin has no entry, and still asks for consent", () => {
+    const o = "https://accounts.google.com";
+    expect(resolve(base({ denylist: [], yolo: true }), req({ url: `${o}/v3/signin/identifier`, sensitive: "g", accountId: "x" })).decision).toBe("ask");
+    expect(resolve(base({ denylist: [], yolo: true, sites: { [o]: { policy: "full", auth: false } } }), req({ url: `${o}/`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
+    expect(resolve(base({ denylist: ["accounts.google.com"], yolo: true }), req({ url: `${o}/`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
   });
   it("Google account pages stay never-reachable after the change (D4)", () => {
     const st = base({ denylist: [], yolo: true, sites: { "https://myaccount.google.com": { policy: "full", auth: true } } });

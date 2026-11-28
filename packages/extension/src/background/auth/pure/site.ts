@@ -2,7 +2,7 @@
 // (sites[origin].auth, off by default), host not on the banking / password-manager list or the
 // user's denylist. No prompt here: the category g gate prompts later, after accounts are known.
 import { TabAgentError } from "@tabagent/protocol";
-import { hostMatches } from "../../policy";
+import { authEnabled, hostMatches } from "../../policy";
 
 export interface SiteCheckState {
   sites: Record<string, { auth?: boolean; policy?: string } | undefined>;
@@ -23,6 +23,6 @@ export function checkAuthSite(st: SiteCheckState, url: string): string {
   if (st.denylist.some((g) => hostMatches(g, host))) throw new TabAgentError("PERMISSION_DENIED", `${host} is on the TabAgent denylist`, "The user can remove it from the denylist in the side panel.");
   const e = st.sites[u.origin];
   if (e?.policy === "deny") throw new TabAgentError("PERMISSION_DENIED", `${u.origin} is denied`);
-  if (!e?.auth) throw new TabAgentError("PERMISSION_DENIED", `Sign-in is not enabled for ${u.origin}`, "The user can enable sign-in for this site in the TabAgent side panel.");
+  if (!authEnabled(e, u.origin)) throw new TabAgentError("PERMISSION_DENIED", `Sign-in is not enabled for ${u.origin}`, "The user can enable sign-in for this site in the TabAgent side panel.");
   return u.origin;
 }

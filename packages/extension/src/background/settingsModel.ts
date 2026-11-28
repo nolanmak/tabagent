@@ -67,6 +67,7 @@ function cleanEntry(e: unknown): SiteEntry | null {
     if (Object.keys(p).length) out.preapproved = p;
   }
   if (x.auth === true) out.auth = true;
+  else if (x.auth === false) out.auth = false; // explicit off for a default-on origin (#79)
   if (Array.isArray(x.authAlways)) {
     const ids = x.authAlways.filter((v): v is string => typeof v === "string" && !!v);
     if (ids.length) out.authAlways = [...new Set(ids)];

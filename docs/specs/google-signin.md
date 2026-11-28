@@ -44,8 +44,8 @@ Google always asks for the password even when a Google session exists.
    or 1Password CLI. The item has a URI that matches `https://accounts.google.com`. Items marked
    passkey-only or "master password re-prompt" are refused.
 2. Remove `accounts.google.com` from the denylist (side panel, or approve a `policy.denylist_change`).
-3. In the side panel Sites table, add `https://accounts.google.com`, set its policy to `act` or higher,
-   and turn on its sign-in chip.
+3. Sign-in for `https://accounts.google.com` is on by default (D3). The site policy must allow `act`
+   (or YOLO).
 4. For SMS codes: macOS, `tabagent config auth.sms on`, Full Disk Access for the app that starts the
    bridge, iPhone Text Message Forwarding to this Mac. For authenticator codes: the Bitwarden item has a
    TOTP seed and the account has Bitwarden Premium.
@@ -65,7 +65,9 @@ Google always asks for the password even when a Google session exists.
   already removed Google from their denylist get Google sign-in as soon as they also do §2 step 3.
   "No dedicated setting" means no new Google-specific toggle; the denylist entry plus §2 step 3 are
   the opt-in.
-- **D3. Google follows the normal per-origin rules.** Auth tools need `sites["https://accounts.google.com"].auth`
+- **D3. Google follows the normal per-origin rules,** except that sign-in for `https://accounts.google.com`
+  is on by default (`AUTH_DEFAULT_ON_ORIGINS`, amended 2026-11-27 by the maintainer); an explicit
+  `auth: false` turns it off. The denylist entry (D2) remains the opt-in. Auth tools need `sites["https://accounts.google.com"].auth`
   (checked by `checkAuthSite`); every other tool needs the site policy (checked by `resolve`). No
   inheritance from the site that started the flow. Note: `sensitiveStep` does not read the denylist;
   the denylist is enforced by `resolve` (all tools) and `checkAuthSite` (auth tools). Tests go through

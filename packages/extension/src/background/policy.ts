@@ -217,6 +217,13 @@ export function resolve(state: PolicyState, req: PolicyRequest): Decision {
  * accounts.google.com is not here (#81): Google sign-in is unlockable by the user, who must remove it from the
  * seeded denylist and enable sign-in for that origin. Google account pages stay in VAULT_DENY_HOSTS (DA12).
  */
+/** Origins where sign-in is on unless the user turned it off (#79). The denylist still gates them. */
+export const AUTH_DEFAULT_ON_ORIGINS = ["https://accounts.google.com"];
+/** Sign-in enablement for an origin: the user's explicit choice, else the default-on list. */
+export function authEnabled(e: { auth?: boolean } | undefined, origin: string): boolean {
+  return e?.auth ?? AUTH_DEFAULT_ON_ORIGINS.includes(origin);
+}
+
 export const AUTH_DENY_HOSTS = ["*.chase.com", "*.bankofamerica.com", "*.wellsfargo.com", "*.citi.com", "*.capitalone.com", "*.mercury.com", "*.paypal.com", "*.1password.com", "*.lastpass.com", "*.bitwarden.com", "*.dashlane.com", "*.keepersecurity.com"];
 
 function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | null): Decision {
@@ -226,8 +233,8 @@ function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | 
     if (!origin) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: "Sign-in needs an http(s) page" };
     if (AUTH_DENY_HOSTS.some((g) => hostMatches(g, hostOf(req.url)))) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `TabAgent never signs in on ${hostOf(req.url)}` };
     const e = state.sites[origin];
-    if (!e?.auth) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `Sign-in is not enabled for ${origin}`, hint: "The user can enable sign-in for this site in the TabAgent side panel." };
-    if (req.accountId && e.authAlways?.includes(req.accountId)) return { decision: "allow", origin };
+    if (!authEnabled(e, origin)) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `Sign-in is not enabled for ${origin}`, hint: "The user can enable sign-in for this site in the TabAgent side panel." };
+    if (req.accountId && e?.authAlways?.includes(req.accountId)) return { decision: "allow", origin };
     return { decision: "ask", kind: "sensitive", origin, category: "g" };
   }
   const key = origin ?? (isBlank(req.url) ? "about:blank" : req.url);

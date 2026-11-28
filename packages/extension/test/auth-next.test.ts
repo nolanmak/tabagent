@@ -40,6 +40,9 @@ describe("checkAuthSite (step 1, no prompt)", () => {
   it("http page refused even when enabled", () => expect(() => checkAuthSite(st({ "http://github.com": { auth: true } }), "http://github.com/login")).toThrow(/https/));
   it("banking list refused even when auth is enabled", () => expect(() => checkAuthSite(st({ "https://www.chase.com": { auth: true } }), "https://www.chase.com/login")).toThrow(/never signs in/));
   it("password-manager vault refused", () => expect(() => checkAuthSite(st({ "https://my.1password.com": { auth: true } }), "https://my.1password.com/")).toThrow(/never signs in/));
+  it("accounts.google.com has sign-in on by default once off the denylist", () => expect(checkAuthSite(st({}), "https://accounts.google.com/v3/signin/identifier")).toBe("https://accounts.google.com"));
+  it("an explicit sign-in off for Google is respected", () => expect(() => checkAuthSite(st({ "https://accounts.google.com": { auth: false } }), "https://accounts.google.com/")).toThrow(/not enabled/));
+  it("default-on is Google only; other origins still need the toggle", () => expect(() => checkAuthSite(st({}), "https://accounts.example.com/")).toThrow(/not enabled/));
   it("accounts.google.com passes when enabled and not denylisted (#81)", () => expect(checkAuthSite(st({ "https://accounts.google.com": { auth: true } }), "https://accounts.google.com/v3/signin/identifier")).toBe("https://accounts.google.com"));
   it("accounts.google.com still refused while on the denylist", () => expect(() => checkAuthSite(st({ "https://accounts.google.com": { auth: true } }, ["accounts.google.com"]), "https://accounts.google.com/")).toThrow(/denylist/));
   it("every remaining hard sign-in host is still refused", () => {
