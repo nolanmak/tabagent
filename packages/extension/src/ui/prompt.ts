@@ -17,6 +17,10 @@ async function load() {
   if (p.kind === "site") {
     $("detail").textContent = p.level === "read" ? "It will be able to see page content." : p.level === "act" ? "It will be able to click, type and navigate on this site." : "It will be able to run scripts and read cookies and storage on this site.";
     ($("always") as HTMLButtonElement).textContent = `Always allow ${p.level}`;
+  } else if (p.auth?.signup) {
+    // #112: a sign-up is asked every time; there is no "Always".
+    $("detail").textContent = `${p.sensitive?.description ?? "Sign-in"} · on ${p.origin}`;
+    $("always").remove();
   } else if (p.kind === "attach") {
     $("detail").textContent = "The tab will move into the agent's tab group. When the session ends it is ungrouped and left open.";
     $("always").remove();

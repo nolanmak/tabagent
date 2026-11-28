@@ -118,8 +118,8 @@ export interface GateRequest {
   summary: string;
   reasons: string[];
   tabId?: number;
-  /** Category g only. */
-  auth?: { accountId: string; accountMasked: string; provider: string };
+  /** Category g only. `signup` (#112): asked every time; "Always" neither skips nor is stored. */
+  auth?: { accountId: string; accountMasked: string; provider: string; signup?: boolean };
 }
 
 /** Resolve -> prompt -> apply answer, until allowed or denied. */
@@ -127,10 +127,12 @@ export async function authorize(g: GateRequest): Promise<void> {
   const meta = g.meta;
   for (let round = 0; round < 4; round++) {
     const st = await policyState();
-    const d = resolve(st, { sessionId: meta.id, cap: (meta.cap as Level) ?? "full", sites: meta.sites ?? [], url: g.url, level: g.level, sensitive: g.sensitive, accountId: g.auth?.accountId });
+    const signup = !!g.auth?.signup;
+    // #112 D1: a sign-up has no saved account to be "Always" for, so it never matches authAlways.
+    const d = resolve(st, { sessionId: meta.id, cap: (meta.cap as Level) ?? "full", sites: meta.sites ?? [], url: g.url, level: g.level, sensitive: g.sensitive, accountId: signup ? undefined : g.auth?.accountId });
     if (d.decision === "allow") return;
     if (d.decision === "deny") throw err(d.code, d.message, d.hint);
-    if (d.kind === "sensitive" && held.has(`${meta.id}|${d.origin}|${d.category}`)) return;
+    if (d.kind === "sensitive" && !signup && held.has(`${meta.id}|${d.origin}|${d.category}`)) return;
     if (d.kind === "site") {
       const { outcome } = prompts.request({ kind: "site", sessionId: meta.id, sessionLabel: meta.label, origin: d.origin, level: d.level, tool: g.tool, summary: g.summary, reasons: d.reason ? [d.reason] : [], tabId: g.tabId });
       const o = await outcome;
@@ -149,10 +151,10 @@ export async function authorize(g: GateRequest): Promise<void> {
     // sensitive
     const cat = d.category;
     const kind: PromptKind = cat === "f" ? "attach" : "sensitive";
-    const summary = cat === "g" && g.auth ? `sign in to ${d.origin} as ${g.auth.accountMasked} with ${g.auth.provider}` : g.summary;
+    const summary = cat === "g" && g.auth && !signup ? `sign in to ${d.origin} as ${g.auth.accountMasked} with ${g.auth.provider}` : g.summary;
     const { outcome } = prompts.request({ kind, sessionId: meta.id, sessionLabel: meta.label, origin: d.origin, sensitive: { category: cat, description: CATEGORY_TEXT[cat] }, ...(cat === "g" && g.auth ? { auth: g.auth } : {}), tool: g.tool, summary, reasons: g.reasons, tabId: g.tabId });
     const o = await outcome;
-    if (o === "always") {
+    if (o === "always" && !signup) {
       const next = applySensitiveAnswer(st, d.origin, cat, o, g.auth?.accountId);
       if (next !== st) await updateSettings({ sites: next.sites });
     }
@@ -172,8 +174,8 @@ const CATS = new Set(["a", "b", "c", "d", "e", "f", "g", "p", "r"]);
 
 export interface SensitiveOpts {
   tabId?: number;
-  /** Category g: the account (masked for display) and provider. */
-  auth?: { accountId: string; accountMasked: string; provider: string };
+  /** Category g: the account (masked for display) and provider; `signup` for auth.signup (#112). */
+  auth?: { accountId: string; accountMasked: string; provider: string; signup?: boolean };
 }
 
 /**

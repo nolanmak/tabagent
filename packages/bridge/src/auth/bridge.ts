@@ -9,7 +9,9 @@ import {
   AuthAccountsRequestSchema,
   AuthCodeRequestSchema,
   AuthSecretRequestSchema,
+  AuthSignupRequestSchema,
   getTool,
+  maskAccount,
   httpsOrigin,
   isAuthExtMessage,
   parseAccountId,
@@ -52,9 +54,14 @@ interface CommandState {
   delivered: Set<string>;
   secrets: string[];
   aborter: AbortController;
+  /** auth.signup: the account created by this command (the only one whose secrets it may fetch). */
+  created?: string;
+  signupTried?: boolean;
 }
 
-const LOOKUP_TOOLS = new Set(["auth.status", "auth.login", "auth.code"]);
+const LOOKUP_TOOLS = new Set(["auth.status", "auth.login", "auth.code", "auth.signup"]);
+/** #112 D2: the only provider that creates items. */
+const CREATING_PROVIDER = "bitwarden";
 const WITHHELD = { code: "INTERNAL" as const, message: "TabAgent withheld this auth result because it did not match the secret-free result schema" };
 
 export class AuthBridge {
@@ -110,6 +117,7 @@ export class AuthBridge {
       if (msg.type === "auth.accounts") return await this.onAccounts(msg, ws, send);
       if (msg.type === "auth.secret.request") return await this.onSecret(msg, ws, send);
       if (msg.type === "auth.code.request") return await this.onCode(msg, ws, send);
+      if (msg.type === "auth.signup.request") return await this.onSignup(msg, ws, send);
     } catch (e) {
       // Never let a provider error text through: fixed messages only come from our own TabAgentErrors.
       this.o.log?.(`auth: ${msg.type} failed (${toTabAgentError(e).code})`);
@@ -143,11 +151,16 @@ export class AuthBridge {
         try {
           for (const a of await capped(prov.find(origin))) {
             accounts.push(a);
-            s.accounts.set(a.id, a);
+            // A sign-up never fills an existing item: only the one it creates is fetchable.
+            if (s.tool !== "auth.signup") s.accounts.set(a.id, a);
           }
         } catch (e) {
           const err = toTabAgentError(e);
           if (err.hint) st = { ...st, hint: err.hint };
+        }
+        if (s.tool === "auth.signup" && prov.accountEmail) {
+          const email = await capped(prov.accountEmail()).catch(() => null);
+          if (email) st = { ...st, userMasked: maskAccount(email) };
         }
       }
       providers.push(st);
@@ -165,8 +178,12 @@ export class AuthBridge {
     const wire: SecretField = field === "totp" ? "code" : field;
     const fail = (error: { code: TabAgentError["code"]; message: string; hint?: string }) => send({ type: "secret", id, commandId, field: wire, ok: false, error });
     const s = this.state(commandId, ws);
-    const allowed = s && (field === "totp" ? s.tool === "auth.code" : s.tool === "auth.login");
+    const allowed = s && (field === "totp" ? s.tool === "auth.code" : s.tool === "auth.login" || s.tool === "auth.signup");
     if (!s || !allowed) return fail(noCommand());
+    if (s.tool === "auth.signup" && accountId !== s.created) {
+      this.audit("auth.secret", { tool: s.tool, origin: s.origin ?? null, field, outcome: "denied", errorCode: "PERMISSION_DENIED" });
+      return fail({ code: "PERMISSION_DENIED", message: "A sign-up only fills the login it created" });
+    }
     const acct = s.accounts.get(accountId);
     const ref = parseAccountId(accountId);
     const base = { tool: s.tool, origin: s.origin ?? null, provider: ref?.provider, account: acct?.accountMasked, field };
@@ -220,6 +237,47 @@ export class AuthBridge {
     } catch (e) {
       const err = toTabAgentError(e);
       this.audit("auth.code", { ...base, outcome: "error", errorCode: err.code });
+      fail(safeError(err));
+    }
+  }
+
+  /**
+   * #112 auth.signup, after consent: create the login in Bitwarden for the origin this command's
+   * accounts call bound (DA3), once per command. The reply names the new account; its password goes
+   * out later through onSecret like any other.
+   */
+  private async onSignup(raw: unknown, ws: unknown, send: (m: AuthBridgeToExt) => void) {
+    const p = AuthSignupRequestSchema.safeParse(raw);
+    if (!p.success) return;
+    const { id, commandId } = p.data;
+    const fail = (error: { code: TabAgentError["code"]; message: string; hint?: string }) => send({ type: "auth.signup.result", id, commandId, ok: false, error });
+    const s = this.state(commandId, ws);
+    if (!s || s.tool !== "auth.signup") return fail(noCommand());
+    const origin = httpsOrigin(p.data.origin);
+    const base = { tool: s.tool, origin: origin ?? p.data.origin.slice(0, 200), provider: CREATING_PROVIDER };
+    if (!origin || !s.origin || origin !== s.origin) {
+      this.audit("auth.signup", { ...base, outcome: "denied", errorCode: "PERMISSION_DENIED" });
+      return fail({ code: "PERMISSION_DENIED", message: "Accounts are only created for the https page this command looked up" });
+    }
+    if (s.signupTried) {
+      this.audit("auth.signup", { ...base, outcome: "denied", errorCode: "BAD_REQUEST" });
+      return fail({ code: "BAD_REQUEST", message: "This command already asked to create a login" });
+    }
+    s.signupTried = true;
+    const prov = this.o.providers().find((x) => x.name === CREATING_PROVIDER);
+    if (!prov?.createLogin) {
+      this.audit("auth.signup", { ...base, outcome: "error", errorCode: "UNSUPPORTED" });
+      return fail({ code: "UNSUPPORTED", message: "Only Bitwarden can create logins", hint: "Turn on the Bitwarden provider (`tabagent bitwarden enable`) or let the user sign up with auth.handoff." });
+    }
+    try {
+      const acct = await capped(prov.createLogin({ origin, ...(p.data.username ? { username: p.data.username } : {}) }));
+      s.accounts.set(acct.id, acct);
+      s.created = acct.id;
+      this.audit("auth.signup", { ...base, account: acct.accountMasked, outcome: "ok" });
+      send({ type: "auth.signup.result", id, commandId, ok: true, account: acct });
+    } catch (e) {
+      const err = toTabAgentError(e);
+      this.audit("auth.signup", { ...base, outcome: "error", errorCode: err.code });
       fail(safeError(err));
     }
   }

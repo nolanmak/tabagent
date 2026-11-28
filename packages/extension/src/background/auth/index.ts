@@ -15,7 +15,7 @@ import { withTabLock } from "../tabctx";
 import { clearAuthMasks, isAuthMaskedNode, markAuthMaskedNode } from "./mask";
 import { createAuthChannel, type Sender } from "./pure/channel";
 import { findIk, GMAIL_APP_URL, gmailMessageId, originalUrl, parseRawMessage, pollMessages, readOriginalPage } from "./pure/confirm-link";
-import { authCode, authConfirmLink, authLogin, authStatus, newMemory, type AuthEnv, type AuthPage, type ConfirmMailReader, type EmailReader, type PageField } from "./pure/flows";
+import { authCode, authConfirmLink, authLogin, authSignup, authStatus, newMemory, type AuthEnv, type AuthPage, type ConfirmMailReader, type EmailReader, type PageField } from "./pure/flows";
 import { GMAIL_FEED_URL, readFeed } from "./pure/gmail";
 import { runHandoff } from "./pure/handoff";
 import { createRemoteHandoffs } from "./pure/remote";
@@ -275,7 +275,8 @@ function envFor(c: Ctx, tabId: number): AuthEnv {
       const s = await getSettings();
       checkAuthSite({ sites: s.sites as any, denylist: s.denylist, authDenyHosts: AUTH_DENY_HOSTS, yolo: !!s.yolo }, url);
     },
-    consent: (url, who, summary) => requireSensitive(c.meta, url, "g", c.tool.name, summary, ["Sign-in uses a saved credential; the agent never sees it"], { auth: who, tabId }),
+    consent: (url, who, summary) =>
+      requireSensitive(c.meta, url, "g", c.tool.name, summary, [who.signup ? "Bitwarden generates and saves a new password; the agent never sees it" : "Sign-in uses a saved credential; the agent never sees it"], { auth: who, tabId }),
     channel,
     email: emailReader(tabId),
     confirmMail: confirmReader(tabId),
@@ -438,6 +439,11 @@ registerHandlers({
     const tabId = needTab(c as Ctx);
     await authTaintReady;
     return withTabLock(tabId, () => authCode(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem));
+  },
+  "auth.signup": async (c) => {
+    const tabId = needTab(c as Ctx);
+    await authTaintReady;
+    return withTabLock(tabId, () => authSignup(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}));
   },
   "auth.confirm_link": async (c) => {
     const tabId = needTab(c as Ctx);

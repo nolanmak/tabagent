@@ -55,8 +55,8 @@ function isStrict(schema: z.ZodType): boolean {
 
 describe("DA1 registry: secret tools", () => {
   const secret = tools.filter((t) => t.secret);
-  it("auth.login, auth.code and auth.confirm_link are the secret tools", () => {
-    expect(secret.map((t) => t.name).sort()).toEqual(["auth.code", "auth.confirm_link", "auth.login"]);
+  it("auth.login, auth.code, auth.signup and auth.confirm_link are the secret tools", () => {
+    expect(secret.map((t) => t.name).sort()).toEqual(["auth.code", "auth.confirm_link", "auth.login", "auth.signup"]);
   });
   it.each(secret.map((t) => [t.name, t] as const))("%s result schema has no free-text field and is strict", (_n, t) => {
     expect(freeTextLeaves(t.result)).toEqual([]);
@@ -97,14 +97,14 @@ describe("DA1 registry: secret tools", () => {
 });
 
 describe("DA10 profile", () => {
-  const authNames = ["auth.code", "auth.confirm_link", "auth.handoff", "auth.login", "auth.status"];
+  const authNames = ["auth.code", "auth.confirm_link", "auth.handoff", "auth.login", "auth.signup", "auth.status"];
   const names = (ts: ToolDef[]) => ts.map((t) => t.name);
   it("core and full exclude auth; --profile auth adds it", () => {
     expect(names(toolsForProfiles("core")).filter((n) => n.startsWith("auth."))).toEqual([]);
     expect(names(toolsForProfiles("full")).filter((n) => n.startsWith("auth."))).toEqual([]);
     expect(names(toolsForProfiles("auth")).filter((n) => n.startsWith("auth.")).sort()).toEqual(authNames);
     expect(names(toolsForProfiles("full,auth")).length).toBe(tools.length);
-    expect(toolsForProfiles("auth")).toHaveLength(13 + 5 + 1); // + captcha.solve (#61)
+    expect(toolsForProfiles("auth")).toHaveLength(13 + 6 + 1); // + captcha.solve (#61)
   });
   it("group auth, lookup by MCP name", () => {
     for (const n of authNames) {
