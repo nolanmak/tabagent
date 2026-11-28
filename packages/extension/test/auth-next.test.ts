@@ -38,7 +38,14 @@ describe("checkAuthSite (step 1, no prompt)", () => {
   it("enabled https origin passes", () => expect(checkAuthSite(st({ "https://github.com": { auth: true } }), A)).toBe("https://github.com"));
   it("not enabled → PERMISSION_DENIED", () => expect(() => checkAuthSite(st(), A)).toThrow(/not enabled/));
   it("http page refused even when enabled", () => expect(() => checkAuthSite(st({ "http://github.com": { auth: true } }), "http://github.com/login")).toThrow(/https/));
-  it("banking list refused even when auth is enabled", () => expect(() => checkAuthSite(st({ "https://www.chase.com": { auth: true } }), "https://www.chase.com/login")).toThrow(/never signs in/));
+  it("banks pass when enabled and not denylisted (#100)", () => {
+    expect(checkAuthSite(st({ "https://www.chase.com": { auth: true } }), "https://www.chase.com/login")).toBe("https://www.chase.com");
+    expect(checkAuthSite(st({ "https://app.mercury.com": { auth: true } }), "https://app.mercury.com/login")).toBe("https://app.mercury.com");
+  });
+  it("banks still refused while on the denylist or not enabled", () => {
+    expect(() => checkAuthSite(st({ "https://connect.secure.wellsfargo.com": { auth: true } }, ["*.wellsfargo.com"]), "https://connect.secure.wellsfargo.com/auth/login")).toThrow(/denylist/);
+    expect(() => checkAuthSite(st(), "https://app.mercury.com/login")).toThrow(/not enabled/);
+  });
   it("password-manager vault refused", () => expect(() => checkAuthSite(st({ "https://my.1password.com": { auth: true } }), "https://my.1password.com/")).toThrow(/never signs in/));
   it("accounts.google.com passes when enabled and not denylisted (#81)", () => expect(checkAuthSite(st({ "https://accounts.google.com": { auth: true } }), "https://accounts.google.com/v3/signin/identifier")).toBe("https://accounts.google.com"));
   it("accounts.google.com still refused while on the denylist", () => expect(() => checkAuthSite(st({ "https://accounts.google.com": { auth: true } }, ["accounts.google.com"]), "https://accounts.google.com/")).toThrow(/denylist/));
@@ -48,6 +55,7 @@ describe("checkAuthSite (step 1, no prompt)", () => {
       expect(() => checkAuthSite(st({ [`https://${host}`]: { auth: true } }), `https://${host}/`)).toThrow(/never signs in/);
     }
     expect(AUTH_DENY_HOSTS).not.toContain("accounts.google.com");
+    for (const bank of ["*.chase.com", "*.bankofamerica.com", "*.wellsfargo.com", "*.citi.com", "*.capitalone.com", "*.mercury.com", "*.paypal.com"]) expect(AUTH_DENY_HOSTS).not.toContain(bank);
   });
   it("user denylist refused", () => expect(() => checkAuthSite(st({ "https://github.com": { auth: true } }, ["github.com"]), A)).toThrow(/denylist/));
   it("deny policy refused", () => expect(() => checkAuthSite(st({ "https://github.com": { auth: true, policy: "deny" } }), A)).toThrow(/denied/));

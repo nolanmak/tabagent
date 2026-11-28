@@ -398,8 +398,8 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   backstop.
 - **Denylist.** `chrome://`, extension pages, the Web Store, and a seeded,
   user-editable list (password managers, banking, Google sign-in) are refused.
-  Banking and password-manager hosts are also hard-blocked for the auth tools;
-  Google sign-in is not (the user can unlock it, #79).
+  Password-manager hosts are also hard-blocked for the auth tools; Google and
+  banking sign-in are not (the user can unlock them, #79, #100).
 - **Visibility (D40).** Badge states: off, connected, acting, needs approval,
   paused. A coloured tab group per session; an on-page border (default on) and
   target highlights. Overlay elements carry `data-tabagent-overlay`, have
