@@ -124,6 +124,86 @@ test("#67 rejecting a denylist change leaves extension policy unchanged", async 
   expect((await settings(h)).denylist).toEqual(before.denylist);
 });
 
+test("#104 policy.site_change shows origin, changes and reason; approval applies, turning off goes through the same prompt", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
+  const c = await h.mcp({ label: "site-change-e2e", profile: "full" });
+  const on = await h.answerPrompt("once", () => h.ok(c, "policy.site_change", { origin: `${h.A}/`, changes: { auth: true, lite: true }, reason: "sign in to download statements" }));
+  expect(on.prompt.sensitive.category).toBe("p");
+  expect(on.summary).toContain(h.A);
+  expect(on.summary).toContain("turn sign-in on");
+  expect(on.summary).toContain("turn lite mode on");
+  expect(on.summary).toContain("sign in to download statements");
+  const applied = (on.result as any).json;
+  expect(applied).toMatchObject({ status: "applied", origin: h.A, site: { policy: "full", auth: true, lite: true } });
+  expect(applied.applied).toEqual([
+    { field: "auth", from: false, to: true },
+    { field: "lite", from: false, to: true },
+  ]);
+  expect((await settings(h)).sites[h.A]).toMatchObject({ policy: "full", auth: true, lite: true });
+
+  await h.setPolicies({ [h.A]: "full", [h.B]: "full" }, { devAllowSensitive: false, sites: { [h.A]: { auth: true, authAlways: ["acct-1"], lite: true } } });
+  const off = await h.answerPrompt("once", () => h.ok(c, "policy.site_change", { origin: h.A, changes: { auth: false, policy: "ask" }, reason: "done with statements" }));
+  expect(off.summary).toContain("turn sign-in off");
+  expect(off.summary).toContain("set policy to ask");
+  expect((await settings(h)).sites[h.A]).toEqual({ lite: true });
+  await h.trustFixtures();
+});
+
+test("#104 a denied site change leaves settings unchanged, and YOLO does not skip the prompt", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false, yolo: true });
+  try {
+    const c = await h.mcp({ label: "site-change-deny", profile: "full" });
+    const before = await settings(h);
+    const denied = await h.answerPrompt("deny", () => h.call(c, "policy.site_change", { origin: h.A, changes: { auth: true }, reason: "this must not apply when denied" }));
+    expect(denied.prompt.sensitive.category).toBe("p");
+    expect((denied.result as any).text).toContain("PERMISSION_DENIED");
+    expect((await settings(h)).sites).toEqual(before.sites);
+  } finally {
+    await h.trustFixtures({ yolo: false });
+  }
+});
+
+test("#104 site changes on password-manager, vault, denylisted or wildcard origins are refused without a prompt", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
+  const s = await settings(h);
+  await h.sw.evaluate((list) => (globalThis as any).__tabagent.updateSettings({ denylist: list }), [...s.denylist, "blocked.example"]);
+  try {
+    const c = await h.mcp({ label: "site-change-hard", profile: "full" });
+    const cases: [string, string, string][] = [
+      ["https://my.1password.com", "PERMISSION_DENIED", "passwords, account or mail"],
+      ["https://www.chase.com", "PERMISSION_DENIED", "never signs in"],
+      ["https://passwords.google.com", "PERMISSION_DENIED", "passwords, account or mail"],
+      ["https://blocked.example", "PERMISSION_DENIED", "policy.denylist_change"],
+      ["https://*.example.com", "BAD_REQUEST", "exact origin"],
+    ];
+    for (const [origin, errCode, text] of cases) {
+      const r = await h.call(c, "policy.site_change", { origin, changes: { auth: true }, reason: "should be refused" });
+      expect(r.isError, origin).toBe(true);
+      expect(r.text, origin).toContain(errCode);
+      expect(r.text, origin).toContain(text);
+      expect(await h.pendingPrompts()).toHaveLength(0);
+    }
+    expect((await settings(h)).sites).toEqual(s.sites);
+  } finally {
+    await h.sw.evaluate((list) => (globalThis as any).__tabagent.updateSettings({ denylist: list }), s.denylist);
+  }
+});
+
+test("#104 an approval is refused when the site settings changed while the prompt was open", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false });
+  const c = await h.mcp({ label: "site-change-stale", profile: "full" });
+  const pend = h.call(c, "policy.site_change", { origin: h.A, changes: { auth: true }, reason: "stale approval" });
+  await expect.poll(async () => (await h.pendingPrompts()).length, { timeout: 10000 }).toBe(1);
+  const [p] = await h.pendingPrompts();
+  await h.setPolicies({ [h.A]: "read", [h.B]: "full" }, { devAllowSensitive: false });
+  await h.sw.evaluate((id) => (globalThis as any).__tabagent.answerPrompt(id, "once"), p.promptId);
+  const r = await pend;
+  expect(r.text).toContain("BAD_REQUEST");
+  expect(r.text).toContain("changed while this approval was pending");
+  expect((await settings(h)).sites[h.A]).toEqual({ policy: "read" });
+  await h.trustFixtures();
+});
+
 test("#13 login form: submit with a password prompts; deny leaves the page unchanged; feed masks the password", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
   const c = await h.mcp({ label: "login" });

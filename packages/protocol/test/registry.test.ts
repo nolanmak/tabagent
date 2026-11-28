@@ -97,6 +97,7 @@ const LEVELS: Record<string, string> = {
   "downloads.wait": "none",
   "downloads.read": "none",
   "policy.denylist_change": "full",
+  "policy.site_change": "full",
   "workflow.capture_start": "act",
   "workflow.capture_stop": "act",
   "workflow.list": "none",
@@ -155,6 +156,7 @@ describe("D18 static sensitivity", () => {
     ["tabs", { action: "attach" }, "f"],
     ["tabs", { action: "new" }, undefined],
     ["policy.denylist_change", {}, "p"],
+    ["policy.site_change", {}, "p"],
     ["act.click", {}, undefined],
     ["network.list", {}, undefined],
   ] as const)("%s %j -> %s", (name, params, cat) => {
@@ -162,7 +164,7 @@ describe("D18 static sensitivity", () => {
   });
   it("no other tool is statically sensitive", () => {
     const statics = tools.filter((t) => t.sensitive || Object.values(t.actions ?? {}).some((a) => a.sensitive)).map((t) => t.name);
-    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "storage.get", "tabs", "workflow.review_repair"].sort());
+    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "policy.site_change", "storage.get", "tabs", "workflow.review_repair"].sort());
   });
 });
 
