@@ -158,6 +158,7 @@ describe("header, composer mode and the not-connected card", () => {
     expect(withRc).toContain(`<a class="btn primary" data-rc href="${RC}" target="_blank" rel="noopener noreferrer">Open in Claude ↗</a>`);
     expect(withRc).toContain("Start a new session in app");
     expect(withRc).toContain("--dangerously-load-development-channels server:tabagent");
+    expect(withRc).toContain("<code>tabagent setup claude</code>");
     const without = notConnectedCardHtml(agent({ linked: false, delivery: "none" }));
     expect(without).toContain("<code>--remote-control</code>");
     expect(without).not.toContain("data-rc");

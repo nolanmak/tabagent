@@ -37,6 +37,8 @@ export function formatAge(ms: number): string {
 export const CONNECT_DOCS_URL = "https://github.com/nolanmak/tabagent/blob/main/docs/send-to-agent.md#connect-a-session";
 export const NOT_CONNECTED = "Not connected";
 export const CONNECT_HINT = "How to connect";
+/** #152: what connecting takes, as the link's tooltip. */
+export const CONNECT_STEPS = "Run tabagent setup claude, then restart this session";
 
 /** #151: how this session can be reached, in the same words on the panel row and the chat page. */
 export type ConnectionTone = "instant" | "next" | "queue" | "remote" | "off" | "error";
@@ -158,7 +160,7 @@ export function agentRowHtml(v: AgentRowView, selected: boolean): string {
   const meta = [v.cwdBase, v.age, v.pid != null ? `pid ${v.pid}` : null, v.status].filter((x) => x != null).map(esc).join(" · ");
   const badges = v.badges.map((b) => `<span class="badge">${esc(b)}</span>`).join("");
   const conn = `<span class="conn conn-${v.connection.tone}">${esc(v.connection.label)}</span>`;
-  const hint = v.notConnected ? ` <a class="connect-hint" href="${esc(CONNECT_DOCS_URL)}" target="_blank" rel="noopener noreferrer">${esc(CONNECT_HINT)}</a>` : "";
+  const hint = v.notConnected ? ` <a class="connect-hint" href="${esc(CONNECT_DOCS_URL)}" target="_blank" rel="noopener noreferrer" title="${esc(CONNECT_STEPS)}">${esc(CONNECT_HINT)}</a>` : "";
   const rc = v.remoteControlUrl ? `<a class="rc-link" href="${esc(v.remoteControlUrl)}" target="_blank" rel="noopener noreferrer" title="Open this session in Claude (Remote Control)">Open in Claude ↗</a>` : "";
   const quick = v.sendable ? `<button type="button" class="quick-btn" data-quick-send="${esc(v.id)}" aria-expanded="${selected}">${selected ? "Close" : "Quick send"}</button>` : "";
   const busy = v.busy ? `<span class="busy-dot" title="Working" aria-label="Working"></span>` : "";

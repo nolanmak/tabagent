@@ -122,6 +122,7 @@ describe("agent rows (§7)", () => {
     const html = agentRowHtml(v, false);
     expect(html).toContain('<span class="conn conn-off">Not connected</span>');
     expect(html).toContain("How to connect");
+    expect(html).toContain('title="Run tabagent setup claude, then restart this session"');
     expect(html).toContain(`href="${CONNECT_DOCS_URL}"`);
     expect(html).toContain('target="_blank"');
     expect(html).not.toContain("starts a new session");

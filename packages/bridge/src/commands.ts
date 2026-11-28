@@ -250,6 +250,9 @@ Usage:
   tabagent kill                        Stop every agent now (resume only from the side panel)
   tabagent approve [<n> once|always|deny]   List or answer pending prompts with Touch ID (macOS)
   tabagent approve --phone [--ttl 60]  One-time phone page for prompts (Touch ID first; needs handoff.remote)
+  tabagent setup claude [--scope user|project|local] [--profile P] [--channels] [--dry-run] [--local]
+                                       Point Claude Code's tabagent MCP server at the latest TabAgent
+  tabagent setup codex [--profile P] [--dry-run] [--local]   The same for Codex
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
   tabagent config [show] | add-upload-dir <dir> | set port <n>
   tabagent config auth.sms on|off      SMS/iMessage one-time codes for auth.code (macOS)
@@ -261,6 +264,7 @@ Usage:
   tabagent <tool> --json '{...}' [--param value ...] [--session S] [--raw] [--out file.png]
 
 Examples:
+  tabagent setup claude --profile core,auth
   claude mcp add tabagent -- npx -y @nolmak/tabagent mcp
   codex mcp add tabagent -- npx -y @nolmak/tabagent mcp
   tabagent nav.goto --json '{"url":"https://example.com"}'

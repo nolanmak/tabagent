@@ -60,24 +60,42 @@ A Claude Code session can only get messages from TabAgent when its own `tabagent
 connected back to the TabAgent bridge. Until then the row says **Not connected** (or **Remote Control
 only**). To connect it:
 
-1. **Update TabAgent.** The session's `tabagent mcp` has to be a version that links to the bridge (the
-   first release after 0.1.0). With the documented install, `npx -y @nolmak/tabagent mcp` fetches the
-   latest version when the session starts. If you installed it globally, run
-   `npm i -g @nolmak/tabagent@latest`. Restart `tabagent serve` too, so the bridge and the extension match.
+1. **Run `tabagent setup claude`.** It reads Claude Code's `tabagent` MCP server
+   (`claude mcp get tabagent`), shows the command and the TabAgent version it runs, and rewrites it in
+   user scope to `npx -y @nolmak/tabagent@latest mcp`, the first kind of entry that always links to the
+   bridge. Your `--profile`, other arguments and environment are kept.
+
+   ```bash
+   npx -y @nolmak/tabagent@latest setup claude            # or: tabagent setup claude
+   tabagent setup claude --profile core,auth              # change the profile while at it
+   tabagent setup claude --dry-run                        # print the claude mcp commands, change nothing
+   ```
+
+   `--scope project|local` writes that Claude Code scope instead of `user`. `--local` points the entry at
+   this git checkout's `packages/bridge/dist/cli.js` (for TabAgent development). `--channels` also checks
+   your Claude Code version for instant delivery and prints a line that saves the alias below to your
+   shell startup file. `tabagent setup codex` does the same for Codex. If you installed TabAgent
+   globally, also run `npm i -g @nolmak/tabagent@latest` and restart `tabagent serve`, so the bridge and
+   the extension match.
 2. **Restart the session.** A session started before the update keeps running the old `tabagent mcp`.
    Quit it and start it again (`claude --resume` keeps the conversation). Within a few seconds the row
    shows a **linked** badge and says **Connected**.
 
+To set it up by hand instead: `claude mcp remove tabagent`, then
+`claude mcp add tabagent -s user -- npx -y @nolmak/tabagent@latest mcp`.
+
 Linked sessions get a message on their next browser action. For **instant** delivery, start Claude
-Code with channels enabled:
+Code with channels enabled (Claude Code asks once to allow a "local development" channel; accept it):
 
 ```bash
 claude --dangerously-load-development-channels server:tabagent
+alias claude-tab='claude --dangerously-load-development-channels server:tabagent'   # optional shortcut
 ```
 
 Channels are optional and experimental; see
 [Instant delivery to Claude Code](../README.md#instant-delivery-to-claude-code-experimental) for the
-details. Without them messages still arrive, just on the next tool call.
+details. Without them messages still arrive, just on the next tool call. Sessions started with
+`claude --remote-control` can also be opened from the panel via Remote Control.
 
 Codex threads hosted by the Codex app-server do not need linking; their messages are queued.
 

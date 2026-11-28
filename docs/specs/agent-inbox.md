@@ -207,7 +207,7 @@ The bridge **always** replies, including on failure. The worker times out after 
   - vendor icon and `title` (§5) as the primary label; cwd basename · age · pid · busy/idle as secondary text, and a pulsing dot while the agent is busy
   - badges: **linked** and **can drive tab**
   - the connection in words, the same on the row and the chat page header: **Connected · instant** (channel), **Connected · on next browser action** (piggyback), **Codex · queued**, **Remote Control only** (not linked, has `remoteControlUrl`), **Not connected**, or **Can't take messages (…)**
-  - an unlinked Claude agent (#137) also has a short **How to connect** link to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
+  - an unlinked Claude agent (#137) also has a short **How to connect** link (tooltip: "Run tabagent setup claude, then restart this session", #152) to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
   - **Open in Claude ↗** when the agent has a `remoteControlUrl` (checked again in the page: only `https://claude.ai/code/session_…`). It opens claude.ai in a normal tab, under the user's own login.
   - **Clicking the row opens the agent's chat page** (§7a), reusing that agent's chat tab when one is open (Enter or Space on the focused row does the same).
   - **Quick send** (only on rows that can be messaged) opens the composer directly under that row; pressing it again closes it. There is no composer at the bottom of the list.
