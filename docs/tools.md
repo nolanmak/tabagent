@@ -66,6 +66,9 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`session.info`](#sessioninfo) | `session_info` | none | — | full only | supported | extension |
 | [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
+| [`session.kill_all`](#sessionkill_all) | `session_kill_all` | none | — | full only | supported | extension |
+| [`settings.get`](#settingsget) | `settings_get` | none | — | full only | supported | extension |
+| [`settings.change`](#settingschange) | `settings_change` | act | — | full only | supported | extension |
 | [`auth.status`](#authstatus) | `auth_status` | read | — | auth | supported | both |
 | [`auth.login`](#authlogin) | `auth_login` | act | — | auth | unsupported | both |
 | [`auth.signup`](#authsignup) | `auth_signup` | act | — | auth | unsupported | both |
@@ -746,6 +749,34 @@ End this session and release its tabs.
 MCP name `session_end` · level none · profiles full only · lite supported · handled by extension
 
 No parameters.
+
+### session.kill_all
+
+Stop every agent now (the kill switch). Needs no session or approval. Only the user can resume, in the side panel.
+
+MCP name `session_kill_all` · level none · profiles full only · lite supported · handled by extension
+
+No parameters.
+
+## settings
+
+### settings.get
+
+Read-only TabAgent settings: denylist, per-site policy/sign-in/lite, YOLO, preferences and hard-blocked hosts. Never secrets.
+
+MCP name `settings_get` · level none · profiles full only · lite supported · handled by extension
+
+No parameters.
+
+### settings.change
+
+Change display/cleanup preferences only (the keys in changes). Never yolo, denylist or sites. No approval; audited.
+
+MCP name `settings_change` · level act · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `changes` | object | yes |  |
 
 ## auth
 
