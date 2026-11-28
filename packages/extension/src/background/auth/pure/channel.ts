@@ -1,12 +1,12 @@
 // DA2 secret channel, extension side (CONTRACT "M6 Auth addendum" wire). index.ts hands every
 // bridge message of type auth.accounts.result / secret to onMessage(). A secret's value is returned
 // to exactly one awaiting caller and is never stored here: the pending map holds resolvers only.
-import { TabAgentError, type AuthAccountsResult, type ErrorCode } from "@tabagent/protocol";
+import { TabAgentError, type AuthAccount, type AuthAccountsResult, type ErrorCode } from "@tabagent/protocol";
 
 export type Sender = (msg: unknown) => boolean;
 
 interface Waiter {
-  kind: "accounts" | "secret";
+  kind: "accounts" | "secret" | "signup";
   commandId: string;
   field?: string;
   resolve: (v: any) => void;
@@ -39,7 +39,7 @@ export function createAuthChannel(deps: ChannelDeps) {
       }
       const timer = st(() => {
         waiting.delete(id);
-        reject(new TabAgentError("TIMEOUT", kind === "accounts" ? "The bridge did not list accounts in time" : "The bridge did not deliver the secret in time"));
+        reject(new TabAgentError("TIMEOUT", kind === "accounts" ? "The bridge did not list accounts in time" : kind === "signup" ? "The bridge did not create the login in time" : "The bridge did not deliver the secret in time"));
       }, timeoutMs);
       waiting.set(id, { kind, commandId, field, resolve, reject, timer });
     });
@@ -54,18 +54,29 @@ export function createAuthChannel(deps: ChannelDeps) {
     secret(commandId: string, accountId: string, field: "username" | "password" | "totp", timeoutMs = 60_000): Promise<string> {
       return request("secret", { type: "auth.secret.request", accountId, field }, commandId, timeoutMs, field === "totp" ? "code" : field);
     },
+    /** #112, only after consent: the bridge creates a Bitwarden login for `origin`; resolves to the new account (no password). */
+    createLogin(commandId: string, origin: string, username?: string, timeoutMs = 45_000): Promise<AuthAccount> {
+      return request("signup", { type: "auth.signup.request", origin, ...(username !== undefined ? { username } : {}) }, commandId, timeoutMs);
+    },
     /** #36: a code from the bridge's SMS source. */
     smsCode(commandId: string, since: number, timeout: number): Promise<string> {
       return request("secret", { type: "auth.code.request", source: "sms", since, timeout }, commandId, timeout + 10_000, "code");
     },
     /** Handles bridge→ext auth messages. Returns true when the message was ours. */
     onMessage(msg: any): boolean {
-      if (msg?.type !== "auth.accounts.result" && msg?.type !== "secret") return false;
+      const kindOf: Record<string, Waiter["kind"]> = { "auth.accounts.result": "accounts", secret: "secret", "auth.signup.result": "signup" };
+      const kind = kindOf[msg?.type];
+      if (!kind) return false;
       const w = waiting.get(msg.id);
       if (!w) return true; // late or unknown: drop (and never keep the value)
-      if ((msg.type === "secret") !== (w.kind === "secret") || (msg.commandId !== undefined && msg.commandId !== w.commandId) || (w.field && msg.field !== w.field)) return true;
+      if (kind !== w.kind || (msg.commandId !== undefined && msg.commandId !== w.commandId) || (w.field && msg.field !== w.field)) return true;
       waiting.delete(msg.id);
       ct(w.timer);
+      if (kind === "signup") {
+        if (msg.ok && msg.account && typeof msg.account.id === "string") w.resolve(msg.account as AuthAccount);
+        else w.reject(wireErr(msg.error, "The bridge could not create the login"));
+        return true;
+      }
       if (msg.type === "auth.accounts.result") {
         if (msg.ok) w.resolve(msg as AuthAccountsResult);
         else w.reject(wireErr(msg.error, "The bridge could not list accounts"));

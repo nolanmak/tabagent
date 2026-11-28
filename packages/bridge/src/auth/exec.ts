@@ -1,5 +1,6 @@
 // Child processes for password-manager CLIs (#33, #37). Stdin is closed so a CLI can never prompt
-// (TabAgent never asks for or types a master password). Each call has a timeout after which the child
+// (TabAgent never asks for or types a master password); the one exception is `input`, data piped in
+// and then closed (#112: `bw create item` reads the encoded item there so it never sits in argv). Each call has a timeout after which the child
 // is killed. Output is returned to the adapter only; it is never logged or put into an error.
 import { spawn } from "node:child_process";
 import { TabAgentError } from "@tabagent/protocol";
@@ -8,6 +9,8 @@ export interface RunOpts {
   /** Extra env for this child only (e.g. BW_SESSION, BITWARDENCLI_APPDATA_DIR). */
   env?: Record<string, string | undefined>;
   timeoutMs?: number;
+  /** Written to the child's stdin, which is then closed. Never logged. */
+  input?: string;
 }
 
 export interface RunResult {
@@ -38,9 +41,13 @@ export function nodeRunner(): Runner {
       return new Promise((resolve, reject) => {
         let child;
         try {
-          child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: { ...childBaseEnv(), ...definedOnly(opts.env) }, windowsHide: true });
+          child = spawn(bin, args, { stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], env: { ...childBaseEnv(), ...definedOnly(opts.env) }, windowsHide: true });
         } catch {
           return reject(new CliMissing(bin));
+        }
+        if (opts.input !== undefined && child.stdin) {
+          child.stdin.on("error", () => {}); // a child that exits without reading: EPIPE is not our error
+          child.stdin.end(opts.input);
         }
         const out: Buffer[] = [];
         const err: Buffer[] = [];
