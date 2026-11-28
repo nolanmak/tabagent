@@ -85,6 +85,9 @@ describe("SKILL.md lint (#29)", () => {
     expect(lintSkill("use `auth.login {user}`")).toEqual(["auth.login has no param user"]);
     expect(lintSkill("use `auth.signin`")).toEqual(["unknown tool auth.signin"]);
   });
+  it("has the account creation steps (#114)", () => {
+    for (const s of ["`auth.signup {email}`", "`auth.confirm_link`", "only when the user asks"]) expect(text).toContain(s);
+  });
   it("has the Sign in with Google steps (#84)", () => {
     for (const s of ["accounts.google.com", "`auth.login {account}`", "`auth.code {source}`", "handoff_required", "tabs {action: \"select\"}"]) expect(text).toContain(s);
   });
@@ -155,6 +158,7 @@ describe("MCP server instructions", () => {
   it("point agents at the auth tools for sign-in walls", async () => {
     const { INSTRUCTIONS } = await import("../src/mcp");
     expect(INSTRUCTIONS).toMatch(/auth_status/);
+    expect(INSTRUCTIONS).toMatch(/auth_signup/);
     expect(INSTRUCTIONS).toMatch(/--profile[^.]*auth/);
   });
 });
