@@ -116,6 +116,8 @@ const RETRY_SAFE = new Set([
   "downloads.list",
   "session.info",
   "session.permissions",
+  "settings.get",
+  "session.kill_all",
 ]);
 export function retrySafe(tool: string, params: Record<string, unknown>): boolean {
   return RETRY_SAFE.has(tool) || (tool === "tabs" && params.action === "list");

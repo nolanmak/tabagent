@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { PROFILES, TabAgentError, toolsForProfiles, type OutputResponse } from "@tabagent/protocol";
+import { PROFILES, TabAgentError, toolsForProfiles, type OutputResponse, type SettingsSnapshot } from "@tabagent/protocol";
 import type { Flags } from "./args";
 import { auditPath, configPath, loadConfig, saveConfig } from "./config";
 import { renderCli } from "./format";
@@ -183,6 +183,55 @@ export function toolOutput(resp: OutputResponse, f: Flags, now = Date.now()): Ou
   return ok([f.raw ? JSON.stringify(resp, null, 2) : renderCli(resp)]);
 }
 
+/** Runs one tool through the bridge (cli.ts passes a REST call; tests pass a fake). */
+export type ToolCall = (tool: string, params: Record<string, unknown>) => Promise<OutputResponse>;
+
+const errorOut = (resp: OutputResponse): Out => fail(`${resp.error!.code}: ${resp.error!.message}${resp.error!.hint ? `\nHint: ${resp.error!.hint}` : ""}`);
+const onOff = (b: boolean) => (b ? "on" : "off");
+const list = (xs: string[]) => (xs.length ? xs.join(", ") : "(none)");
+
+export function formatSettings(s: SettingsSnapshot): string[] {
+  const origins = Object.keys(s.sites).sort();
+  const width = Math.max(0, ...origins.map((o) => o.length));
+  const sites = origins.map((o) => {
+    const e = s.sites[o];
+    const parts = [o.padEnd(width), e.policy.padEnd(4), `sign-in ${onOff(e.auth)}`, `lite ${onOff(e.lite)}`];
+    if (e.preapproved?.length) parts.push(`pre-approved ${e.preapproved.join(",")}`);
+    if (e.alwaysAccounts) parts.push(`${e.alwaysAccounts} account${e.alwaysAccounts === 1 ? "" : "s"} always`);
+    return `  ${parts.join("  ")}`;
+  });
+  return [
+    `Denylist (${s.denylist.length}): ${list(s.denylist)}`,
+    ...(sites.length ? ["Sites:", ...sites] : ["Sites: (none saved)"]),
+    `YOLO: ${onOff(s.yolo)}`,
+    `Developer mode (devAllowSensitive): ${onOff(s.devAllowSensitive)}`,
+    `On session end: ${s.onSessionEnd}`,
+    `beforeunload dialogs: ${s.beforeUnload}`,
+    `On-page border: ${onOff(s.showOverlay)}`,
+    `Lite mode everywhere: ${onOff(s.forceLite)}`,
+    `Lite sites: ${list(s.liteSites)}`,
+    `Never signs in: ${list(s.authDenyHosts)}`,
+    `Never reachable: ${list(s.vaultDenyHosts)}`,
+  ];
+}
+
+/** #105: `tabagent settings show [--json]`, through the settings.get tool. */
+export async function settingsCommand(rest: string[], f: Flags, call: ToolCall): Promise<Out> {
+  if (rest[0] !== undefined && rest[0] !== "show") return fail(`Usage: tabagent settings show [--json]   (change preferences with \`tabagent settings.change --json '{"changes":{...}}'\`)`);
+  const resp = await call("settings.get", {});
+  if (!resp.ok) return errorOut(resp);
+  const snap = resp.result as SettingsSnapshot;
+  return ok(f.json ? [JSON.stringify(snap, null, 2)] : formatSettings(snap));
+}
+
+/** #106: `tabagent kill`, through session.kill_all. Works without a session; resuming is panel-only. */
+export async function killCommand(call: ToolCall): Promise<Out> {
+  const resp = await call("session.kill_all", {});
+  if (!resp.ok) return errorOut(resp);
+  const already = (resp.result as { alreadyPaused?: boolean } | undefined)?.alreadyPaused;
+  return ok([already ? "Agents were already stopped." : "Stopped all agents.", "Only the user can resume: press Resume in the TabAgent side panel."]);
+}
+
 export function helpText(): string {
   return `tabagent v${BRIDGE_VERSION} — let AI agents drive your real Chrome
 
@@ -197,6 +246,8 @@ Usage:
   tabagent captcha enable [capsolver|2captcha|vision] [--fallback vision] [--base-url URL --model M]
   tabagent captcha disable [provider] | status [--check]   CAPTCHA solving (key read from stdin or env)
   tabagent audit tail [-n 50] [--follow]
+  tabagent settings show [--json]      Denylist, site policies, YOLO and preferences (never secrets)
+  tabagent kill                        Stop every agent now (resume only from the side panel)
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
   tabagent config [show] | add-upload-dir <dir> | set port <n>
   tabagent config auth.sms on|off      SMS/iMessage one-time codes for auth.code (macOS)

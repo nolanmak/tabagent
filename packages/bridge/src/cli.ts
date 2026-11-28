@@ -1,4 +1,4 @@
-// tabagent CLI: serve | mcp | pair | status | tools | token | audit | skill | config | <tool>
+// tabagent CLI: serve | mcp | pair | status | tools | token | audit | settings | kill | skill | config | <tool>
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync, watchFile } from "node:fs";
 import { dirname, join } from "node:path";
@@ -10,7 +10,7 @@ import { api, ensureDaemon, health, restCall } from "./client";
 import { auditPath, configPath, loadConfig } from "./config";
 import { Daemon } from "./daemon";
 import { buildMcpServer } from "./mcp";
-import { auditTail, configCommand, formatAuditLine, helpText, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out } from "./commands";
+import { auditTail, configCommand, formatAuditLine, helpText, killCommand, settingsCommand, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out, type ToolCall } from "./commands";
 import { BRIDGE_VERSION } from "./version";
 import { authCli } from "./auth/cli-entry";
 import { captchaCli } from "./captcha/cli-entry";
@@ -193,6 +193,13 @@ async function cmdTool(name: string, args: string[]) {
   print(toolOutput(resp, f));
 }
 
+/** A tool call through the running bridge, for subcommands built on tools (settings show, kill). */
+async function bridgeCall(f: Flags): Promise<ToolCall> {
+  const cfg = portOf(f);
+  if (!(await health(cfg.port))) die("NO_EXTENSION: Bridge is not running. Start it with `tabagent serve`.");
+  return (tool, params) => restCall({ port: cfg.port, token: process.env.TABAGENT_TOKEN ?? cfg.secret }, tool, params);
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 const { f, rest: pos } = parseFlags(rest);
 switch (cmd) {
@@ -216,6 +223,12 @@ switch (cmd) {
     break;
   case "audit":
     cmdAudit(pos, f);
+    break;
+  case "settings":
+    print(await settingsCommand(pos, f, await bridgeCall(f)));
+    break;
+  case "kill":
+    print(await killCommand(await bridgeCall(f)));
     break;
   case "skill":
     print(skillCommand(pos, f, skillSource()));

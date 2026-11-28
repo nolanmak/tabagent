@@ -173,7 +173,8 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
   state: in-flight commands abort with `KILLED`, pending prompts drop, the
   debugger detaches from every tab and allow-once grants clear. Tab groups and
   stored policies stay. Every later command returns `KILLED` until the user
-  clicks Resume. Kill and resume reach the bridge as audit events.
+  clicks Resume. Kill and resume reach the bridge as audit events. Agents can
+  kill (`session.kill_all`, `tabagent kill`) but never resume (#106).
 
 ## Protocol (D13–D15, D30)
 
@@ -420,6 +421,16 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   p has no "Always" button, cannot be pre-approved, and is not skipped by YOLO
   or `devAllowSensitive`. Turning things off goes through the same prompt, so
   there is one code path.
+- **Agent-readable settings and preferences (#105, #106).** `settings.get`
+  (level none) returns an allowlisted snapshot: denylist, sites (policy,
+  effective sign-in, lite, pre-approved categories, a count of "always"
+  accounts), YOLO, `devAllowSensitive`, preferences and the hard lists; never
+  the secret, tokens or account ids. `settings.change` (level act, no prompt,
+  audited) writes only `PREFERENCE_SCHEMA` keys from `packages/protocol` (the
+  same enums the settings model normalises with); escalating or unknown keys
+  are refused with a hint. `session.kill_all` / `tabagent kill` run the kill
+  switch before the paused check, session lookup and authorize, so it works
+  with no session and when already paused. Resume has no tool or bridge route.
 - **Visibility (D40).** Badge states: off, connected, acting, needs approval,
   paused. A coloured tab group per session; an on-page border (default on) and
   target highlights. Overlay elements carry `data-tabagent-overlay`, have

@@ -435,13 +435,13 @@ describe("session.kill_all through the router (#106)", () => {
   });
 
   it("is not aborted by its own kill: other in-flight commands end KILLED, kill_all returns ok", async () => {
-    let router!: ReturnType<typeof createRouter<{ tabs: number[] }>>;
+    const ref: { router?: ReturnType<typeof createRouter<{ tabs: number[] }>> } = {};
     const killAll = vi.fn(async () => {
-      router.abortAll();
+      ref.router!.abortAll();
       return { status: "killed" as const, alreadyPaused: false };
     });
     const w = killWorld({ killAll });
-    router = w.router;
+    const router = (ref.router = w.router);
     const pending = router.handle(cmd("nav.wait", { tabId: 1, for: "text", value: "x" }, "long"));
     await new Promise((r) => setTimeout(r, 5));
     const k = await router.handle(cmd("session.kill_all", {}, "kill"));

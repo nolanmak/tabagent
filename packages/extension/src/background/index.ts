@@ -18,6 +18,7 @@ import { broadcast, feedAll, feedPush } from "./feed";
 import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
 import type { PromptInfo } from "./prompts";
 import { policyPrecheck } from "./handlers/policy";
+import { isPanelSender } from "../pure/uiSender";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
@@ -150,6 +151,11 @@ export const router = createRouter<Session>({
   captureWorkflowStep: captureAgentStep,
   recordWorkflowStep: recordAgent,
   policySnapshot: policyPrecheck,
+  killAll: async (meta) => {
+    const alreadyPaused = await isPaused();
+    await kill({ caller: meta.label, session: meta.id });
+    return { status: "killed", alreadyPaused };
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -294,7 +300,8 @@ chrome.notifications?.onClicked.addListener((nid) => {
 // ---------------------------------------------------------------------------
 // Kill switch (D12)
 // ---------------------------------------------------------------------------
-async function kill() {
+/** `by` is set when an agent pressed the switch (session.kill_all / `tabagent kill`, #106). */
+async function kill(by?: { caller: string; session: string }) {
   await updateSettings({ paused: true });
   router.abortAll();
   prompts.dropAll("killed");
@@ -305,7 +312,7 @@ async function kill() {
   for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
   await clearGrants();
-  sendEvent("killed");
+  sendEvent("killed", by ? { source: "agent", ...by } : { source: "user" });
   broadcast({ type: "paused", paused: true });
   refreshBadge();
 }
@@ -318,7 +325,7 @@ async function resume() {
 }
 
 chrome.commands.onCommand.addListener((c) => {
-  if (c === "kill-switch") kill();
+  if (c === "kill-switch") void kill();
 });
 chrome.tabs.onRemoved.addListener((tabId) => void discardCapture(tabId));
 chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -349,7 +356,8 @@ async function uiState() {
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const manualEvent = msg?.type === "workflow.manual_event" && sender.id === chrome.runtime.id && sender.tab?.id != null;
-  if (!manualEvent && (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("")))) return false;
+  // Resume (and every other ui.* message) is reachable only from our own extension pages (#106).
+  if (!manualEvent && !isPanelSender(sender, chrome.runtime.id, chrome.runtime.getURL(""))) return false;
   (async () => {
     if (manualEvent) {
       recordManual(sender.tab!.id!, msg.event);
