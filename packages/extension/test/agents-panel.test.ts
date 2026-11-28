@@ -93,7 +93,7 @@ describe("agent rows (§7)", () => {
     const html = agentRowHtml(agentRowView(evil, NOW), true);
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<script");
-    expect(html).not.toContain("<b>");
+    expect(html).toContain("&lt;b&gt;");
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(html).toContain('data-agent-id="claude:&quot;1"');
     expect(html).toContain('aria-selected="true"');

@@ -1,15 +1,14 @@
-// Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions,
+// Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions, agents (#90),
 // activity feed (audit records only) and settings. A view over worker state.
+import type { Agent, AgentSources } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled } from "../background/policy";
+import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
+import { esc } from "../pure/html";
 import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const send = (msg: unknown) => chrome.runtime.sendMessage(msg) as Promise<any>;
 let state: any = null;
-
-function esc(s: unknown) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
 
 const CATS = ["a", "b", "c", "d", "e"] as const;
 const CAT_LABEL: Record<string, string> = { a: "forms", b: "clicks", c: "JS", d: "creds", e: "files" };
@@ -79,7 +78,7 @@ function renderHandoffs() {
 function renderSessions() {
   const ul = $("sessions");
   if (!state.sessions.length) {
-    ul.innerHTML = `<li class="muted">No agents connected.</li>`;
+    ul.innerHTML = `<li class="muted">No sessions.</li>`;
     return;
   }
   ul.innerHTML = state.sessions
@@ -95,6 +94,157 @@ function feedLine(e: FeedEntry) {
 
 function renderFeed() {
   $("feed").innerHTML = state.feed.slice().reverse().map(feedLine).join("") || `<li class="muted">Nothing yet.</li>`;
+}
+
+// ---------------------------------------------------------------------------
+// Agents (#90, spec §7): list, composer and send feed. The decisions live in ../pure/agents.
+// ---------------------------------------------------------------------------
+let agents: Agent[] = [];
+let agentSources: AgentSources | undefined;
+let agentsLoaded = false;
+let agentsError = "";
+let agentsInFlight = false;
+let selectedAgentId: string | null = null;
+let agentNotice = "";
+let agentSending = false;
+let agentSendFeed: AgentFeedEntry[] = [];
+/** The active tab as it would be shared; re-read at Send time. */
+let activeTab: SharedTab | null = null;
+
+const agentsVisible = () => !!state?.agentsSupported;
+const agentPrompt = () => $("agentPrompt") as HTMLTextAreaElement;
+const shareTab = () => ($("agentShareTab") as HTMLInputElement).checked;
+
+function selectedAgentView() {
+  const a = agents.find((x) => x.id === selectedAgentId);
+  return a ? agentRowView(a, Date.now()) : null;
+}
+
+/** Set innerHTML only when it changed, so the 5 s refresh does not swallow a click mid-press. */
+function setHtml(el: HTMLElement, html: string) {
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+function renderAgentList() {
+  const now = Date.now();
+  const html = !agentsLoaded
+    ? `<li class="muted">Looking for agents…</li>`
+    : agentsError
+      ? `<li class="err">${esc(agentsError)}</li>`
+      : agents.map((a) => agentRowHtml(agentRowView(a, now), a.id === selectedAgentId)).join("") || `<li class="muted">No agents running.</li>`;
+  setHtml($("agents"), html);
+  const notes = sourcesNotes(agentSources);
+  $("agentSources").hidden = !notes.length;
+  $("agentSources").textContent = notes.join(" · ");
+}
+
+function renderComposer() {
+  const v = selectedAgentView();
+  const c = composerState({ agent: v, prompt: agentPrompt().value, share: shareTab() ? activeTab : null });
+  const btn = $("agentSend") as HTMLButtonElement;
+  btn.textContent = c.label;
+  btn.disabled = !c.canSend || agentSending;
+  $("agentComposerNote").textContent = c.note;
+  const target = $("agentTarget");
+  target.hidden = !v && !agentNotice;
+  target.innerHTML = v ? `To <b>${esc(v.title)}</b> <span class="muted">(${esc(v.vendorLabel)}, ${esc(v.routeWords)})</span>` : `<span class="err">${esc(agentNotice)}</span>`;
+  $("agentTabTitle").textContent = activeTab ? `(${activeTab.title || activeTab.url})` : "(no web page in this tab)";
+}
+
+function renderAgentFeed() {
+  setHtml($("agentFeed"), agentSendFeed.slice().reverse().map(agentFeedLineHtml).join(""));
+}
+
+function renderAgentsBox() {
+  $("agentsBox").hidden = !agentsVisible();
+  if (!agentsVisible()) return;
+  renderAgentList();
+  renderComposer();
+  renderAgentFeed();
+}
+
+function agentFeed(a: AgentFeedAction) {
+  agentSendFeed = agentFeedReducer(agentSendFeed, a);
+  renderAgentFeed();
+}
+
+async function readActiveTab(): Promise<SharedTab | null> {
+  try {
+    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return shareableTab(t);
+  } catch {
+    return null;
+  }
+}
+
+async function refreshActiveTab() {
+  activeTab = await readActiveTab();
+  if (agentsVisible()) renderComposer();
+}
+
+async function refreshAgents() {
+  // §5: only while the panel is visible; visibilitychange refreshes when it is shown again.
+  if (!agentsVisible() || agentsInFlight || document.hidden) return;
+  agentsInFlight = true;
+  try {
+    const r = await send({ type: "ui.agents_list" });
+    if (r?.supported === false) {
+      state.agentsSupported = false;
+      renderAgentsBox();
+      return;
+    }
+    if (r?.error) throw new Error(r.error);
+    agents = r?.agents ?? [];
+    agentSources = r?.sources;
+    agentsError = "";
+  } catch (e) {
+    agents = [];
+    agentSources = undefined;
+    agentsError = `Could not list agents: ${String((e as Error)?.message ?? e)}`;
+  } finally {
+    agentsInFlight = false;
+    agentsLoaded = true;
+  }
+  if (selectedAgentId && !agents.some((a) => a.id === selectedAgentId)) {
+    selectedAgentId = null;
+    agentNotice = "The selected agent is no longer running.";
+  }
+  renderAgentsBox();
+}
+
+function selectAgent(el: EventTarget | null) {
+  const li = (el as HTMLElement | null)?.closest<HTMLElement>("li[data-agent-id]");
+  if (!li?.dataset.agentId) return;
+  selectedAgentId = li.dataset.agentId;
+  agentNotice = "";
+  renderAgentsBox();
+  agentPrompt().focus();
+}
+
+async function sendToSelectedAgent() {
+  const v = selectedAgentView();
+  if (!v || agentSending) return;
+  const prompt = agentPrompt().value;
+  // AD12: title and url are read at Send time, not from the label shown earlier.
+  const share = shareTab() ? await readActiveTab() : null;
+  if (shareTab()) activeTab = share;
+  if (!composerState({ agent: v, prompt, share }).canSend) return renderComposer();
+  const requestId = crypto.randomUUID();
+  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route: v.route });
+  agentSending = true;
+  renderComposer();
+  let r: any;
+  try {
+    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share }));
+  } catch (e) {
+    r = { error: String((e as Error)?.message ?? e) };
+  }
+  agentSending = false;
+  if (r?.type === "agent.sent") agentFeed({ type: "sent", msg: r });
+  else agentFeed({ type: "sent", msg: { requestId, route: v.route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
+  // Keep the text after a failure so it can be retried.
+  if (r?.type === "agent.sent" && r.state !== "failed") agentPrompt().value = "";
+  renderComposer();
 }
 
 function renderWorkflows() {
@@ -151,6 +301,7 @@ function render() {
   renderStopped();
   renderHandoffs();
   renderSessions();
+  renderAgentsBox();
   renderFeed();
   renderWorkflows();
   renderSettings();
@@ -159,6 +310,7 @@ function render() {
 async function refresh() {
   state = await send({ type: "ui.state" });
   render();
+  void refreshAgents();
 }
 
 chrome.runtime.onMessage.addListener((m: any) => {
@@ -179,6 +331,9 @@ chrome.runtime.onMessage.addListener((m: any) => {
     case "handoffs":
       state.handoffs = m.handoffs;
       renderHandoffs();
+      break;
+    case "agent.status":
+      agentFeed({ type: "status", msg: m });
       break;
     case "stoppedTabs":
       state.stoppedTabs = m.tabs;
@@ -218,6 +373,30 @@ $("handoffs").addEventListener("click", (e) => {
 $("sessions").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.end) send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
+});
+$("agents").addEventListener("click", (e) => selectAgent(e.target));
+$("agents").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  e.preventDefault();
+  selectAgent(e.target);
+});
+agentPrompt().addEventListener("input", renderComposer);
+agentPrompt().addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    void sendToSelectedAgent();
+  }
+});
+$("agentShareTab").addEventListener("change", renderComposer);
+$("agentSend").addEventListener("click", () => void sendToSelectedAgent());
+chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
+chrome.tabs.onUpdated.addListener((_id, info, tab) => {
+  if (tab.active && (info.title || info.url)) void refreshActiveTab();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  void refreshAgents();
+  void refreshActiveTab();
 });
 $("workflows").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
@@ -303,6 +482,11 @@ $("saveDenylist").addEventListener("click", () =>
 $("unpair").addEventListener("click", () => send({ type: "ui.unpair" }).then(refresh));
 
 refresh();
+void refreshActiveTab();
+// §5: refresh the agent list every 5 s while the panel is visible.
+setInterval(() => {
+  if (!document.hidden) void refreshAgents();
+}, AGENTS_REFRESH_MS);
 setInterval(() => {
   for (const el of document.querySelectorAll<HTMLElement>(".countdown")) el.textContent = `${Math.max(0, Math.round((Number(el.dataset.expires) - Date.now()) / 1000))}s`;
 }, 1000);

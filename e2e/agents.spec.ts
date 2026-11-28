@@ -3,6 +3,7 @@
 import { test as base, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { claudeRecord, codexThread, FakeCodex, StubClaude } from "../packages/bridge/test/agents-fakes";
+import { DEV_EXTENSION_ID } from "../packages/protocol/src/index";
 import { Harness } from "./harness";
 
 interface W {
@@ -30,7 +31,11 @@ const test = base.extend<{}, { w: W }>({
         if (oldSock === undefined) delete process.env.TABAGENT_CODEX_SOCKET;
         else process.env.TABAGENT_CODEX_SOCKET = oldSock;
       }
-      const panel = await h.openPanel();
+      // A message sender for ui(). It reports itself hidden so its own Agents section never polls the
+      // bridge, which would fill the bridge's 5 s list cache before a test sets its stub agents.
+      const panel = await h.ctx.newPage();
+      await panel.addInitScript(() => Object.defineProperty(Document.prototype, "hidden", { get: () => true }));
+      await panel.goto(`chrome-extension://${DEV_EXTENSION_ID}/sidepanel.html`);
       await use({ h, claude, codex, panel });
       await h.stop();
       await codex.close();
@@ -50,12 +55,20 @@ test("ui.agents_list lists stub Claude and fake Codex agents; both sides adverti
   w.codex.threads([codexThread("019a0000-0000-7000-8000-000000000001", { type: "idle" }, { name: "Codex thread" })]);
   const state = await ui(w, { type: "ui.state" });
   expect(state.agentsSupported).toBe(true);
-  const r = await ui(w, { type: "ui.agents_list" });
+  // The pairing panel in h.start() already listed agents (before these stubs existed) when it connected,
+  // and the bridge caches a list for 5 s (§5), so wait for a fresh one.
+  let r: any;
+  await expect
+    .poll(async () => {
+      r = await ui(w, { type: "ui.agents_list" });
+      return r.sources;
+    }, { timeout: 15_000, intervals: [500] })
+    .toEqual({ claude: "ok", codex: "ok" });
   expect(r.supported).toBe(true);
-  expect(r.sources).toEqual({ claude: "ok", codex: "ok" });
   const ids = r.agents.map((a: any) => `${a.id} ${a.delivery}`).sort();
   expect(ids).toEqual(["claude:4242:1795639119768 spawn", "codex:019a0000-0000-7000-8000-000000000001 queue"]);
-  expect(w.claude.calls()).toEqual(["agents --json"]);
+  // Never `--all` (§5).
+  expect([...new Set(w.claude.calls())]).toEqual(["agents --json"]);
 });
 
 /** Collect agent.status broadcasts on the panel page. */
@@ -142,7 +155,9 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Cla
     await expect(p.locator("#sessions")).toContainText("No sessions.");
     const codexRow = p.locator(`#agents [data-agent-id="codex:${T}"]`);
     const claudeRow = p.locator(`#agents [data-agent-id="claude:4250:1795639120000"]`);
-    await expect(codexRow).toContainText("Codex helper");
+    // The bridge caches the list for 5 s (§5); the panel's next 5 s refresh picks up the stubs at the latest.
+    await expect(codexRow).toContainText("Codex helper", { timeout: 15_000 });
+    await expect(claudeRow).toBeVisible({ timeout: 15_000 });
     await expect(codexRow).toContainText("queued (Codex)");
     await expect(claudeRow).toContainText("spawn-target");
     await expect(claudeRow).toContainText("starts a new session");
@@ -156,11 +171,12 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Cla
     await expect(p.locator("#agentSend")).toHaveText("Send");
     await p.click("#agentSend");
     const codexLine = p.locator("#agentFeed li").filter({ hasText: "Codex helper" });
-    await expect(codexLine).toContainText("queued", { timeout: 15_000 });
+    await expect(codexLine).toContainText("queued (Codex)");
+    await expect(codexLine.locator(".agent-state")).toHaveText("queued", { timeout: 15_000 });
     expect(w.codex.calls("thread/queue/add").length).toBe(adds + 1);
     queue.length = 0;
     w.codex.notify("thread/queue/changed", { threadId: T });
-    await expect(codexLine).toContainText("delivered", { timeout: 15_000 });
+    await expect(codexLine.locator(".agent-state")).toHaveText("delivered", { timeout: 15_000 });
 
     // Claude spawn target: Start new session, started with the attach hint.
     await claudeRow.click();
@@ -168,7 +184,7 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Cla
     await expect(p.locator("#agentSend")).toHaveText("Start new session");
     await p.click("#agentSend");
     const claudeLine = p.locator("#agentFeed li").filter({ hasText: "spawn-target" });
-    await expect(claudeLine).toContainText("started", { timeout: 15_000 });
+    await expect(claudeLine.locator(".agent-state")).toHaveText("started", { timeout: 15_000 });
     await expect(claudeLine).toContainText("claude attach 0badc0de");
     expect(w.claude.read("bg.text")).toBe("[TabAgent: message from the user via the side panel]\nWrite tests");
 
