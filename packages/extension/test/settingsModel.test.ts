@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULTS, migrateSettings, SEEDED_DENYLIST, settingsAuditEvents } from "../src/background/settingsModel";
 
+describe("seeded denylist (#81 D2, D5)", () => {
+  it("still seeds accounts.google.com so new installs start with Google blocked", () => {
+    expect(SEEDED_DENYLIST).toContain("accounts.google.com");
+  });
+  it("protocol no longer exports a second, drifting default list", async () => {
+    const protocol = (await import("@tabagent/protocol")) as Record<string, unknown>;
+    expect(protocol.DEFAULT_DENYLIST).toBeUndefined();
+  });
+});
+
 describe("settings model (D32, contract §7)", () => {
   it("defaults", () => {
     const s = migrateSettings(undefined);
