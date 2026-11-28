@@ -77,6 +77,8 @@ export interface DoctorDeps {
   config?: AuthConfig;
   /** Bridge health (port, reachable). */
   bridge?: () => Promise<{ port: number; up: boolean }>;
+  /** The running bridge's Bitwarden state; the bridge holds the session, the CLI's copy is always locked. */
+  bitwardenDaemon?: () => Promise<string | undefined>;
 }
 
 export async function doctorCommand(d: DoctorDeps = {}): Promise<Out> {
@@ -110,8 +112,10 @@ export async function doctorCommand(d: DoctorDeps = {}): Promise<Out> {
   line(ops.state === "unlocked" ? "ok" : ops.state === "missing" ? "off" : "warn", `1Password CLI: ${ops.state === "unlocked" ? "installed, signed in" : ops.state}${cfg.providers.includes("1password") ? "" : " (not in auth.providers)"}`, ops.state === "unlocked" ? undefined : ops.hint);
   // Bitwarden (#37)
   const bw = d.bitwarden ?? new BitwardenProvider({ bin: cfg.bitwarden.bin, dataDir: bitwardenDataDir(), enabled: () => cfg.providers.includes("bitwarden") });
-  const bws = await bw.status().catch(() => ({ name: "bitwarden" as const, state: "missing" as const, hint: undefined }));
-  line(bws.state === "unlocked" || bws.state === "locked" ? "ok" : bws.state === "disabled" || bws.state === "missing" ? "off" : "warn", `Bitwarden CLI: ${bws.state}`, bws.hint);
+  const own = await bw.status().catch(() => ({ name: "bitwarden" as const, state: "missing" as const, hint: undefined }));
+  const daemon = own.state === "locked" ? await d.bitwardenDaemon?.().catch(() => undefined) : undefined;
+  const bws = daemon === "unlocked" ? { name: "bitwarden" as const, state: "unlocked (bridge)" as const, hint: undefined } : own;
+  line(bws.state === "unlocked (bridge)" ||bws.state === "unlocked" || bws.state === "locked" ? "ok" : bws.state === "disabled" || bws.state === "missing" ? "off" : "warn", `Bitwarden CLI: ${bws.state}`, bws.hint);
   return ok(out);
 }
 

@@ -254,7 +254,7 @@ describe("Bitwarden provider (bw, #37)", () => {
 // ---------------------------------------------------------------------------
 describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)", () => {
   const KEY = "K".repeat(12) + randomBytes(12).toString("base64url");
-  function memBw(limits: { idleLockMs?: number; maxUnlockMs?: number } = {}) {
+  function memBw(limits: { idleLockMs?: number; maxUnlockMs?: number; syncFails?: boolean } = {}) {
     const calls: { args: string[]; env: Record<string, string | undefined> }[] = [];
     let gate: Promise<void> | null = null;
     const items = [bwItem({ id: "item-000001", uris: [{ uri: "https://github.com" }], totp: "seed" })];
@@ -269,6 +269,7 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
         if (a[0] === "--version") return r({ stdout: "2025.10.0" });
         if (a[0] === "lock") return r(ok({}));
         if (!has) return r(bad());
+        if (a[0] === "sync") return limits.syncFails ? r(bad()) : r(ok({ object: "message", title: "Syncing complete." }));
         if (a.join(" ") === "list items") return r(ok({ object: "list", data: items }));
         if (a[0] === "get") return r(ok({ object: "string", data: "secret-value" }));
         return r(bad());
@@ -276,7 +277,8 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
     };
     let now = 0;
     const events: string[] = [];
-    const p = new BitwardenProvider({ ...limits, bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, now: () => now, event: (e, d) => events.push(`${e}:${(d as { reason?: string }).reason ?? ""}`) });
+    const { syncFails: _sf, ...lim } = limits;
+    const p = new BitwardenProvider({ ...lim, bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, now: () => now, event: (e, d) => events.push(`${e}:${(d as { reason?: string }).reason ?? ""}`) });
     return {
       p,
       calls,
@@ -305,6 +307,22 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
     expect(m.p.unlocked).toBe(false);
     expect(m.events).toContain("bitwarden.locked:idle");
     expect(m.calls.map((c) => c.args[0])).toContain("lock");
+  });
+
+  it("refreshing pulls from the Bitwarden server (bw sync) before listing items", async () => {
+    const m = memBw();
+    await m.p.setSession(KEY);
+    const cmds = m.calls.map((c) => c.args.filter((x) => !x.startsWith("--"))[0]);
+    const pull = cmds.indexOf("sync");
+    expect(pull).toBeGreaterThanOrEqual(0);
+    expect(cmds.indexOf("list", pull)).toBeGreaterThan(pull);
+    expect(m.calls[pull].env.BW_SESSION).toBe(KEY);
+  });
+
+  it("a failed server pull (offline) still lists the local items", async () => {
+    const m = memBw({ syncFails: true } as any);
+    await m.p.setSession(KEY);
+    expect(m.p.cachedItems().length).toBe(1);
   });
 
   it("a fill at 29 minutes extends the idle timer", async () => {
@@ -420,7 +438,8 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
 
 describe("Bitwarden rememberUnlock (Keychain)", () => {
   const KEY2 = "R".repeat(12) + randomBytes(12).toString("base64url");
-  function setup(remember: boolean, saved: string | null = null) {
+  function setup(remember: boolean, saved: string | null = null, o: { flakyStatus?: number } = {}) {
+    let flaky = o.flakyStatus ?? 0;
     let stored = saved;
     const ops: string[] = [];
     const keyStore = {
@@ -435,13 +454,17 @@ describe("Bitwarden rememberUnlock (Keychain)", () => {
         calls.push(a[0]);
         const has = o?.env?.BW_SESSION === KEY2;
         const r = (x: { stdout: string }) => ({ code: 0, stdout: x.stdout, stderr: "" });
+        if (a[0] === "status" && has && flaky > 0) {
+          flaky--;
+          throw new Error("bw timed out");
+        }
         if (a[0] === "status") return r(ok({ object: "template", template: { status: has ? "unlocked" : "locked" } }));
         if (a[0] === "lock") return r(ok({}));
         if (a.join(" ") === "list items" && has) return r(ok({ object: "list", data: [] }));
         return { code: 1, stdout: bad().stdout, stderr: "" };
       },
     };
-    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, remember: () => remember, keyStore });
+    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, remember: () => remember, keyStore, sleep: async () => {} });
     return { p, ops, calls, stored: () => stored };
   }
 
@@ -476,6 +499,20 @@ describe("Bitwarden rememberUnlock (Keychain)", () => {
     expect(a.calls).toContain("lock");
     await a.p.setSession(KEY2);
     expect(a.ops).not.toContain("save");
+  });
+
+  it("a transient bw status failure at startup does not throw the saved key away", async () => {
+    const a = setup(true, KEY2, { flakyStatus: 1 });
+    await a.p.startup({});
+    expect(a.p.unlocked).toBe(true);
+    expect(a.stored()).toBe(KEY2);
+  });
+
+  it("if bw status keeps failing, the saved key is kept for the next start but the vault stays locked", async () => {
+    const a = setup(true, KEY2, { flakyStatus: 99 });
+    await a.p.startup({});
+    expect(a.p.unlocked).toBe(false);
+    expect(a.stored()).toBe(KEY2);
   });
 
   it("a saved key the vault no longer accepts is discarded", async () => {
