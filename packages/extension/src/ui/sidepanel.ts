@@ -1,11 +1,12 @@
 // Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions, agents (#90),
 // activity feed (audit records only) and settings. A view over worker state.
 import type { Agent, AgentSources } from "@tabagent/protocol";
-import { AUTH_DEFAULT_ON_ORIGINS, authEnabled } from "../background/policy";
+import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
 import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { filterSites } from "../pure/siteFilter";
+import { applyLevel } from "../pure/siteLevel";
 import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -451,6 +452,12 @@ const sites = () => structuredClone(state.settings.sites ?? {}) as Record<string
 for (const id of ["onSessionEnd", "beforeUnload"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLSelectElement).value }));
 for (const id of ["showOverlay", "forceLite", "devAllowSensitive", "yolo"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
 
+/** Why choosing full did not turn on sign-in (#118); cleared on the next level change. */
+function showLevelNote(note: string | undefined) {
+  const el = $("siteLevelNote");
+  el.textContent = note ?? "";
+  el.hidden = !note;
+}
 $("sites").addEventListener("change", (e) => {
   const el = e.target as HTMLInputElement | HTMLSelectElement;
   const o = el.dataset.origin;
@@ -458,8 +465,9 @@ $("sites").addEventListener("change", (e) => {
   const all = sites();
   const entry = (all[o] ??= {});
   if ("policy" in el.dataset) {
-    if (el.value === "ask") delete entry.policy;
-    else entry.policy = el.value;
+    const r = applyLevel(entry, el.value as StoredPolicy | "ask", o, state.settings);
+    all[o] = r.entry;
+    showLevelNote(r.note);
   } else if ("lite" in el.dataset) {
     if ((el as HTMLInputElement).checked) entry.lite = true;
     else delete entry.lite;
@@ -511,7 +519,9 @@ $("addSite").addEventListener("submit", (e) => {
     return;
   }
   const all = sites();
-  all[origin] = { ...(all[origin] ?? {}), policy: ($("newLevel") as HTMLSelectElement).value };
+  const r = applyLevel(all[origin], ($("newLevel") as HTMLSelectElement).value as StoredPolicy, origin, state.settings);
+  all[origin] = r.entry;
+  showLevelNote(r.note);
   patch({ sites: all });
   ($("newOrigin") as HTMLInputElement).value = "";
 });

@@ -129,7 +129,11 @@ by *effect*, so there is no side door through a different tool:
 | e | Local file transfer | `act.upload`, `downloads.read` |
 | f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved) |
 
-Categories a–e can be pre-approved per origin; f always asks. Prompts are answered in the side
+Categories a–e can be pre-approved per origin; f always asks. Choosing `full` for a site in the side
+panel (adding it or changing its row) also turns on sign-in and pre-approves a–e for it in one step
+(#118); the user can untick any of them after, and lowering the level later leaves them as they are.
+Sign-in is still never turned on for hosts on the banking/password-manager list, the password,
+account and mail hosts, or the denylist; the panel says why instead. Prompts are answered in the side
 panel (reached from the toolbar badge or a notification), never by buttons inside the page, which
 the agent could click (D19). A prompt that is not answered in 120s returns `PROMPT_TIMEOUT`, and a
 late answer never executes anything (D15). Until the full permission engine lands, these effects
