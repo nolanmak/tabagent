@@ -8,13 +8,14 @@ import * as driverMod from "../driver";
 import { disposeDrivers, driverFor, type Driver } from "../driver";
 import { onKilled, registerHandlers } from "../handlerRegistry";
 import { requireSensitive } from "../permissions";
-import { AUTH_DENY_HOSTS } from "../policy";
+import { AUTH_DENY_HOSTS, isDenylisted, isHardDenied, isVaultDenied } from "../policy";
 import { endHandoff, inHandoff, listHandoffs, markPrivateTab, startHandoff, unmarkPrivateTab } from "../sessions";
 import { getSettings } from "../settings";
 import { withTabLock } from "../tabctx";
 import { clearAuthMasks, isAuthMaskedNode, markAuthMaskedNode } from "./mask";
 import { createAuthChannel, type Sender } from "./pure/channel";
-import { authCode, authLogin, authStatus, newMemory, type AuthEnv, type AuthPage, type EmailReader, type PageField } from "./pure/flows";
+import { findIk, GMAIL_APP_URL, gmailMessageId, originalUrl, parseRawMessage, pollMessages, readOriginalPage } from "./pure/confirm-link";
+import { authCode, authConfirmLink, authLogin, authStatus, newMemory, type AuthEnv, type AuthPage, type ConfirmMailReader, type EmailReader, type PageField } from "./pure/flows";
 import { GMAIL_FEED_URL, readFeed } from "./pure/gmail";
 import { runHandoff } from "./pure/handoff";
 import { createRemoteHandoffs } from "./pure/remote";
@@ -100,6 +101,14 @@ function realPage(tabId: number): AuthPage {
       await dr.settle(epoch).catch(() => {});
       await dr.waitLoad(5000).catch(() => false);
     },
+    async goto(url) {
+      // The same hard lines nav.goto has: never the vault / mailbox hosts, the hard list or the user's denylist.
+      const s = await getSettings();
+      if (isVaultDenied(url) || isHardDenied(url) || isDenylisted(url, s.denylist)) throw new TabAgentError("PERMISSION_DENIED", "The link points to a host TabAgent does not open");
+      const dr = await d();
+      epoch = dr.navEpoch();
+      await dr.navigate(url, "load", 20_000);
+    },
   };
 }
 
@@ -129,53 +138,118 @@ function waitComplete(tabId: number, timeout: number): Promise<void> {
   });
 }
 
+/**
+ * Open the private, collapsed "TabAgent auth" tab on the Gmail feed next to the agent's tab. Agent tools
+ * never reach it (markPrivateTab; mail.google.com is in VAULT_DENY_HOSTS). NOT_FOUND when Gmail isn't
+ * signed in. `close()` removes it.
+ */
+async function openMailTab(agentTabId: number, notSignedInHint: string): Promise<{ id: number; close(): Promise<void> }> {
+  const agentTab = await chrome.tabs.get(agentTabId);
+  const tab = await chrome.tabs.create({ windowId: agentTab.windowId, url: "about:blank", active: false });
+  const id = tab.id!;
+  await markPrivateTab(id);
+  const close = async () => {
+    await chrome.tabs.remove(id).catch(() => {});
+    unmarkPrivateTab(id);
+  };
+  try {
+    try {
+      const gid = await chrome.tabs.group({ tabIds: [id], createProperties: { windowId: agentTab.windowId } });
+      await chrome.tabGroups.update(gid, { title: "TabAgent auth", collapsed: true, color: "grey" });
+    } catch {
+      /* no tab groups in this window type */
+    }
+    await chrome.tabs.update(id, { url: mailUrl });
+    await waitComplete(id, 20_000);
+    const first = readFeed((await chrome.tabs.get(id)).url ?? "", "<feed><fullcount>0</fullcount></feed>");
+    if (!first.ok && first.code === "NOT_FOUND") throw new TabAgentError("NOT_FOUND", first.reason, notSignedInHint);
+    return { id, close };
+  } catch (e) {
+    await close();
+    throw e;
+  }
+}
+
+/** Same-origin fetch with the browser's Gmail session, run inside the private mail tab. */
+async function mailFetch(tabId: number, url: string, max: number): Promise<{ url: string; text: string }> {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (u: string, n: number) => {
+      const resp = await fetch(u, { credentials: "include", cache: "no-store" });
+      return { url: resp.url, text: (await resp.text()).slice(0, n) };
+    },
+    args: [url, max],
+  });
+  const out = res?.result as { url: string; text: string } | undefined;
+  return { url: out?.url ?? "", text: out?.text ?? "" };
+}
+
+async function readInbox(tabId: number, unsupportedHint: string) {
+  const out = await mailFetch(tabId, mailUrl, 500_000);
+  const feed = readFeed(out.url, out.text);
+  if (!feed.ok) throw new TabAgentError(feed.code, feed.reason, feed.code === "UNSUPPORTED" ? unsupportedHint : "Sign in to Gmail in this browser yourself.");
+  return feed.messages;
+}
+
 function emailReader(agentTabId: number): EmailReader {
   return {
     async fetch({ since, from, timeout }) {
-      const agentTab = await chrome.tabs.get(agentTabId);
-      const tab = await chrome.tabs.create({ windowId: agentTab.windowId, url: "about:blank", active: false });
-      const id = tab.id!;
-      await markPrivateTab(id);
+      const tab = await openMailTab(agentTabId, "Sign in to Gmail in this browser yourself, or use source=totp / sms. TabAgent never signs in to Gmail.");
+      const ac = new AbortController();
+      const stopKill = onKilled(() => ac.abort());
       try {
-        try {
-          const gid = await chrome.tabs.group({ tabIds: [id], createProperties: { windowId: agentTab.windowId } });
-          await chrome.tabGroups.update(gid, { title: "TabAgent auth", collapsed: true, color: "grey" });
-        } catch {
-          /* no tab groups in this window type */
-        }
-        await chrome.tabs.update(id, { url: mailUrl });
-        await waitComplete(id, 20_000);
-        const first = readFeed((await chrome.tabs.get(id)).url ?? "", "<feed><fullcount>0</fullcount></feed>");
-        if (!first.ok && first.code === "NOT_FOUND") throw new TabAgentError("NOT_FOUND", first.reason, "Sign in to Gmail in this browser yourself, or use source=totp / sms. TabAgent never signs in to Gmail.");
-        const ac = new AbortController();
-        const stopKill = onKilled(() => ac.abort());
-        try {
-          const r = await pollCode(
-            async () => {
-              const [res] = await chrome.scripting.executeScript({
-                target: { tabId: id },
-                func: async (u: string) => {
-                  const resp = await fetch(u, { credentials: "include", cache: "no-store" });
-                  return { url: resp.url, text: (await resp.text()).slice(0, 500_000) };
-                },
-                args: [mailUrl],
-              });
-              const out = res?.result as { url: string; text: string } | undefined;
-              const feed = readFeed(out?.url ?? "", out?.text ?? "");
-              if (!feed.ok) throw new TabAgentError(feed.code, feed.reason, feed.code === "UNSUPPORTED" ? "Gmail changed its feed; use auth.handoff, or source=totp / sms." : "Sign in to Gmail in this browser yourself.");
-              return feed.messages;
-            },
-            { since, from, timeout, used: usedMessages, signal: ac.signal },
-          );
-          if (r.messageId) usedMessages.add(r.messageId);
-          return r.code;
-        } finally {
-          stopKill();
-        }
+        const r = await pollCode(() => readInbox(tab.id, "Gmail changed its feed; use auth.handoff, or source=totp / sms."), { since, from, timeout, used: usedMessages, signal: ac.signal });
+        if (r.messageId) usedMessages.add(r.messageId);
+        return r.code;
       } finally {
-        await chrome.tabs.remove(id).catch(() => {});
-        unmarkPrivateTab(id);
+        stopKill();
+        await tab.close();
       }
+    },
+  };
+}
+
+// #113 confirmation links: the same private tab; the message body comes from Gmail's "show original"
+// view (see pure/confirm-link.ts, O1). Only the links leave this reader, and only to the pure flow.
+let mailIk: string | null = null;
+
+function confirmReader(agentTabId: number): ConfirmMailReader {
+  let tab: { id: number; close(): Promise<void> } | null = null;
+  const open = async () => (tab ??= await openMailTab(agentTabId, "Sign in to Gmail in this browser yourself, or use auth.handoff. TabAgent never signs in to Gmail."));
+  const unsupported = "Gmail changed; use auth.handoff and let the user open the confirmation email.";
+  return {
+    async messages({ since, from, timeout, skip }) {
+      const t = await open();
+      const ac = new AbortController();
+      const stopKill = onKilled(() => ac.abort());
+      try {
+        return await pollMessages(() => readInbox(t.id, unsupported), { since, from, skip, timeout, signal: ac.signal });
+      } finally {
+        stopKill();
+      }
+    },
+    async links(id) {
+      const t = await open();
+      const mid = gmailMessageId(id);
+      if (!mid) throw new TabAgentError("UNSUPPORTED", "The Gmail feed entry had no message id", unsupported);
+      let page = await mailFetch(t.id, originalUrl(mid, mailIk ?? undefined), 2_000_000);
+      let r = readOriginalPage(page.url, page.text);
+      if (!r.ok && r.code === "UNSUPPORTED") {
+        // Gmail may want the account key (`ik`) on the message view: read it from the app page once.
+        const app = await mailFetch(t.id, GMAIL_APP_URL, 3_000_000);
+        const ik = findIk(app.text);
+        if (ik && ik !== mailIk) {
+          mailIk = ik;
+          page = await mailFetch(t.id, originalUrl(mid, ik), 2_000_000);
+          r = readOriginalPage(page.url, page.text);
+        }
+      }
+      if (!r.ok) throw new TabAgentError(r.code, r.reason, r.code === "UNSUPPORTED" ? unsupported : "Sign in to Gmail in this browser yourself.");
+      return parseRawMessage(r.raw);
+    },
+    async close() {
+      await tab?.close();
+      tab = null;
     },
   };
 }
@@ -204,6 +278,7 @@ function envFor(c: Ctx, tabId: number): AuthEnv {
     consent: (url, who, summary) => requireSensitive(c.meta, url, "g", c.tool.name, summary, ["Sign-in uses a saved credential; the agent never sees it"], { auth: who, tabId }),
     channel,
     email: emailReader(tabId),
+    confirmMail: confirmReader(tabId),
     // DA1 (review H1): taint the tab before the first keystroke; refuse documents agent JS touched.
     filled: (kind, secret) => authTaint.filled(tabId, kind, secret),
     scriptDirty: () => authTaint.scriptDirty(tabId),
@@ -363,6 +438,10 @@ registerHandlers({
     const tabId = needTab(c as Ctx);
     await authTaintReady;
     return withTabLock(tabId, () => authCode(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem));
+  },
+  "auth.confirm_link": async (c) => {
+    const tabId = needTab(c as Ctx);
+    return withTabLock(tabId, () => authConfirmLink(envFor(c as Ctx, tabId), realPage(tabId), c.p ?? {}, mem));
   },
   "auth.handoff": (c) => handoff(c as Ctx),
 });

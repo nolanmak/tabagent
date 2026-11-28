@@ -9,8 +9,9 @@
 //  (5) re-check the tab's origin (it may have navigated during the prompt) and fill
 //  (6) optional submit, (7) classify `next`.
 // A secret lives in one local variable between the channel and page.type(); nothing else sees it.
-import { CODE_SINCE_SLACK_MS, CODE_MAX_AGE_MS, httpsOrigin, itemMatches, maskAccount, selectTotpAccount, TabAgentError, type AuthAccount, type AuthProviderName, type CodeSourceName, type ProviderStatus, type CodeSourceStatus } from "@tabagent/protocol";
+import { CODE_SINCE_SLACK_MS, CODE_MAX_AGE_MS, httpsOrigin, itemMatches, maskAccount, registrableDomain, selectTotpAccount, TabAgentError, type AuthAccount, type AuthProviderName, type CodeSourceName, type ProviderStatus, type CodeSourceStatus } from "@tabagent/protocol";
 import type { AuthChannel } from "./channel";
+import { CONFIRM_MAX_AGE_MS, selectConfirmLink, type MailLink } from "./confirm-link";
 import { detectCodeField, detectLogin, type FieldDesc } from "./fields";
 import { classifyNext, type Next } from "./next";
 
@@ -35,11 +36,26 @@ export interface AuthPage {
   submit(ref: string): Promise<void>;
   /** Wait for the page to settle after a submit. */
   settle(): Promise<void>;
+  /** Navigate the tab (auth.confirm_link). Throws without naming the URL; refuses denylisted hosts. */
+  goto?(url: string): Promise<void>;
 }
 
 export interface EmailReader {
   /** One code from the user's signed-in Gmail, newer than `since`. NOT_FOUND when Gmail isn't signed in. */
   fetch(o: { since: number; from?: string; timeout: number }): Promise<string>;
+}
+
+/** #113: the confirmation-mail side of the Gmail reader. It hands out ids, dates and links, never mail text. */
+export interface ConfirmMailReader {
+  /**
+   * Unread inbox messages from `from` (domain; subdomains match) received since `since`, newest first,
+   * re-polling until one not in `skip` arrives. TIMEOUT when none does; NOT_FOUND when Gmail isn't signed in.
+   */
+  messages(o: { since: number; from: string; timeout: number; skip: ReadonlySet<string> }): Promise<{ id: string; date: number }[]>;
+  /** The links (href + anchor text) in one message's body. UNSUPPORTED when the body can't be read. */
+  links(id: string): Promise<MailLink[]>;
+  /** Release whatever the reader opened (the private tab). */
+  close?(): Promise<void>;
 }
 
 export interface AuthEnv {
@@ -51,6 +67,7 @@ export interface AuthEnv {
   consent(url: string, who: { accountId: string; accountMasked: string; provider: string }, summary: string): Promise<void>;
   channel: Pick<AuthChannel, "accounts" | "secret" | "smsCode">;
   email?: EmailReader;
+  confirmMail?: ConfirmMailReader;
   /**
    * DA1 (review H1): called just before a credential reaches the page, so the tab is tainted
    * (no c/d reads, results screened) before the first keystroke. `secret` only for password/code.
@@ -69,6 +86,8 @@ export interface AuthMemory {
   /** Account the last auth.login used on a tab, with its origin (TOTP picks it first, #37). */
   lastAccount: Map<number, { id: string; origin: string }>;
   approvedSources: Set<string>;
+  /** Gmail message ids auth.confirm_link already followed (a confirmation link is used once). */
+  confirmedMail: Set<string>;
 }
 /** How long the second auth.login call of a two-step login reuses the first call's account and consent. */
 export const TWO_STEP_REUSE_MS = 2 * 60_000;
@@ -79,7 +98,7 @@ async function readAfter(page: AuthPage) {
   return { url: await page.url(), fields: await page.fields(), ...sig };
 }
 
-export const newMemory = (): AuthMemory => ({ lastLogin: new Map(), lastAccount: new Map(), approvedSources: new Set() });
+export const newMemory = (): AuthMemory => ({ lastLogin: new Map(), lastAccount: new Map(), approvedSources: new Set(), confirmedMail: new Set() });
 
 export const CHROME_AUTOFILL_ID = "chrome-autofill:saved";
 
@@ -392,4 +411,118 @@ export async function authCode(
   }
   env.event("auth.code", { origin, source: order[order.length - 1], outcome: "error", errorCode: (lastErr as TabAgentError)?.code ?? "INTERNAL" });
   throw lastErr;
+}
+
+/** auth.confirm_link `since` when no auth action ran on the tab recently (the sign-up may have been typed by hand). */
+export const CONFIRM_LOOKBACK_MS = 10 * 60_000;
+/** Messages looked at per call before giving up with handoff_required. */
+const CONFIRM_MAX_MESSAGES = 5;
+
+export interface ConfirmLinkResult {
+  followed: boolean;
+  next: Next;
+  /** Why nothing was followed: no confirmation link on the site's domain, or more than one. */
+  reason?: "none" | "ambiguous";
+}
+
+function originOfUrl(u: string): string | null {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #113 auth.confirm_link. (1) https, sign-in enabled for the tab's origin, never on Google's sign-in host;
+ * (2) consent once per origin; (3) the reader polls Gmail for mail from the site's domain since the last
+ * auth action on the tab; (4) newest first, each message's links go through selectConfirmLink (D3);
+ * (5) exactly one → re-check the tab's origin and navigate it there. The link and the mail text stay in
+ * this function: results, events and errors carry the origin, an outcome and a reason enum only.
+ */
+export async function authConfirmLink(env: AuthEnv, page: AuthPage, p: { from?: string; timeout?: number }, mem: AuthMemory): Promise<ConfirmLinkResult> {
+  const url0 = await page.url();
+  const origin = originOrDeny(url0);
+  const { host, hostname } = new URL(origin);
+  if (hostname === GOOGLE_SIGNIN_HOST) throw new TabAgentError("PERMISSION_DENIED", "Confirmation emails are not read on accounts.google.com", "Use auth.handoff and let the user finish this step.");
+  await env.siteCheck(url0);
+  const reader = env.confirmMail;
+  if (!reader || !page.goto) throw new TabAgentError("NOT_FOUND", "No email reader is available", "Use auth.handoff and let the user open the confirmation email.");
+  const site = registrableDomain(hostname);
+  const from = p.from?.trim() || site;
+  const timeout = p.timeout ?? 60_000;
+  const now = env.now();
+  const at = mem.lastLogin.get(env.tabId);
+  const since = at !== undefined && now - at < CONFIRM_MAX_AGE_MS ? Math.min(at, now) - CODE_SINCE_SLACK_MS : now - CONFIRM_LOOKBACK_MS;
+
+  const key = `${origin}|confirm_link`;
+  if (!mem.approvedSources.has(key)) {
+    await env.consent(url0, { accountId: "confirm-link:email", accountMasked: maskAccount(""), provider: "email" }, `Open the confirmation email from ${host} in Gmail and follow its link?`);
+    mem.approvedSources.add(key);
+  }
+
+  const handoff = (reason: "none" | "ambiguous"): ConfirmLinkResult => {
+    env.event("auth.confirm_link", { origin, outcome: "handoff_required", reason });
+    return { followed: false, next: "handoff_required", reason };
+  };
+  const fail = (e: unknown) => {
+    env.event("auth.confirm_link", { origin, outcome: "error", errorCode: (e as TabAgentError)?.code ?? "INTERNAL" });
+    return e;
+  };
+
+  const skip = new Set(mem.confirmedMail);
+  const deadline = now + timeout;
+  let checked = 0;
+  try {
+    for (;;) {
+      let msgs: { id: string; date: number }[];
+      try {
+        msgs = await reader.messages({ since, from, timeout: Math.max(0, deadline - env.now()), skip });
+      } catch (e) {
+        // Mail from the site arrived but none of it had a confirmation link, and nothing newer came.
+        if (checked > 0 && (e as TabAgentError)?.code === "TIMEOUT") return handoff("none");
+        throw fail(e);
+      }
+      const fresh = msgs.filter((m) => !skip.has(m.id));
+      if (!fresh.length) {
+        if (checked > 0) return handoff("none");
+        throw fail(new TabAgentError("TIMEOUT", `No new email from ${from} arrived`, "Check that the site sent the confirmation email, then call auth.confirm_link again."));
+      }
+      for (const m of fresh) {
+        skip.add(m.id);
+        checked++;
+        let target: string | null = null;
+        const pick = selectConfirmLink(await reader.links(m.id).catch((e) => Promise.reject(fail(e))), site);
+        if (!pick.ok) {
+          if (pick.reason === "ambiguous") return handoff("ambiguous");
+          if (checked >= CONFIRM_MAX_MESSAGES) return handoff("none");
+          continue;
+        }
+        target = pick.url;
+        try {
+          // The tab may have navigated while the mail was read.
+          if (originOfUrl(await page.url()) !== origin) throw new TabAgentError("PERMISSION_DENIED", `The tab left ${origin} while the email was read; no link was followed`, "Navigate back to the site and call auth.confirm_link again.");
+          mem.confirmedMail.add(m.id);
+          try {
+            await page.goto(target);
+          } catch (e) {
+            // Navigation errors can quote the URL: replace them.
+            const code = (e as TabAgentError)?.code;
+            throw code === "PERMISSION_DENIED" ? new TabAgentError("PERMISSION_DENIED", "The confirmation link points to a host TabAgent does not open") : new TabAgentError(code === "TIMEOUT" ? "TIMEOUT" : "INTERNAL", "Opening the confirmation link failed", "Take a page.snapshot to see where the tab is, or use auth.handoff.");
+          }
+        } catch (e) {
+          throw fail(e);
+        } finally {
+          target = null;
+        }
+        await page.settle();
+        const after = await readAfter(page);
+        const next = classifyNext(url0, after);
+        env.event("auth.confirm_link", { origin, outcome: "followed", next });
+        return { followed: true, next };
+      }
+    }
+  } finally {
+    await reader.close?.().catch(() => {});
+  }
 }

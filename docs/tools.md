@@ -69,6 +69,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`auth.status`](#authstatus) | `auth_status` | read | — | auth | supported | both |
 | [`auth.login`](#authlogin) | `auth_login` | act | — | auth | unsupported | both |
 | [`auth.code`](#authcode) | `auth_code` | act | — | auth | unsupported | both |
+| [`auth.confirm_link`](#authconfirm_link) | `auth_confirm_link` | act | — | auth | unsupported | extension |
 | [`auth.handoff`](#authhandoff) | `auth_handoff` | read | — | auth | supported | extension |
 | [`captcha.solve`](#captchasolve) | `captcha_solve` | act | — | auth | unsupported | both |
 
@@ -783,6 +784,18 @@ MCP name `auth_code` · level act · profiles auth · lite unsupported · handle
 | `from` | string |  | Sender domain filter for email codes |
 | `timeout` | integer |  | ms to wait for the code, default 60000 |
 | `submit` | boolean |  | Default true |
+
+### auth.confirm_link
+
+After a sign-up: find the site's confirmation email in Gmail (asks you) and open its one confirmation link in this tab. Never returns the email or link.
+
+MCP name `auth_confirm_link` · level act · profiles auth · lite unsupported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `from` | string |  | Sender domain; default: the site's domain |
+| `timeout` | integer |  | ms to wait for the email, default 60000 |
 
 ### auth.handoff
 

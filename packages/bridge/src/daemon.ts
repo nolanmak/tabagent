@@ -169,7 +169,12 @@ export class Daemon {
     this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
     this.captcha = createCaptcha({ log: this.log, now: this.now, ...opts.captcha, inFlight: (id) => this.pending.get(id), audit: this.audit });
     this.port = cfg.port;
-    this.agents = new AgentsBridge({ now: this.now, ...opts.agents });
+    this.agents = new AgentsBridge({
+      now: this.now,
+      audit: this.audit,
+      sendToExt: (m) => this.ext && this.sendTo(this.ext.ws, m),
+      ...opts.agents,
+    });
     this.handoff = new HandoffBridge({
       inFlight: (id) => this.pending.get(id),
       sendTo: (ws, m) => this.sendTo(ws as WebSocket, m as unknown as BridgeToExt),
@@ -239,6 +244,7 @@ export class Daemon {
   async stop() {
     for (const t of this.timers) clearInterval(t);
     await this.auth.stop();
+    this.agents.stop();
     this.captcha.abortAll();
     await this.handoff.stop();
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
