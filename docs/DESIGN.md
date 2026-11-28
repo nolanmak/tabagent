@@ -404,6 +404,23 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   notification and shows an informational banner in the agent's tab (no approve
   buttons in the page, which the agent could click). The user answers in the
   side panel. Prompts queue FIFO; identical pending requests share one prompt.
+- **Answering outside the side panel (#108, opt-in).** With the panel-only
+  setting `outsideApprovals` on, the extension sends `prompts.sync` (the full
+  pending list, built by `pure/promptView` so the panel, prompt window, CLI and
+  phone page show identical strings and answers) and accepts `prompt.answer
+  {promptId, answer, channel: cli-presence|phone}` from the bridge. Every answer,
+  panel included, goes through `PromptQueue.answerAs`: synchronous, first answer
+  wins (`already_answered`), refused at or after expiry (`expired`) or when not
+  offered (`not_offered`). The `decision` event carries the channel. In the
+  bridge, `approvals/index.ts` keeps the mirror and `submit()` is the only
+  sender of `prompt.answer`. It requires a verified presence challenge (bridge-run
+  LocalAuthentication helper, HMAC over a single-use challenge bound to prompt id
+  and answer) or a claimed phone-link cookie. Routes: `GET /v1/approvals`,
+  `POST /v1/approvals/answer`, `POST /v1/approvals/phone` (bridge secret only),
+  and `/approve/<id>{,/claim,/prompts,/answer,/end}` on the remote handoff
+  listener. The presence provider is chosen by platform only (`darwin` → Swift
+  helper, else unsupported); tests inject a fake through `DaemonOpts`, which no
+  CLI flag, env var or config key reaches. See SECURITY.md for the threat model.
 - **Audit (D20).** The extension builds the record, because only it knows what
   is sensitive: `{tool, action, origin, params (redacted), outcome, errorCode?,
   resultSummary:{bytes, sha256}}`. The bridge adds caller and timestamp and

@@ -35,7 +35,7 @@ describe("agents.list over the extension socket", () => {
     ({ d } = await startDaemon({ agents: { claudeBin: claude.bin, codexSocket: codex.socket } }));
     const e = new FakeExt(d.port);
     const w = await e.hello({ pairCode: d.pairCode, features: ["files.resolve", "agents"] });
-    expect(w).toMatchObject({ type: "welcome", protocolVersion: PROTOCOL_VERSION, features: ["agents"] });
+    expect(w).toMatchObject({ type: "welcome", protocolVersion: PROTOCOL_VERSION, features: expect.arrayContaining(["agents"]) });
     ext = e;
   });
 

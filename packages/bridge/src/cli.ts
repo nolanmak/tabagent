@@ -1,4 +1,4 @@
-// tabagent CLI: serve | mcp | pair | status | tools | token | audit | settings | kill | skill | config | <tool>
+// tabagent CLI: serve | mcp | pair | status | tools | token | audit | settings | kill | approve | skill | config | <tool>
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync, watchFile } from "node:fs";
 import { dirname, join } from "node:path";
@@ -13,7 +13,7 @@ import { buildMcpServer, channelPushHandler } from "./mcp";
 import { findAgentPid, readPs } from "./agents/ancestry";
 import { channelName, channelsFlag, readArgs } from "./agents/channels";
 import { InboxClient } from "./inbox-client";
-import { auditTail, configCommand, formatAuditLine, helpText, killCommand, settingsCommand, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out, type ToolCall } from "./commands";
+import { approveCommand, auditTail, configCommand, formatAuditLine, helpText, killCommand, settingsCommand, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out, type ToolCall } from "./commands";
 import { BRIDGE_VERSION } from "./version";
 import { authCli } from "./auth/cli-entry";
 import { captchaCli } from "./captcha/cli-entry";
@@ -269,6 +269,17 @@ switch (cmd) {
   case "kill":
     print(await killCommand(await bridgeCall(f)));
     break;
+  case "approve": {
+    // #108: the bridge runs Touch ID itself; refuse up front off macOS, before talking to the bridge.
+    if (process.platform !== "darwin") {
+      print(await approveCommand(pos, f, { platform: process.platform, api: async () => ({}) }));
+      break;
+    }
+    const cfg = portOf(f);
+    if (!(await health(cfg.port))) die("Bridge is not running. Start it with `tabagent serve`.");
+    print(await approveCommand(pos, f, { platform: process.platform, api: (path, method, body) => api(cfg.port, cfg.secret, path, method, body) }));
+    break;
+  }
   case "skill":
     print(skillCommand(pos, f, skillSource()));
     break;

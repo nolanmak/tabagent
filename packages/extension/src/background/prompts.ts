@@ -1,11 +1,23 @@
 // Prompt queue (D15, D19): FIFO, identical pending requests share one prompt,
 // 120s timeout, late answers are ignored. Pure: timers are injected.
+import type { AnswerOutcome, ApprovalChannel } from "@tabagent/protocol";
 import type { Answer, Level, SensitiveCategory } from "./policy";
+import { offeredAnswers } from "../pure/promptView";
 
 export type PromptKind = "site" | "sensitive" | "attach";
 export type PromptOutcome = Answer | "timeout" | "killed";
 
 export const PROMPT_TIMEOUT_MS = 120_000;
+/** #108: how long (and how many) settled prompts are remembered, to tell a late answer "already answered". */
+const SETTLED_TTL_MS = 10 * 60_000;
+const SETTLED_MAX = 200;
+
+export interface AnswerResult {
+  ok: boolean;
+  outcome: AnswerOutcome;
+  /** For already_answered: the channel that won. */
+  by?: ApprovalChannel;
+}
 
 export const CATEGORY_TEXT: Record<SensitiveCategory, string> = {
   a: "Submit a form with password, card or SSN fields",
@@ -41,7 +53,15 @@ export interface PromptInfo {
   expires: number;
 }
 
-export type PromptRequest = Omit<PromptInfo, "promptId" | "id" | "label" | "created" | "expires">;
+export interface PromptEvent {
+  type: "added" | "removed";
+  info: PromptInfo;
+  outcome?: PromptOutcome;
+  /** Set when a person answered (not on timeout, kill or session end). */
+  channel?: ApprovalChannel;
+}
+
+export type PromptRequest =Omit<PromptInfo, "promptId" | "id" | "label" | "created" | "expires">;
 
 interface Timers {
   now(): number;
@@ -63,20 +83,21 @@ export function promptKey(r: PromptRequest): string {
 
 export class PromptQueue {
   private pending = new Map<string, Pending>();
-  private listeners = new Set<(ev: { type: "added" | "removed"; info: PromptInfo; outcome?: PromptOutcome }) => void>();
+  private listeners = new Set<(ev: PromptEvent) => void>();
+  private settled = new Map<string, { outcome: PromptOutcome; channel?: ApprovalChannel; at: number }>();
 
   constructor(
     private t: Timers,
     private timeoutMs = PROMPT_TIMEOUT_MS,
   ) {}
 
-  on(fn: (ev: { type: "added" | "removed"; info: PromptInfo; outcome?: PromptOutcome }) => void) {
+  on(fn: (ev: PromptEvent) => void) {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
 
-  private emit(type: "added" | "removed", info: PromptInfo, outcome?: PromptOutcome) {
-    for (const l of this.listeners) l({ type, info, outcome });
+  private emit(type: "added" | "removed", info: PromptInfo, outcome?: PromptOutcome, channel?: ApprovalChannel) {
+    for (const l of this.listeners) l({ type, info, outcome, ...(channel ? { channel } : {}) });
   }
 
   /** FIFO order (insertion order of a Map). */
@@ -110,18 +131,54 @@ export class PromptQueue {
     return { promptId: id, outcome, shared: false };
   }
 
-  /** Returns false for unknown / already-settled prompts (late answers do nothing). */
+  /** The panel's answer. Returns false for unknown / already-settled / expired prompts (late answers do nothing). */
   answer(id: string, answer: Answer): boolean {
-    return this.settle(id, answer);
+    return this.answerAs(id, answer, "panel").ok;
   }
 
-  private settle(id: string, outcome: PromptOutcome): boolean {
+  /**
+   * #108: the one way an answer is applied, from any channel. Synchronous, so the first answer wins:
+   * a later one (any channel) gets already_answered. An answer at or after the prompt's expiry never
+   * executes, even if the timeout timer has not fired yet; an answer the prompt does not offer is refused.
+   */
+  answerAs(id: string, answer: Answer, channel: ApprovalChannel): AnswerResult {
+    const p = this.pending.get(id);
+    if (!p) {
+      this.prune();
+      const s = this.settled.get(id);
+      if (!s) return { ok: false, outcome: "not_found" };
+      if (s.outcome === "timeout") return { ok: false, outcome: "expired" };
+      return { ok: false, outcome: "already_answered", ...(s.channel ? { by: s.channel } : {}) };
+    }
+    if (this.t.now() >= p.info.expires) {
+      this.settle(id, "timeout");
+      return { ok: false, outcome: "expired" };
+    }
+    if (!offeredAnswers(p.info).includes(answer)) return { ok: false, outcome: "not_offered" };
+    this.settle(id, answer, channel);
+    return { ok: true, outcome: "applied" };
+  }
+
+  /** Settled prompts still remembered (bounded). */
+  get settledCount() {
+    return this.settled.size;
+  }
+
+  private prune() {
+    const now = this.t.now();
+    for (const [id, s] of this.settled) if (now - s.at > SETTLED_TTL_MS) this.settled.delete(id);
+    while (this.settled.size > SETTLED_MAX) this.settled.delete(this.settled.keys().next().value!);
+  }
+
+  private settle(id: string, outcome: PromptOutcome, channel?: ApprovalChannel): boolean {
     const p = this.pending.get(id);
     if (!p) return false;
     this.pending.delete(id);
     this.t.clearTimeout(p.timer);
+    this.settled.set(id, { outcome, channel, at: this.t.now() });
+    this.prune();
     for (const w of p.waiters) w(outcome);
-    this.emit("removed", p.info, outcome);
+    this.emit("removed", p.info, outcome, channel);
     return true;
   }
 

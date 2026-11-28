@@ -95,6 +95,70 @@ passkeys, payment entry) from your phone over Tailscale. It is off by default. W
   and `handoff.webhook` events record the origin and the first 8 hex digits of the handoff id. They
   never record the token, the cookie or the link.
 
+### Answering prompts outside the side panel (opt-in, #108)
+
+By default a permission prompt can be answered only in the side panel (or the prompt window), which an
+agent cannot drive. The side-panel setting **Answer prompts outside this panel** adds two more ways:
+`tabagent approve` with Touch ID or your login password (macOS), and a one-time phone page on your
+tailnet. The rule is that **the bridge never relays an answer without proof that you are there.** There
+is no flag, environment variable, config key or token that skips it.
+
+- **Off by default, panel-only.** Only the side panel can turn it on or off. `settings.change` refuses it
+  and no tool or REST route sets it. Each change is written to the audit log. While it is off, the
+  extension tells the bridge nothing about prompts and refuses every `prompt.answer`.
+- **One decision point.** With it on, the extension mirrors its pending prompts to the bridge with the
+  exact strings the panel shows. The extension stays the only place that decides: the bridge sends
+  `prompt.answer`, and the extension applies it through the same queue as a panel click. The first
+  answer wins. A second answer from any channel gets "already answered" and changes nothing. An answer
+  at or after the 120 s expiry never executes, even if the timeout has not fired yet. An answer the
+  prompt does not offer (for example "Always" on a policy change) is refused. The `decision` audit
+  event records the channel: `panel`, `cli-presence` or `phone`.
+- **`tabagent approve` (macOS).** The bridge runs the presence check itself, not the CLI. For each
+  answer it issues a single-use challenge bound to that prompt id and answer, valid for 90 s, with a
+  fresh random 256-bit key. A small Swift helper, compiled once with `swiftc` into `~/.tabagent/bin`,
+  evaluates LocalAuthentication's `deviceOwnerAuthentication` policy (Touch ID, or the login password)
+  with a reason that names the answer and the prompt title. Only on success does it return an HMAC of
+  the challenge under that key. The key exists only in bridge memory and on the helper's stdin pipe.
+  The bridge accepts the MAC once and then relays the answer. The CLI sends only `{promptId, answer}`,
+  and the bridge ignores anything else in the request. Only one check runs at a time, and a cancelled
+  check blocks new ones for 10 s, so an agent cannot stack dialogs. On Linux and Windows,
+  `tabagent approve` refuses and points to the side panel or the phone page. These routes accept only
+  the bridge secret, not per-client tokens.
+- **Phone page.** It needs `handoff.remote on` and uses the remote handoff listener and its rules: the
+  tailnet address only, the exact `Host`, a one-time link (128-bit id, 256-bit token, hashed), a token
+  claimed once for an `HttpOnly; SameSite=Strict` cookie scoped to `/approve/<id>`, and the
+  `x-tabagent-handoff: 1` header. The bridge hands out a link only after a presence check
+  (`tabagent approve --phone`) or a click on **Phone link for approvals** in the side panel. It is
+  **never posted to the handoff webhook**, because an agent can point the webhook at itself with
+  `tabagent config`. A link lasts 60 minutes by default (1 to 120). It ends when you press End link,
+  on the kill switch, when outside approvals are turned off, when the bridge stops, or when it expires.
+  It survives an extension reconnect, but nothing can be answered while the extension is away. The
+  listener is open only while a handoff or an approval link is live. The page fetches prompts as JSON
+  and renders them with `textContent`, so prompt text cannot become markup.
+- **Audit.** `approval.presence` (purpose and outcome), `approval.answer` (channel, prompt, answer,
+  outcome) and `approval.phone.link` / `.claim` / `.end` / `.revoke`, which record the first 8 hex
+  digits of the link id. None of them records a key, a MAC, a token, a cookie or a link.
+
+**What this protects against.** An agent that uses TabAgent's own interfaces cannot answer a prompt.
+That covers MCP tools, the REST API with a token or the bridge secret, and the CLI, including running
+`tabagent approve` and `tabagent config` itself. Calling the approve route only shows a Touch ID or
+password dialog that names the prompt and the answer, and only you can satisfy it. Getting a phone link
+needs the same dialog or a click in the side panel.
+
+**What it does not protect against.** The value of the proof comes from the LocalAuthentication
+evaluation needing a person. It does not come from a secret that an agent running as you cannot read.
+The key and MAC only bind a successful evaluation to one challenge inside the bridge.
+
+- *A local process that tampers with TabAgent* (D3). Such a process can replace the compiled helper or
+  the bridge's installed files. It can stop the bridge and serve its own on the port, and the extension
+  would then accept `prompt.answer` from it. It can also connect to the extension socket with the
+  secret from `config.json` and ask for a phone link. Any of these can answer prompts. Without this
+  setting, the same process cannot answer prompts through TabAgent, which is why the setting is off by
+  default. Turn it on only if you accept that risk for your agents.
+- *A dialog you did not start.* If an agent runs `tabagent approve 1 always`, the dialog still shows
+  what is being approved. Read it before you touch the sensor.
+- *A leaked phone link.* Anyone on your tailnet with an unclaimed link can answer prompts until it ends.
+
 ## Untrusted page content: wrapping is a label, not a guarantee (D21)
 
 Pages can contain text written to manipulate an AI agent ("ignore previous instructions…").

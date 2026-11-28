@@ -1,6 +1,6 @@
 // Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions, agents (#90),
 // activity feed (audit records only) and settings. A view over worker state.
-import type { Agent, AgentSources } from "@tabagent/protocol";
+import { answerLabel, type Agent, type AgentSources, type PromptAnswer } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, shareTabLabel, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
@@ -10,7 +10,8 @@ import { formatRemaining } from "../pure/modeChange";
 import { filterSites } from "../pure/siteFilter";
 import { workflowStepDetail } from "../pure/workflow";
 import { applyLevel } from "../pure/siteLevel";
-import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
+import { promptView } from "../pure/promptView";
+import { feedReducer, promptReducer, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const send = (msg: unknown) => chrome.runtime.sendMessage(msg) as Promise<any>;
@@ -41,30 +42,17 @@ function renderStatus() {
 }
 
 function promptHtml(p: any) {
-  const title = promptTitle(p);
-  const detail =
-    p.kind === "site"
-      ? p.level === "read"
-        ? "It will be able to see page content."
-        : p.level === "act"
-          ? "It will be able to click, type and navigate on this site."
-          : "It will be able to run scripts and read cookies and storage on this site."
-      : p.sensitive
-        ? p.sensitive.category === "p"
-          ? p.sensitive.description // policy changes are not tied to the tab's page; the summary names the site
-          : `${p.sensitive.description} · on ${p.origin}`
-        : `on ${p.origin}`;
-  const isAuth = p.sensitive?.category === "g";
-  const oneShot = p.kind === "attach" || p.sensitive?.category === "p" || p.sensitive?.category === "r" || !!p.auth?.signup;
-  const always = oneShot ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
-  const left = Math.max(0, Math.round((p.expires - Date.now()) / 1000));
-  return `<li class="prompt-item" data-prompt-id="${esc(p.promptId)}">
-    <div class="ptitle">${esc(title)}</div>
-    <div class="muted small pdetail">${esc(detail)}</div>
-    <div class="muted small psummary">${esc(p.summary)}</div>
-    <ul class="preasons reasons">${(p.reasons ?? []).map((r: string) => `<li>${esc(r)}</li>`).join("")}</ul>
-    <div class="muted small">Tool: ${esc(p.tool)} · <span class="countdown" data-expires="${Number(p.expires)}">${left}s</span></div>
-    <div class="actions"><button data-a="deny" data-id="${esc(p.promptId)}">Deny</button>${always}<button data-a="once" data-id="${esc(p.promptId)}" class="primary">Allow once</button></div>
+  // #108: the same strings and answers the CLI and the phone page show (pure/promptView).
+  const v = promptView(p);
+  const btn = (a: string) => `<button data-a="${a}" data-id="${esc(v.promptId)}"${a === "once" ? ' class="primary"' : ""}>${esc(answerLabel(a as PromptAnswer, v.alwaysLabel))}</button>`;
+  const left = Math.max(0, Math.round((v.expires - Date.now()) / 1000));
+  return `<li class="prompt-item" data-prompt-id="${esc(v.promptId)}">
+    <div class="ptitle">${esc(v.title)}</div>
+    <div class="muted small pdetail">${esc(v.detail)}</div>
+    <div class="muted small psummary">${esc(v.summary)}</div>
+    <ul class="preasons reasons">${v.reasons.map((r: string) => `<li>${esc(r)}</li>`).join("")}</ul>
+    <div class="muted small">Tool: ${esc(v.tool)} · <span class="countdown" data-expires="${Number(v.expires)}">${left}s</span></div>
+    <div class="actions">${v.answers.map(btn).join("")}</div>
   </li>`;
 }
 
@@ -409,6 +397,8 @@ function renderSettings() {
   ($("forceLite") as HTMLInputElement).checked = s.forceLite;
   ($("devAllowSensitive") as HTMLInputElement).checked = s.devAllowSensitive;
   ($("yolo") as HTMLInputElement).checked = !!s.yolo;
+  ($("outsideApprovals") as HTMLInputElement).checked = !!s.outsideApprovals;
+  $("phoneLinkRow").hidden = !s.outsideApprovals;
   $("yoloBanner").hidden = !s.yolo;
   renderYoloExpiry();
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
@@ -584,7 +574,15 @@ $("manualCaptureStop").addEventListener("click", () => send({ type: "ui.workflow
 const patch = (p: unknown) => send({ type: "ui.settings", patch: p }).then(refresh);
 const sites = () => structuredClone(state.settings.sites ?? {}) as Record<string, any>;
 for (const id of ["onSessionEnd", "beforeUnload"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLSelectElement).value }));
-for (const id of ["showOverlay", "forceLite", "devAllowSensitive", "yolo"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
+for (const id of ["showOverlay", "forceLite", "devAllowSensitive", "yolo", "outsideApprovals"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
+// #108: a one-time link to approve prompts from a phone (tailnet only). Clicking here is the presence proof.
+$("phoneLinkBtn").addEventListener("click", async () => {
+  const out = $("phoneLink");
+  out.hidden = false;
+  out.textContent = "Asking the bridge…";
+  const r = await send({ type: "ui.approvals.phoneLink" }).catch((e) => ({ ok: false, error: { message: String(e) } }));
+  out.textContent = r?.ok && r.url ? `${r.url}\nOne-time link, valid until ${new Date(r.expiresAt).toLocaleTimeString()}. Open it on your phone; it works for one device only.` : `No phone link: ${r?.error?.message ?? "the bridge did not answer"}${r?.error?.hint ? ` (${r.error.hint})` : ""}`;
+});
 
 /** Why choosing full did not turn on sign-in (#118); cleared on the next level change. */
 function showLevelNote(note: string | undefined) {

@@ -1,5 +1,7 @@
 // Permission prompt window (opened from the notification click when the side panel can't open).
-import { promptTitle } from "./reducers";
+// #108: the same strings and answers as the side panel, the CLI and the phone page (pure/promptView).
+import { answerLabel } from "@tabagent/protocol";
+import { promptView } from "../pure/promptView";
 
 const id = new URLSearchParams(location.search).get("id")!;
 const $ = (i: string) => document.getElementById(i)!;
@@ -13,30 +15,27 @@ async function load() {
     setTimeout(() => window.close(), 1500);
     return;
   }
-  $("title").textContent = promptTitle(p);
-  if (p.kind === "site") {
-    $("detail").textContent = p.level === "read" ? "It will be able to see page content." : p.level === "act" ? "It will be able to click, type and navigate on this site." : "It will be able to run scripts and read cookies and storage on this site.";
-    ($("always") as HTMLButtonElement).textContent = `Always allow ${p.level}`;
-  } else if (p.auth?.signup) {
-    // #112: a sign-up is asked every time; there is no "Always".
-    $("detail").textContent = `${p.sensitive?.description ?? "Sign-in"} · on ${p.origin}`;
-    $("always").remove();
-  } else if (p.kind === "attach") {
-    $("detail").textContent = "The tab will move into the agent's tab group. When the session ends it is ungrouped and left open.";
-    $("always").remove();
-  } else {
-    $("detail").textContent = `${p.sensitive?.description ?? "Sensitive action"} · on ${p.origin}`;
-    ($("always") as HTMLButtonElement).textContent = "Always allow on this site";
+  const v = promptView(p);
+  $("title").textContent = v.title;
+  $("detail").textContent = v.detail;
+  const summary = document.createElement("p");
+  summary.className = "muted small";
+  summary.id = "summary";
+  summary.textContent = v.summary;
+  $("detail").after(summary);
+  for (const a of ["once", "always", "deny"] as const) {
+    if (!v.answers.includes(a)) $(a).remove();
+    else $(a).textContent = answerLabel(a, v.alwaysLabel);
   }
   $("reasons").innerHTML = "";
-  for (const r of p.reasons ?? []) {
+  for (const r of v.reasons) {
     const li = document.createElement("li");
     li.textContent = r;
     $("reasons").appendChild(li);
   }
-  $("tool").textContent = `Tool: ${p.tool}`;
+  $("tool").textContent = `Tool: ${v.tool}`;
   const tick = () => {
-    const s = Math.max(0, Math.round((p.expires - Date.now()) / 1000));
+    const s = Math.max(0, Math.round((v.expires - Date.now()) / 1000));
     $("countdown").textContent = `Times out in ${s}s (the agent gets PROMPT_TIMEOUT)`;
   };
   tick();
@@ -44,7 +43,7 @@ async function load() {
 }
 
 for (const a of ["once", "always", "deny"]) {
-  $(a)?.addEventListener("click", async () => {
+  document.getElementById(a)?.addEventListener("click", async () => {
     await send({ type: "ui.answer", promptId: id, answer: a });
     window.close();
   });

@@ -114,6 +114,9 @@
   <label class="row"><input type="checkbox" id="forceLite" /> Lite mode everywhere (no debugger)</label>
   <label class="row"><input type="checkbox" id="yolo" /> <strong>YOLO mode:</strong> allow every site without asking (denylist, kill switch, tab takeover and sign-in still apply)</label>
   <label class="row"><input type="checkbox" id="devAllowSensitive" /> Developer: skip sensitive-action confirmations</label>
+  <label class="row"><input type="checkbox" id="outsideApprovals" /> Answer prompts outside this panel: <code>tabagent approve</code> with Touch ID or your Mac password, or a one-time phone page on your tailnet</label>
+  <div class="row" id="phoneLinkRow" hidden><button id="phoneLinkBtn">Phone link for approvals</button></div>
+  <pre class="muted small" id="phoneLink" style="white-space:pre-wrap;overflow-wrap:anywhere;user-select:all" hidden></pre>
   <div class="row"><button id="unpair" class="link">Unpair bridge</button></div>
   <p class="muted small" id="about"></p>
 </details>

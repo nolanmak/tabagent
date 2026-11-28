@@ -22,7 +22,7 @@ import {
 } from "@tabagent/protocol";
 import { handoffTimeoutMs, readHandoffConfig, type HandoffConfig } from "./config";
 import { HandoffRegistry, type HandoffEntry } from "./registry";
-import { createRemoteHandler, startRemoteListener, type RemoteBackend, type RemoteListener } from "./remote";
+import { createRemoteHandler, startRemoteListener, type ApprovalsRemote, type RemoteBackend, type RemoteListener } from "./remote";
 import { detectTailnetIp } from "./tailnet";
 import { postWebhook as realPostWebhook, webhookPayload } from "./webhook";
 
@@ -61,6 +61,7 @@ export class HandoffBridge implements RemoteBackend {
   private closing: Promise<void> = Promise.resolve();
   private waits = new Map<string, Wait>();
   private handler: RequestListener;
+  private approvals: ApprovalsRemote | undefined;
   private config: () => HandoffConfig;
   private log: (m: string) => void;
   private now: () => number;
@@ -88,7 +89,24 @@ export class HandoffBridge implements RemoteBackend {
         if (n === 0) this.closeListener();
       },
     });
-    this.handler = createRemoteHandler({ expectedHost: () => (this.listener ? `${this.listener.ip}:${this.listener.port}` : "\0"), backend: this, log: this.log });
+    this.handler = createRemoteHandler({ expectedHost: () => (this.listener ? `${this.listener.ip}:${this.listener.port}` : "\0"), backend: this, approvals: () => this.approvals, log: this.log });
+  }
+
+  /** #108: serve phone approval links on the same tailnet listener. */
+  attachApprovals(a: ApprovalsRemote) {
+    this.approvals = a;
+  }
+
+  /** #108: bind (or reuse) the tailnet listener for an approval link. */
+  async ensureRemote(): Promise<{ ip: string; port: number }> {
+    let l = await this.ensureListener();
+    if (this.listener !== l) l = await this.ensureListener();
+    return { ip: l.ip, port: l.port };
+  }
+
+  /** #108: close the listener when neither a handoff nor an approval link is live. */
+  releaseRemote() {
+    this.closeListener();
   }
 
   timeoutMs(): number {
@@ -262,7 +280,7 @@ export class HandoffBridge implements RemoteBackend {
   }
 
   private closeListener() {
-    if (this.registry.size > 0 || !this.listener) return;
+    if (this.registry.size > 0 || (this.approvals?.links.size ?? 0) > 0 || !this.listener) return;
     const l = this.listener;
     this.listener = null;
     this.closing = this.closing.then(() => l.close()).catch(() => {});

@@ -45,6 +45,7 @@ const PROTECTED: Record<string, { code: "PERMISSION_DENIED"; hint: string }> = {
   paused: { code: "PERMISSION_DENIED", hint: "Stop agents with session.kill_all. Resume is panel-only: ask the user to press Resume in the TabAgent side panel." },
   secret: { code: "PERMISSION_DENIED", hint: "Pairing is managed in the side panel and with `tabagent pair`." },
   port: { code: "PERMISSION_DENIED", hint: "The port is set when pairing (`tabagent config set port`)." },
+  outsideApprovals: { code: "PERMISSION_DENIED", hint: "Answering prompts from Touch ID or the phone page is turned on or off only by the user, in the TabAgent side panel." },
 };
 
 /**

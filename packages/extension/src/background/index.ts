@@ -1,7 +1,7 @@
 // TabAgent service worker: wires the bridge client, the command router, the
 // permission gate, the kill switch, the badge and the UI API together.
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
-import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, APPROVALS_FEATURE, ApprovalsLinkResultSchema, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
 import { grantTab, releaseGrantedTab } from "./agentGrant";
 import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
@@ -21,6 +21,7 @@ import { broadcast, feedAll, feedPush } from "./feed";
 import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
 import type { PromptInfo } from "./prompts";
 import { policyPrecheck } from "./handlers/policy";
+import { mirrorMessage, onBridgeAnswer } from "../pure/promptMirror";
 import { isPanelSender } from "../pure/uiSender";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
@@ -31,7 +32,7 @@ import { handlers } from "./tools";
 import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, onWorkflowEdit, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
-const FEATURES = ["files.resolve", AGENTS_FEATURE];
+const FEATURES = ["files.resolve", AGENTS_FEATURE, APPROVALS_FEATURE];
 
 // ---------------------------------------------------------------------------
 // Bridge connection (D4, D5, D11)
@@ -52,6 +53,7 @@ const bridge = createBridgeClient({
     // #92: re-validate the menu's recent agents once the bridge can list them.
     if (status === "connected") void rebuildMenus(currentAgents).catch(() => {});
     if (status === "connected") flushQueuedEvents();
+    if (status === "connected") void syncPrompts();
   },
   protocolVersion: PROTOCOL_VERSION,
   extensionVersion: VERSION,
@@ -125,7 +127,50 @@ function onBridgeMessage(msg: any) {
     case "handoff.end":
       onHandoffBridgeMessage(msg);
       break;
+    case "prompt.answer":
+      // #108: the bridge has checked presence (Touch ID / phone link); the queue still decides (first answer wins).
+      void getSettings().then((s) => {
+        const reply = onBridgeAnswer(msg, !!s.outsideApprovals, (id, answer, channel) => prompts.answerAs(id, answer, channel));
+        if (reply) bridge.send(reply);
+      });
+      break;
+    case "approvals.link.result": {
+      const r = ApprovalsLinkResultSchema.safeParse(msg);
+      const w = r.success ? linkWaits.get(r.data.id) : undefined;
+      if (w && r.success) {
+        linkWaits.delete(r.data.id);
+        w(r.data);
+      }
+      break;
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// #108: outside approvals. With the panel setting on, the bridge gets the pending prompts (the panel's
+// exact strings) so `tabagent approve` and the phone page can show them; answers come back as prompt.answer.
+// ---------------------------------------------------------------------------
+async function syncPrompts() {
+  if (!bridge.bridgeFeatures().includes(APPROVALS_FEATURE)) return;
+  const s = await getSettings().catch(() => null);
+  bridge.send(mirrorMessage(!!s?.outsideApprovals, pendingPrompts()));
+}
+
+const linkWaits = new Map<string, (r: { ok: boolean; url?: string | null; expiresAt?: number; error?: unknown }) => void>();
+function requestPhoneLink(): Promise<{ ok: boolean; url?: string | null; expiresAt?: number; error?: unknown }> {
+  if (!bridge.connected() || !bridge.bridgeFeatures().includes(APPROVALS_FEATURE)) return Promise.resolve({ ok: false, error: { message: "The bridge is not connected or does not support phone approvals; update @nolmak/tabagent" } });
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const t = setTimeout(() => {
+      linkWaits.delete(id);
+      resolve({ ok: false, error: { message: "The bridge did not answer in time" } });
+    }, 15_000);
+    linkWaits.set(id, (r) => {
+      clearTimeout(t);
+      resolve(r);
+    });
+    bridge.send({ type: "approvals.link", id });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +261,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const expiryMoved = before.yoloExpiresAt !== after.yoloExpiresAt;
   if (expiryMoved) void syncYoloAlarm(after);
   if (events.length || expiryMoved) broadcast({ type: "settings" });
+  if (before.outsideApprovals !== after.outsideApprovals) void syncPrompts();
   refreshBadge();
 });
 
@@ -304,11 +350,13 @@ onPrompt((ev) => {
     if (p.tabId != null) showBanner(p.tabId, "TabAgent is waiting for your approval. Open the TabAgent side panel (toolbar icon) to answer.");
     void popPromptWindowIfHidden(p.promptId);
   } else {
-    sendEvent("decision", { ...promptEventData(p), answer: ev.outcome });
+    // #108: which channel answered (panel | cli-presence | phone); absent on timeout, kill or session end.
+    sendEvent("decision", { ...promptEventData(p), answer: ev.outcome, ...(ev.channel ? { channel: ev.channel } : {}) });
     chrome.notifications?.clear(`prompt:${p.promptId}`).catch(() => {});
     void closePromptWindows(p.promptId);
     if (p.tabId != null && !prompts.list().some((x) => x.tabId === p.tabId)) hideBanner(p.tabId);
   }
+  void syncPrompts();
   refreshBadge();
 });
 
@@ -389,7 +437,7 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 // ---------------------------------------------------------------------------
 // UI API (side panel + prompt window). Only our own extension pages may call it.
 // ---------------------------------------------------------------------------
-const UI_KEYS = ["sites", "denylist", "devAllowSensitive", "yolo", "onSessionEnd", "beforeUnload", "showOverlay", "forceLite", "liteSites"] as const;
+const UI_KEYS = ["sites", "denylist", "devAllowSensitive", "yolo", "outsideApprovals", "onSessionEnd", "beforeUnload", "showOverlay", "forceLite", "liteSites"] as const;
 
 function publicSettings(s: Settings) {
   const { secret: _s, autoAcceptBeforeUnload: _a, sensitiveAllowed: _x, ...rest } = s;
@@ -461,7 +509,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return sendToAgent(req.msg);
       }
       case "ui.answer":
-        return { ok: answerPrompt(msg.promptId ?? msg.id, msg.answer) };
+        // #108: same path as Touch ID / phone answers; first answer wins, the panel's is recorded as "panel".
+        return prompts.answerAs(String(msg.promptId ?? msg.id), msg.answer, "panel");
+      case "ui.approvals.phoneLink": {
+        const s = await getSettings();
+        if (!s.outsideApprovals) return { ok: false, error: { message: "Turn on “Answer prompts outside this panel” first" } };
+        return requestPhoneLink();
+      }
       case "ui.prompt.get":
         return pendingPrompts().find((p) => p.promptId === msg.id) ?? null;
       case "ui.handoff":
