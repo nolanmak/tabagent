@@ -236,10 +236,11 @@ test("context menu: intent opens the panel with the agent preselected and the se
     return getSelection()!.toString();
   });
   expect(selected.length).toBeGreaterThan(50);
+  // Its own window: a panel takes only intents for its own window's tabs, and w.panel lives in the first one.
   const tab: { id: number; windowId: number } = await sw.evaluate(async (url) => {
     const [t] = await chrome.tabs.query({ url });
-    await chrome.tabs.update(t.id!, { active: true });
-    return { id: t.id!, windowId: t.windowId };
+    const win = await chrome.windows.create({ tabId: t.id! });
+    return { id: t.id!, windowId: win!.id! };
   }, `${w.h.A}/article.html`);
   const before = w.codex.calls("thread/queue/add").length;
   await sw.evaluate(([info, t]) => (globalThis as any).__tabagent.contextMenuClick(info, t), [{ menuItemId: agentItem.id, selectionText: selected }, tab] as const);
@@ -269,12 +270,12 @@ test("context menu: intent opens the panel with the agent preselected and the se
     await p.locator("#agentSend").dispatchEvent("click");
     const line = p.locator("#agentFeed li").filter({ hasText: "Menu helper" });
     await expect(line.locator(".agent-state")).toHaveText("queued", { timeout: 15_000 });
-    const text: string = w.codex.calls("thread/queue/add").at(-1).params.input[0].text;
+    const text: string = w.codex.calls("thread/queue/add").at(-1)!.params.input[0].text;
     expect(text).toContain("[TabAgent: message from the user via the side panel]\nWhat does this say?");
     expect(text).toContain("Selected text: <<<PAGE_DATA");
     expect(text).toContain(selected);
     // A successful send records the agent as recent.
-    await expect.poll(() => sw.evaluate(async () => (await chrome.storage.local.get("recentAgents")).recentAgents?.[0]?.id)).toBe(AGENT);
+    await expect.poll(() => sw.evaluate(async () => ((await chrome.storage.local.get("recentAgents")).recentAgents as { id: string }[] | undefined)?.[0]?.id)).toBe(AGENT);
 
     // A second intent while the panel is open (storage.onChanged), naming an agent that is gone.
     await sw.evaluate(([info, t]) => (globalThis as any).__tabagent.contextMenuClick(info, t), [{ menuItemId: String(agentItem.id).replace(AGENT, "codex:gone"), selectionText: "second pick" }, tab] as const);
