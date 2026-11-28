@@ -21,11 +21,14 @@ const test = base.extend<{}, { w: W }>({
       const oldPath = process.env.PATH;
       const oldSock = process.env.TABAGENT_CODEX_SOCKET;
       const oldProjects = process.env.TABAGENT_CLAUDE_PROJECTS_DIR;
+      const oldSessions = process.env.TABAGENT_CLAUDE_SESSIONS_DIR;
       // Inherited by the bridge process the harness spawns.
       process.env.PATH = `${claude.dir}:${oldPath}`;
       process.env.TABAGENT_CODEX_SOCKET = codex.socket;
       // #137: session titles come from the stub's transcripts, never the real ~/.claude.
       process.env.TABAGENT_CLAUDE_PROJECTS_DIR = claude.projectsDir;
+      // #151: Remote Control ids come from the stub's session records, never the real ~/.claude/sessions.
+      process.env.TABAGENT_CLAUDE_SESSIONS_DIR = claude.sessionsDir;
       const h = new Harness();
       try {
         await h.start();
@@ -35,6 +38,8 @@ const test = base.extend<{}, { w: W }>({
         else process.env.TABAGENT_CODEX_SOCKET = oldSock;
         if (oldProjects === undefined) delete process.env.TABAGENT_CLAUDE_PROJECTS_DIR;
         else process.env.TABAGENT_CLAUDE_PROJECTS_DIR = oldProjects;
+        if (oldSessions === undefined) delete process.env.TABAGENT_CLAUDE_SESSIONS_DIR;
+        else process.env.TABAGENT_CLAUDE_SESSIONS_DIR = oldSessions;
       }
       // A message sender for ui(). It reports itself hidden so its own Agents section never polls the
       // bridge, which would fill the bridge's 5 s list cache before a test sets its stub agents.
@@ -147,7 +152,7 @@ test("the kill switch blocks sends with PAUSED, and nothing reaches the agent (A
 });
 
 // P1c (#90): the side panel's Agents section, composer and feed, driven through the real panel UI.
-test("panel: lists stub agents, sends to Codex (queued -> delivered), Claude needs the explicit Start a new session button (started + attach hint), blocks over-limit", async ({ w }) => {
+test("panel: lists stub agents, Quick send to Codex (queued -> delivered) under its row, Claude needs the explicit Start a new session button (started + attach hint), blocks over-limit", async ({ w }) => {
   const T = "019a0000-0000-7000-8000-0000000000c1";
   const queue: string[] = [];
   w.claude.set("bg.err", null);
@@ -180,17 +185,23 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), Claude nee
     await expect(codexRow).toContainText("queued (Codex)");
     await expect(claudeRow).toContainText("Readable stub title");
     await expect(claudeRow).not.toContainText("spawn-target");
-    await expect(claudeRow).toContainText("Not connected — can't message this session");
-    await expect(claudeRow.getByRole("link", { name: "Connect it: update TabAgent and restart this session" })).toHaveAttribute("href", /send-to-agent\.md#connect-a-session/);
+    await expect(claudeRow).toContainText("Not connected");
+    await expect(claudeRow.getByRole("link", { name: "How to connect" })).toHaveAttribute("href", /send-to-agent\.md#connect-a-session/);
+    // #151: a session that can't be messaged has no Quick send.
+    await expect(claudeRow.locator("[data-quick-send]")).toHaveCount(0);
     await expect(claudeRow).toContainText("pid 4250");
     // The untitled, not-connected sessions are collapsed under a disclosure.
     await expect(p.locator("#agents details summary")).toHaveText("2 other sessions");
     await expect(p.locator('#agents [data-agent-id="claude:4251:1795639120001"]')).toBeHidden();
-    await expect(p.locator("#agentSelection")).toBeDisabled();
+    // #151: no composer until Quick send; then it sits right under that row.
+    await expect(p.locator("#agentPrompt")).toBeHidden();
 
     // Codex: queued, then delivered once the submission leaves the queue.
     const adds = w.codex.calls("thread/queue/add").length;
-    await codexRow.click();
+    await codexRow.locator("[data-quick-send]").click();
+    await expect(p.locator("#agents li.quick-send #agentPrompt")).toBeVisible();
+    await expect(p.locator(`#agents [data-agent-id="codex:${T}"] + li.quick-send`)).toHaveCount(1);
+    await expect(p.locator("#agentSelection")).toBeDisabled();
     await p.fill("#agentPrompt", "Summarise the page");
     await expect(p.locator("#agentSend")).toHaveText("Send");
     await p.click("#agentSend");
@@ -202,35 +213,44 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), Claude nee
     w.codex.notify("thread/queue/changed", { threadId: T });
     await expect(codexLine.locator(".agent-state")).toHaveText("delivered", { timeout: 15_000 });
 
-    // #137: an unlinked Claude session: Send is disabled and plain Send cannot spawn; the separate
-    // "Start a new session in <folder>" button does, and the feed says where it runs and how to attach.
-    const folder = w.claude.dir.split("/").pop()!;
-    await claudeRow.click();
-    await p.fill("#agentPrompt", "Write tests");
-    await expect(p.locator("#agentSend")).toHaveText("Send");
-    await expect(p.locator("#agentSend")).toBeDisabled();
-    await expect(p.locator("#agentComposerNote")).toContainText("not connected to TabAgent");
-    await p.locator("#agentSend").click({ force: true });
-    await p.waitForTimeout(300);
-    expect(w.claude.read("bg.text")).toBeNull();
-    const spawnBtn = p.locator("#agentSpawn");
-    await expect(spawnBtn).toBeVisible();
-    await expect(spawnBtn).toHaveText(`Start a new session in ${folder}`);
-    await spawnBtn.click();
-    const claudeLine = p.locator("#agentFeed li").filter({ hasText: `New session in ${folder}` });
-    await expect(claudeLine.locator(".agent-state")).toHaveText("started", { timeout: 15_000 });
-    await expect(claudeLine).toContainText("claude attach 0badc0de");
-    await expect(claudeLine).toContainText(w.claude.dir);
-    expect(w.claude.read("bg.text")).toBe("[TabAgent: message from the user via the side panel]\nWrite tests");
-
     // Over the AD13 prompt limit: blocked in the panel, nothing reaches the bridge.
-    const bgCalls = w.claude.calls().filter((c) => c.startsWith("--bg")).length;
     await p.fill("#agentPrompt", "x".repeat(8001));
     await expect(p.locator("#agentSend")).toBeDisabled();
     await expect(p.locator("#agentComposerNote")).toContainText("the limit is 8,000");
     await p.locator("#agentSend").click({ force: true });
-    expect(w.claude.calls().filter((c) => c.startsWith("--bg")).length).toBe(bgCalls);
-    await expect(p.locator("#agentFeed li")).toHaveCount(2);
+    expect(w.codex.calls("thread/queue/add").length).toBe(adds + 1);
+    await expect(p.locator("#agentFeed li")).toHaveCount(1);
+    // Quick send closes again.
+    await codexRow.locator("[data-quick-send]").click();
+    await expect(p.locator("#agentPrompt")).toBeHidden();
+
+    // #137/#151: an unlinked Claude session opens as a chat page whose composer is replaced by the
+    // not-connected card; plain Send cannot spawn. The separate "Start a new session in <folder>" does.
+    const folder = w.claude.dir.split("/").pop()!;
+    const [chat] = await Promise.all([w.h.ctx.waitForEvent("page", (pg) => pg.url().includes("/chat.html?agent=")), claudeRow.locator(".agent-title").click()]);
+    try {
+      await expect(chat.locator("#card")).toContainText("This session isn't connected to TabAgent.", { timeout: 15_000 });
+      await expect(chat.locator("#composer")).toBeHidden();
+      await expect(chat.locator("#card a[data-rc]")).toHaveCount(0);
+      expect(w.claude.read("bg.text")).toBeNull();
+      const spawnBtn = chat.locator("[data-spawn-start]");
+      await expect(spawnBtn).toHaveText(`Start a new session in ${folder}`);
+      await spawnBtn.click();
+      await chat.fill("#input", "Write tests");
+      await chat.click("#sendBtn");
+      const pend = chat.locator("#pending .pending");
+      await expect(pend.locator(".pending-state")).toHaveText("Started a new session", { timeout: 15_000 });
+      await expect(pend).toContainText("claude attach 0badc0de");
+      await expect(pend).toContainText(w.claude.dir);
+      expect(w.claude.read("bg.text")).toBe("[TabAgent: message from the user via the side panel]\nWrite tests");
+      // Over the limit in the chat page too: Start stays disabled.
+      await spawnBtn.click();
+      await chat.fill("#input", "x".repeat(8001));
+      await expect(chat.locator("#sendBtn")).toBeDisabled();
+      await expect(chat.locator("#composerNote")).toContainText("the limit is 8,000");
+    } finally {
+      await chat.close();
+    }
   } finally {
     await p.close();
   }
@@ -294,6 +314,8 @@ test("context menu: intent opens the panel with the agent preselected and the se
   try {
     const row = p.locator(`#agents [data-agent-id="${AGENT}"]`);
     await expect(row).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+    // #151: the intent opens Quick send right under the agent's row.
+    await expect(p.locator(`#agents [data-agent-id="${AGENT}"] + li.quick-send #agentPrompt`)).toBeVisible();
     await expect(p.locator("#agentTarget")).toContainText("Menu helper");
     await expect(p.locator("#agentSelection")).toBeEnabled();
     await expect(p.locator("#agentSelection")).toBeChecked();

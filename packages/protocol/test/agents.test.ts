@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_GRANT_CODES, AgentGrantedSchema, AgentGrantSchema, AgentReleaseSchema, AGENT_DELIVERY_STATES, AGENT_LIMITS, AGENTS_FEATURE, AgentSchema, AgentSendSchema, agentSendOverLimit, AgentSentSchema, AgentStatusSchema, AgentsListedSchema, AgentsListSchema, BridgeToExtSchema, ExtToBridgeSchema, WelcomeSchema } from "@tabagent/protocol";
+import { AGENT_HISTORY_LIMITS, AgentEntrySchema, AgentHistorySchema, isRemoteControlUrl, remoteControlUrl, AGENT_GRANT_CODES, AgentGrantedSchema, AgentGrantSchema, AgentReleaseSchema, AGENT_DELIVERY_STATES, AGENT_LIMITS, AGENTS_FEATURE, AgentSchema, AgentSendSchema, agentSendOverLimit, AgentSentSchema, AgentStatusSchema, AgentsListedSchema, AgentsListSchema, BridgeToExtSchema, ExtToBridgeSchema, WelcomeSchema } from "@tabagent/protocol";
 
 const agent = { id: "claude:1:2", vendor: "claude", name: "x", cwd: "/w", startedAt: 2, pid: 1, status: "idle", linked: false, canDriveTab: false, delivery: "spawn" };
 
@@ -101,5 +101,26 @@ describe("agent.grant / agent.granted / agent.release (AD1, AD11)", () => {
     expect(AgentGrantSchema.safeParse({ type: "agent.grant", requestId: "q", meta }).success).toBe(false);
     expect(AgentGrantSchema.safeParse({ type: "agent.grant", requestId: "q", meta, tabId: 1.5 }).success).toBe(false);
     expect(AgentGrantedSchema.safeParse({ type: "agent.granted", requestId: "q", ok: false, code: "OOPS" }).success).toBe(false);
+  });
+});
+
+describe("#151 chat page: history, watch, entries, Remote Control", () => {
+  it("remoteControlUrl accepts only plain session ids; isRemoteControlUrl only URLs it could make", () => {
+    expect(remoteControlUrl("session_01AbCdEfGhIj")).toBe("https://claude.ai/code/session_01AbCdEfGhIj");
+    for (const bad of [null, undefined, 5, "", "session_", "session_../../x", "sess_01AbCdEfGhIj", "session_01AbCdEfGhIj?x=1"]) expect(remoteControlUrl(bad)).toBeNull();
+    expect(isRemoteControlUrl("https://claude.ai/code/session_01AbCdEfGhIj")).toBe(true);
+    for (const bad of ["https://evil.test/code/session_01AbCdEfGhIj", "javascript:alert(1)", "https://claude.ai/code/session_01AbCdEfGhIj/../x", 3]) expect(isRemoteControlUrl(bad)).toBe(false);
+  });
+  it("history, watch and entries messages route through the unions; Agent takes remoteControlUrl", () => {
+    expect(AgentSchema.parse({ ...agent, remoteControlUrl: "https://claude.ai/code/session_01AbCdEfGhIj" }).remoteControlUrl).toContain("session_");
+    const entry = { uuid: "u1", ts: 1, role: "tool", tool: { name: "Bash", summary: "ls", id: "t", result: true, error: true } };
+    expect(ExtToBridgeSchema.parse({ type: "agent.history", requestId: "r", agentId: "claude:1:2", before: "100", limit: 50 }).type).toBe("agent.history");
+    expect(ExtToBridgeSchema.parse({ type: "agent.watch", agentId: "claude:1:2" }).type).toBe("agent.watch");
+    expect(ExtToBridgeSchema.parse({ type: "agent.unwatch", agentId: "claude:1:2" }).type).toBe("agent.unwatch");
+    expect(BridgeToExtSchema.parse({ type: "agent.history.result", requestId: "r", agentId: "a", ok: true, entries: [entry], hasMore: false }).type).toBe("agent.history.result");
+    expect(BridgeToExtSchema.parse({ type: "agent.entries", agentId: "a", entries: [], reset: true }).type).toBe("agent.entries");
+    expect(AgentHistorySchema.safeParse({ type: "agent.history", requestId: "r", agentId: "a", limit: AGENT_HISTORY_LIMITS.maxLimit + 1 }).success).toBe(false);
+    expect(AgentEntrySchema.safeParse({ ...entry, role: "system" }).success).toBe(false);
+    expect(AgentEntrySchema.safeParse({ uuid: "u", ts: 0, role: "user", text: "x".repeat(AGENT_HISTORY_LIMITS.text + 200) }).success).toBe(false);
   });
 });

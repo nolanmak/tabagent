@@ -35,12 +35,17 @@ const test = base.extend<{}, { w: W }>({
       const oldPath = process.env.PATH;
       process.env.PATH = `${claude.dir}:${oldPath}`;
       process.env.TABAGENT_HOLD_TTL_MS = String(TTL_MS);
+      // #151: never the real ~/.claude/sessions (Remote Control ids) or ~/.claude/projects.
+      process.env.TABAGENT_CLAUDE_SESSIONS_DIR = claude.sessionsDir;
+      process.env.TABAGENT_CLAUDE_PROJECTS_DIR = claude.projectsDir;
       const h = new Harness();
       try {
         await h.start();
       } finally {
         process.env.PATH = oldPath;
         delete process.env.TABAGENT_HOLD_TTL_MS;
+        delete process.env.TABAGENT_CLAUDE_SESSIONS_DIR;
+        delete process.env.TABAGENT_CLAUDE_PROJECTS_DIR;
       }
       const panel = await h.openPanel();
       await use({ h, claude, panel });
@@ -172,8 +177,7 @@ test("P2b tab grant: Send with the tab attaches it with no prompt, site policy s
     // 0. The composer is truthful about what this target gets, and offers "Start a new session in <folder> instead".
     const p = await h.openPanel();
     opened.push(p);
-    await expect(p.locator("#agentShareLabel")).toHaveText("Share this tab's title and link");
-    await p.locator(`#agents [data-agent-id="${agentId}"]`).click({ timeout: 15_000 });
+    await p.locator(`#agents [data-agent-id="${agentId}"] [data-quick-send]`).click({ timeout: 15_000 });
     await expect(p.locator("#agentShareLabel")).toHaveText("Share this tab (agent can use it)");
     await expect(p.locator("#agentSpawn")).toHaveText(/^Start a new session in .* instead$/);
     await p.close();
@@ -242,8 +246,8 @@ test("channel route: launched with --dangerously-load-development-channels serve
     // Through the real panel: the row says "instant", and the feed line ends at `sent` (never `delivered`).
     const p = w.panel;
     const row = p.locator(`#agents [data-agent-id="${agentId}"]`);
-    await expect(row).toContainText("instant", { timeout: 15_000 });
-    await row.click();
+    await expect(row).toContainText("Connected · instant", { timeout: 15_000 });
+    await row.locator("[data-quick-send]").click();
     await p.fill("#agentPrompt", "Reply with CHANNEL-OK");
     await p.click("#agentSend");
     const line = p.locator("#agentFeed li").filter({ hasText: "channel-target" });

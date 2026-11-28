@@ -11,6 +11,9 @@ import {
   agentListHtml,
   composerState,
   CONNECT_DOCS_URL,
+  chatPageUrl,
+  connectionState,
+  remoteUrl,
   cwdBasename,
   groupAgents,
   formatAge,
@@ -57,6 +60,48 @@ describe("cwdBasename and formatAge", () => {
   ])("formatAge(%d) = %j", (ms, s) => expect(formatAge(ms)).toBe(s));
 });
 
+describe("#151 connection words, Remote Control and Quick send on rows", () => {
+  const RC = "https://claude.ai/code/session_01AbCdEfGhIjKl";
+  it.each([
+    [{ linked: true, delivery: "channel" }, "Connected · instant", "instant"],
+    [{ linked: true, delivery: "piggyback" }, "Connected · on next browser action", "next"],
+    [{ linked: false, delivery: "none", remoteControlUrl: RC }, "Remote Control only", "remote"],
+    [{ linked: false, delivery: "none" }, "Not connected", "off"],
+    [{ vendor: "codex", delivery: "queue" }, "Codex · queued", "queue"],
+    [{ vendor: "codex", delivery: "none", status: "error", statusLabel: "systemError" }, "Can't take messages (systemError)", "error"],
+    [{ vendor: "codex", delivery: "none", status: "idle" }, "Can't take messages", "error"],
+  ] as const)("%j -> %s", (over, label, tone) => {
+    expect(connectionState(agent(over as Partial<Agent>))).toEqual({ label, tone });
+  });
+
+  it("a Remote Control session gets an Open in Claude link (new tab, noopener) and stays out of the collapsed group", () => {
+    const v = agentRowView(agent({ remoteControlUrl: RC }), NOW);
+    expect(v.remoteControlUrl).toBe(RC);
+    const html = agentRowHtml(v, false);
+    expect(html).toContain(`<a class="rc-link" href="${RC}" target="_blank" rel="noopener noreferrer"`);
+    expect(html).toContain("Remote Control only");
+    expect(groupAgents([v]).main.map((x) => x.id)).toEqual([v.id]);
+  });
+
+  it("a remoteControlUrl that is not claude.ai/code/session_… is never linked", () => {
+    for (const bad of ["javascript:alert(1)", "https://evil.test/code/session_01AbCdEfGhIjKl"]) {
+      const v = agentRowView(agent({ remoteControlUrl: bad }), NOW);
+      expect(v.remoteControlUrl).toBeNull();
+      expect(agentRowHtml(v, false)).not.toContain("rc-link");
+      expect(remoteUrl({ remoteControlUrl: bad })).toBeNull();
+    }
+  });
+
+  it("sendable rows have Quick send (expanded state when selected); the row opens the chat", () => {
+    const v = agentRowView(agent({ linked: true, delivery: "channel", status: "busy" }), NOW);
+    expect(agentRowHtml(v, false)).toContain('data-quick-send="claude:4242:1" aria-expanded="false">Quick send</button>');
+    expect(agentRowHtml(v, true)).toContain('aria-expanded="true">Close</button>');
+    expect(agentRowHtml(v, false)).toContain('aria-label="fix-tests — open chat"');
+    expect(agentRowHtml(v, false)).toContain("busy-dot");
+    expect(chatPageUrl("chrome-extension://abc/", "claude:1:2")).toBe("chrome-extension://abc/chat.html?agent=claude%3A1%3A2");
+  });
+});
+
 describe("agent rows (§7)", () => {
   it("names the route in words for every route", () => {
     expect(ROUTE_WORDS).toEqual({
@@ -71,14 +116,18 @@ describe("agent rows (§7)", () => {
   it("#137: an unlinked Claude row says it is not connected, links the connect docs, and offers a new session in its folder", () => {
     const v = agentRowView(agent(), NOW);
     expect(v).toMatchObject({ id: "claude:4242:1", vendorLabel: "Claude", title: "fix-tests", cwdBase: "tabagent", age: "5m", pid: 4242, status: "idle", sendable: false, notConnected: true, actionLabel: "Send", spawnLabel: "Start a new session in tabagent", badges: [] });
-    expect(v.reason).toBe("Not connected — can't message this session");
-    expect(v.routeWords).toBe("Not connected — can't message this session");
+    expect(v.reason).toBe("Not connected");
+    expect(v.routeWords).toBe("Not connected");
+    expect(v.connection).toEqual({ label: "Not connected", tone: "off" });
     const html = agentRowHtml(v, false);
-    expect(html).toContain("Not connected — can&#39;t message this session");
-    expect(html).toContain("Connect it: update TabAgent and restart this session");
+    expect(html).toContain('<span class="conn conn-off">Not connected</span>');
+    expect(html).toContain("How to connect");
     expect(html).toContain(`href="${CONNECT_DOCS_URL}"`);
     expect(html).toContain('target="_blank"');
     expect(html).not.toContain("starts a new session");
+    // #151: no Quick send (it can't be messaged) and no Remote Control link without a bridgeSessionId.
+    expect(html).not.toContain("data-quick-send");
+    expect(html).not.toContain("Open in Claude");
   });
 
   it("#137: an older bridge that still lists unlinked Claude as spawn is treated the same (never a surprise spawn)", () => {
@@ -89,7 +138,7 @@ describe("agent rows (§7)", () => {
     const v = agentRowView(agent({ name: "nolanmakatche-22", title: "Pending user input check" }), NOW);
     expect(v).toMatchObject({ title: "Pending user input check", titled: true });
     const html = agentRowHtml(v, false);
-    expect(html).toContain("<b>Pending user input check</b>");
+    expect(html).toContain('<b class="agent-title">Pending user input check</b>');
     expect(html).toContain("tabagent · 5m · pid 4242");
     expect(html).not.toContain("nolanmakatche-22");
     // A title that is only the vendor's auto name is not a real title.
@@ -135,7 +184,7 @@ describe("agent rows (§7)", () => {
     const none = agentRowHtml(agentRowView(agent({ vendor: "codex", delivery: "none" }), NOW), false);
     expect(none).toContain('aria-selected="false"');
     expect(none).toContain("agent-none");
-    expect(none).toContain("No way to deliver to this agent");
+    expect(none).toContain("Can&#39;t take messages");
     expect(agentRowHtml(agentRowView(agent({ linked: true, canDriveTab: true }), NOW), false)).toContain("can drive tab");
   });
 

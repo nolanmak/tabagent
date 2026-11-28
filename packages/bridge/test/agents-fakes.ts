@@ -1,6 +1,6 @@
 // Test doubles for Send to agent (spec §11): a stub `claude` executable on a temp PATH and a fake
 // Codex app-server speaking JSON-RPC over WebSocket on a temp unix socket. The real CLIs never run.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +54,21 @@ export class StubClaude {
     const d = join(this.projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, `${sessionId}.jsonl`), entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  }
+  /** Append entries to an existing transcript (a live session writing more). */
+  appendTranscript(cwd: string, sessionId: string, entries: object[]) {
+    const d = join(this.projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    mkdirSync(d, { recursive: true });
+    appendFileSync(join(d, `${sessionId}.jsonl`), entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  }
+  /** A stand-in for ~/.claude/sessions (point TABAGENT_CLAUDE_SESSIONS_DIR or claudeSessionsDir here). */
+  get sessionsDir(): string {
+    return join(this.dir, "sessions");
+  }
+  /** Write `<sessions>/<pid>.json` as Claude Code does (#151: bridgeSessionId for Remote Control). */
+  session(pid: number, rec: Record<string, unknown>) {
+    mkdirSync(this.sessionsDir, { recursive: true });
+    writeFileSync(join(this.sessionsDir, `${pid}.json`), JSON.stringify({ pid, ...rec }));
   }
   read(name: string): string | null {
     const p = join(this.dir, name);
@@ -173,3 +188,31 @@ export function codexThread(id: string, status: Record<string, unknown> = { type
 export function claudeRecord(pid: number, startedAt: number, extra: Record<string, unknown> = {}) {
   return { pid, cwd: "/work/cl", kind: "interactive", startedAt, sessionId: "11111111-2222-3333-4444-555555555555", name: `agent-${pid}`, status: "idle", ...extra };
 }
+
+// ---------------------------------------------------------------------------
+// #151: synthetic Claude Code transcript lines (shapes from real transcripts, invented content)
+// ---------------------------------------------------------------------------
+
+let seq = 0;
+const uid = (p: string) => `${p}${(++seq).toString(16).padStart(7, "0")}-0000-4000-8000-000000000000`;
+const at = (s: number) => new Date(Date.UTC(2026, 10, 27, 12, 0, s)).toISOString();
+
+export const tx = {
+  user: (text: string, extra: Record<string, unknown> = {}) => ({ type: "user", uuid: uid("u"), timestamp: at(1), isSidechain: false, userType: "external", message: { role: "user", content: text }, ...extra }),
+  assistant: (blocks: object[] | string, extra: Record<string, unknown> = {}) => ({ type: "assistant", uuid: uid("a"), timestamp: at(2), isSidechain: false, message: { role: "assistant", model: "claude-test", content: blocks }, ...extra }),
+  text: (text: string) => ({ type: "text", text }),
+  toolUse: (id: string, name: string, input: object) => ({ type: "tool_use", id, name, input }),
+  thinking: (t: string) => ({ type: "thinking", thinking: t, signature: "sig" }),
+  toolResult: (id: string, content: unknown, isError = false) => ({ type: "user", uuid: uid("r"), timestamp: at(3), isSidechain: false, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: isError }] } }),
+  /** A channel push as Claude Code records it: a meta user line with origin.kind "channel" (AD9). */
+  channel: (prompt: string, server = "tabagent") => ({
+    type: "user",
+    uuid: uid("c"),
+    timestamp: at(4),
+    isMeta: true,
+    origin: { kind: "channel", server },
+    message: { role: "user", content: `<channel source="${server}">\n[TabAgent: message from the user via the side panel]\n${prompt}\n</channel>` },
+  }),
+  system: () => ({ type: "system", uuid: uid("s"), subtype: "turn_duration", durationMs: 10, timestamp: at(5) }),
+  title: (t: string) => ({ type: "ai-title", aiTitle: t, sessionId: "s" }),
+};
