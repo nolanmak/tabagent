@@ -314,11 +314,36 @@ export function composerMode(a: Agent | null, o: { loaded: boolean; spawnChosen:
   return v.sendable ? "send" : "none";
 }
 
+/**
+ * A user's home folder. Claude Code refuses `claude --bg` there ("Workspace not trusted. The home directory
+ * is trusted one session at a time"), so the panel must not offer Start for it.
+ */
+export function isHomeFolder(cwd: string): boolean {
+  const p = cwd.replace(/[\\/]+$/, "");
+  return /^\/(Users|home)\/[^/]+$/.test(p) || /^[A-Za-z]:\\Users\\[^\\]+$/.test(p);
+}
+
+const HOME_SPAWN_NOTE = "New background sessions can't start in your home folder (a Claude Code rule). Open a session in a project folder, or run <code>claude --bg</code> from a terminal in one.";
+
+/** The failure line the chat shows for a Start that did not start. */
+export function spawnFailureText(e: { code?: string; detail: string }, cwd: string): string {
+  if (e.code === "WORKSPACE_UNTRUSTED") return `Claude Code won't start a background session in ${isHomeFolder(cwd) ? "your home folder" : esc(cwd)}. Use a session in a project folder, or start one there from a terminal.`;
+  return e.detail;
+}
+
+/** The session started by a Start click: in the same folder, not listed before, started after the click. */
+export function findSpawnedAgent(beforeIds: readonly string[], now: readonly Agent[], o: { cwd: string; since: number }): Agent | null {
+  const seen = new Set(beforeIds);
+  const hits = now.filter((a) => !seen.has(a.id) && a.cwd === o.cwd && a.startedAt >= o.since).sort((x, y) => x.startedAt - y.startedAt);
+  return hits[0] ?? null;
+}
+
 /** The not-connected card (#151). Remote Control is the primary action when the session has it. */
 export function notConnectedCardHtml(a: Agent): string {
   const v = agentRowView(a, Date.now());
   const rc = remoteUrl(a);
-  const spawn = v.spawnLabel ? `<button type="button" class="secondary" data-spawn-start>${esc(v.spawnLabel)}</button>` : "";
+  const home = isHomeFolder(a.cwd);
+  const spawn = v.spawnLabel && !home ? `<button type="button" class="secondary" data-spawn-start>${esc(v.spawnLabel)}</button>` : v.spawnLabel ? `<p class="muted small">${HOME_SPAWN_NOTE}</p>` : "";
   const connect = `<details class="card-more"><summary>Connect it to TabAgent instead</summary><ol><li>Run <code>tabagent setup claude</code> (or <code>npx -y @nolmak/tabagent@latest setup claude</code>).</li><li>Restart this session (<code>claude --resume</code> keeps the conversation).</li><li>For instant delivery, start it with <code>--dangerously-load-development-channels server:tabagent</code>.</li></ol></details>`;
   if (rc)
     return `<div class="nc-card"><p class="nc-title">This session isn't connected to TabAgent.</p><p class="muted"><b>Open in Claude</b> to talk to it now (Remote Control): the full conversation, live, in your browser.</p><div class="nc-actions"><a class="btn primary" data-rc href="${esc(rc)}" target="_blank" rel="noopener noreferrer">Open in Claude ↗</a>${spawn}</div>${connect}</div>`;

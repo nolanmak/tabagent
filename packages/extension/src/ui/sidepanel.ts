@@ -4,6 +4,7 @@ import { answerLabel, type Agent, type AgentSources, type PromptAnswer } from "@
 import { authEnabled, type StoredPolicy } from "../background/policy";
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, shareTabLabel, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { markFocus, restoreFocus } from "../pure/focusKeep";
+import { isHomeFolder } from "../pure/chat";
 import { esc } from "../pure/html";
 import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
@@ -239,9 +240,11 @@ function renderComposer() {
   btn.disabled = !c.canSend || agentSending;
   // #137/#159: the separate "Start a new session in <folder>" button, only for sessions that can't be messaged.
   const spawn = $("agentSpawn") as HTMLButtonElement;
-  spawn.hidden = !c.spawnLabel;
+  // Claude Code refuses background sessions in a home folder, so don't offer Start there.
+  const homeCwd = !!v && isHomeFolder(v.cwd);
+  spawn.hidden = !c.spawnLabel || homeCwd;
   spawn.textContent = c.spawnLabel ?? "";
-  spawn.disabled = !c.canSpawn || agentSending;
+  spawn.disabled = !c.canSpawn || agentSending || homeCwd;
   $("agentShareLabel").textContent = shareTabLabel(v);
   $("agentComposerNote").textContent = c.note;
   const target = $("agentTarget");

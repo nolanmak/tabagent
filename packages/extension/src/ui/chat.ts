@@ -5,6 +5,9 @@
 import { agentSendOverLimit, type Agent, type AgentEntries, type AgentHistoryResult } from "@tabagent/protocol";
 import { AGENTS_REFRESH_MS, agentRowView, buildAgentSend, shareableTab } from "../pure/agents";
 import {
+  findSpawnedAgent,
+  spawnFailureText,
+  isHomeFolder,
   atBottom,
   chatHeaderView,
   chatItemHtml,
@@ -43,6 +46,8 @@ let lastRailHtml = "";
 let agentsLoaded = false;
 let bridgeNote = "";
 let spawnChosen = false;
+/** A Start that succeeded: follow the new session into this window once the bridge lists it. */
+let pendingSpawn: { cwd: string; since: number; beforeIds: string[]; until: number } | null = null;
 let mode: ComposerMode = "loading";
 let sending = false;
 /** #159: ↑ edit mode for the composer. */
@@ -191,7 +196,8 @@ function renderComposer() {
   const over = showForm ? agentSendOverLimit({ prompt: input().value }) : null;
   note.hidden = !over;
   note.textContent = over ? `The message is ${over.length.toLocaleString("en-US")} characters; the limit is ${over.limit.toLocaleString("en-US")}.` : "";
-  ($("sendBtn") as HTMLButtonElement).disabled = !showForm || sending || !input().value.trim() || !!over;
+  const homeSpawn = mode === "spawn" && !!agent && isHomeFolder(agent.cwd);
+  ($("sendBtn") as HTMLButtonElement).disabled = !showForm || sending || !input().value.trim() || !!over || homeSpawn;
 }
 
 /** #156: the rail of sessions; rewritten only when it changed, so a hover or focus survives the 5 s refresh. */
@@ -310,6 +316,15 @@ async function refreshAgent() {
       allAgents = (r?.agents as Agent[] | undefined) ?? [];
       agentsListed = true;
       agent = allAgents.find((a) => a.id === agentId) ?? null;
+      if (pendingSpawn) {
+        const hit = findSpawnedAgent(pendingSpawn.beforeIds, allAgents, pendingSpawn);
+        if (hit) {
+          pendingSpawn = null;
+          location.replace(`${location.pathname}?agent=${encodeURIComponent(hit.id)}`);
+          return;
+        }
+        if (Date.now() > pendingSpawn.until) pendingSpawn = null;
+      }
     }
   } catch (e) {
     bridgeNote = `TabAgent can't reach the bridge: ${String((e as Error)?.message ?? e)}`;
@@ -389,6 +404,7 @@ async function submit() {
   const prompt = input().value;
   if (!prompt.trim() || agentSendOverLimit({ prompt })) return;
   const forceSpawn = mode === "spawn";
+  const clickedAt = Date.now();
   const share = await sharedTab();
   const requestId = crypto.randomUUID();
   dispatch({ type: "sending", requestId, text: prompt, ts: Date.now(), ...(forceSpawn ? { spawn: true } : {}) });
@@ -404,9 +420,15 @@ async function submit() {
     r = { error: String((e as Error)?.message ?? e) };
   }
   sending = false;
+  if (r?.type === "agent.sent" && forceSpawn && r.state === "failed") r = { ...r, detail: spawnFailureText(r, agent?.cwd ?? "") };
   if (r?.type === "agent.sent") dispatch({ type: "sent", msg: r });
   else dispatch({ type: "sent", msg: { requestId, route: forceSpawn ? "spawn" : (agent?.delivery ?? "none"), state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
-  if (forceSpawn && r?.state === "started") spawnChosen = false;
+  if (forceSpawn && r?.state === "started") {
+    spawnChosen = false;
+    // The new session is a different agent: switch this window to it as soon as it shows up.
+    if (agent) pendingSpawn = { cwd: agent.cwd, since: clickedAt - 2_000, beforeIds: allAgents.map((a) => a.id), until: Date.now() + 90_000 };
+    setTimeout(() => void refreshAgent(), 1_500);
+  }
   render({ stick: true });
   input().focus();
 }

@@ -2,7 +2,7 @@
 // safe Markdown and chat-tab reuse. Pure view logic.
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentEntry } from "@tabagent/protocol";
-import { atBottom, CHAT_MAX_ENTRIES, CHAT_SENT_MAX, chatHeaderView, editBannerHtml, initialRecall, lastSent, recallReducer, shownBusy, turnSettled, chatItemHtml, chatItems, chatReducer, composerMode, historyErrorText, initialChat, notConnectedCardHtml, pendingHtml, recentWebTabs, toolLine, type ChatState } from "../src/pure/chat";
+import { atBottom, CHAT_MAX_ENTRIES, CHAT_SENT_MAX, findSpawnedAgent, isHomeFolder, spawnFailureText, chatHeaderView, editBannerHtml, initialRecall, lastSent, recallReducer, shownBusy, turnSettled, chatItemHtml, chatItems, chatReducer, composerMode, historyErrorText, initialChat, notConnectedCardHtml, pendingHtml, recentWebTabs, toolLine, type ChatState } from "../src/pure/chat";
 import { chatAgentOf, findChatTab } from "../src/pure/chatTabs";
 import { renderMarkdown } from "../src/pure/markdown";
 
@@ -346,5 +346,28 @@ describe("recallReducer", () => {
     expect(html).toContain("Editing your last message");
     expect(html).toContain("<kbd>Esc</kbd> to cancel");
     expect(html).toContain("<svg");
+  });
+});
+
+describe("starting a session from the chat window (user-reported bugs)", () => {
+  it("knows a home folder, where Claude Code refuses background sessions", () => {
+    for (const h of ["/Users/me", "/Users/me/", "/home/me", "C:\\Users\\me"]) expect(isHomeFolder(h)).toBe(true);
+    for (const p of ["/Users/me/code/app", "/home/me/proj", "/", "/Users"]) expect(isHomeFolder(p)).toBe(false);
+  });
+  it("the not-connected card does not offer Start for a home-folder session and says why", () => {
+    const html = notConnectedCardHtml(agent({ linked: false, delivery: "spawn", cwd: "/Users/me" }));
+    expect(html).not.toContain("data-spawn-start");
+    expect(html).toMatch(/home folder/i);
+  });
+  it("WORKSPACE_UNTRUSTED becomes a plain explanation", () => {
+    expect(spawnFailureText({ code: "WORKSPACE_UNTRUSTED", detail: "Workspace not trusted." }, "/Users/me")).toMatch(/home folder.*project folder/i);
+    expect(spawnFailureText({ code: "SPAWN_FAILED", detail: "boom" }, "/x")).toBe("boom");
+  });
+  it("finds the session it just started: same folder, new, started after the click", () => {
+    const before = [agent({ id: "claude:1:100", cwd: "/w", startedAt: 100 })];
+    const after = [...before, agent({ id: "claude:2:5000", cwd: "/other", startedAt: 5000 }), agent({ id: "claude:3:5100", cwd: "/w", startedAt: 5100 })];
+    expect(findSpawnedAgent(before.map((a) => a.id), after, { cwd: "/w", since: 4000 })?.id).toBe("claude:3:5100");
+    expect(findSpawnedAgent(after.map((a) => a.id), after, { cwd: "/w", since: 4000 })).toBeNull();
+    expect(findSpawnedAgent(before.map((a) => a.id), [agent({ id: "claude:4:1000", cwd: "/w", startedAt: 1000 })], { cwd: "/w", since: 4000 })).toBeNull();
   });
 });
