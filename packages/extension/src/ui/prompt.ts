@@ -12,6 +12,7 @@ async function load() {
   if (!p) {
     $("title").textContent = "This request has expired or was already answered.";
     document.querySelector(".actions")?.remove();
+    $("timer").remove();
     setTimeout(() => window.close(), 1500);
     return;
   }
@@ -19,7 +20,7 @@ async function load() {
   $("title").textContent = v.title;
   $("detail").textContent = v.detail;
   const summary = document.createElement("p");
-  summary.className = "muted small";
+  summary.className = "small";
   summary.id = "summary";
   summary.textContent = v.summary;
   $("detail").after(summary);
@@ -34,9 +35,15 @@ async function load() {
     $("reasons").appendChild(li);
   }
   $("tool").textContent = `Tool: ${v.tool}`;
+  // #156: a thin bar that empties as the prompt runs out; amber for the last 15 seconds.
+  const total = Math.max(1, v.expires - Date.now());
+  const bar = $("timer").firstElementChild as HTMLElement;
   const tick = () => {
-    const s = Math.max(0, Math.round((v.expires - Date.now()) / 1000));
+    const left = Math.max(0, v.expires - Date.now());
+    const s = Math.round(left / 1000);
     $("countdown").textContent = `Times out in ${s}s (the agent gets PROMPT_TIMEOUT)`;
+    bar.style.transform = `scaleX(${left / total})`;
+    $("timer").classList.toggle("low", s <= 15);
   };
   tick();
   setInterval(tick, 500);

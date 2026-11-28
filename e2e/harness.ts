@@ -155,6 +155,12 @@ export class Harness {
     return p;
   }
 
+  /** #156: open a collapsible side panel section ("sessions" | "activity" | "workflows" | "settings") as a user would. */
+  static async openSection(panel: Page, id: string) {
+    const box = panel.locator(`#${id}Box`);
+    if (!(await box.evaluate((d) => (d as HTMLDetailsElement).open))) await box.locator(":scope > summary").click();
+  }
+
   /**
    * Set site policies. `policies` maps origin -> "read"|"act"|"full"|"deny" (written to the
    * `sites` settings shape, contract §7); `extra` is any other settings patch.

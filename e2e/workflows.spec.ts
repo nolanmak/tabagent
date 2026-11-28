@@ -61,6 +61,7 @@ test("#68 manual capture records trusted user events without raw secrets", async
   const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
   await h.ok(c, "nav.goto", { tabId, url: `${h.A}/index.html` });
   const panel = await h.openPanel();
+  await Harness.openSection(panel, "workflows");
   await panel.locator("#manualCaptureTab").selectOption(String(tabId));
   await panel.locator("#manualCaptureStart").click();
   await expect(panel.locator("#manualCaptureState")).toContainText(`Recording tab ${tabId}`);
@@ -118,6 +119,7 @@ test("#68 manual capture records a tab-attributed download without its filename 
   await h.ok(c, "nav.goto", { tabId, url: `${h.A}/downloads.html` });
   const panel = await h.openPanel();
   try {
+    await Harness.openSection(panel, "workflows");
     await panel.locator("#manualCaptureTab").selectOption(String(tabId));
     await panel.locator("#manualCaptureStart").click();
     const page = h.ctx.pages().filter((p) => p.url().includes("/downloads.html")).at(-1);

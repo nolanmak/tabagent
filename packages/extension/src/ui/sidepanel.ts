@@ -7,6 +7,7 @@ import { esc } from "../pure/html";
 import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
 import { formatRemaining } from "../pure/modeChange";
+import { nextOpen, sectionSummaries, type SectionId } from "../pure/panelSections";
 import { filterSites } from "../pure/siteFilter";
 import { workflowStepDetail } from "../pure/workflow";
 import { alwaysLabel, authAutoActive, hasCodesAlways, revokeAlways, setAuthAuto, setCodesAlways, setSignIn } from "../pure/siteAuth";
@@ -28,7 +29,7 @@ function renderStatus() {
   const el = $("status");
   el.textContent =
     st === "connected" ? "Connected" : st === "paused" ? "Stopped" : st === "unpaired" ? "Not paired" : st === "pair-failed" ? "Pairing failed" : st === "version-mismatch" ? "Update needed" : st === "connecting" ? "Connecting…" : "Bridge offline";
-  el.className = "pill " + st;
+  el.className = "conn-status " + st;
   $("pairBox").hidden = state.paired && state.status !== "pair-failed";
   const err = $("pairErr");
   err.hidden = !state.error || (state.status !== "pair-failed" && state.status !== "version-mismatch");
@@ -37,6 +38,7 @@ function renderStatus() {
   $("killBtn").hidden = !!state.settings.paused;
   $("resumeBtn").hidden = !state.settings.paused;
   $("killNote").textContent = state.settings.paused ? "All agents are stopped. Every command returns KILLED until you resume." : "Shortcut: Alt+Shift+K";
+  $("pausedBanner").hidden = !state.settings.paused;
   const until = Number(state.authRestartLockedUntil ?? 0);
   $("restartLock").hidden = !(until > Date.now());
   if (until > Date.now()) $("restartLockText").textContent = `TabAgent restarted during a sign-in, so agents can't type passwords or codes until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
@@ -52,7 +54,7 @@ function promptHtml(p: any) {
     <div class="muted small pdetail">${esc(v.detail)}</div>
     <div class="muted small psummary">${esc(v.summary)}</div>
     <ul class="preasons reasons">${v.reasons.map((r: string) => `<li>${esc(r)}</li>`).join("")}</ul>
-    <div class="muted small">Tool: ${esc(v.tool)} · <span class="countdown" data-expires="${Number(v.expires)}">${left}s</span></div>
+    <div class="pmeta">Tool: <span class="mono">${esc(v.tool)}</span> · <span class="countdown" data-expires="${Number(v.expires)}">${left}s</span></div>
     <div class="actions">${v.answers.map(btn).join("")}</div>
   </li>`;
 }
@@ -60,19 +62,20 @@ function promptHtml(p: any) {
 function renderPrompts() {
   $("promptsBox").hidden = !state.prompts.length;
   $("prompts").innerHTML = state.prompts.map(promptHtml).join("");
+  $("promptsCount").textContent = state.prompts.length > 1 ? String(state.prompts.length) : "";
 }
 
 function renderStopped() {
   const tabs: number[] = state.stoppedTabs ?? [];
   $("stoppedBox").hidden = !tabs.length;
-  $("stopped").innerHTML = tabs.map((t) => `<li><span>Tab ${t}</span><button data-resume-tab="${t}">Resume</button></li>`).join("");
+  $("stopped").innerHTML = tabs.map((t) => `<li><span>Tab ${t}</span><button class="sm" data-resume-tab="${t}">Resume</button></li>`).join("");
 }
 
 function renderHandoffs() {
   const list: any[] = state.handoffs ?? [];
   $("handoffBox").hidden = !list.length;
   $("handoffs").innerHTML = list
-    .map((h) => `<li data-handoff-tab="${Number(h.tabId)}"><span><b>${esc(h.sessionLabel)}</b> · ${esc(h.origin)}<br><span class="muted small">${esc(h.reason)}</span></span><span><button data-handoff="cancel" data-tab="${Number(h.tabId)}">Cancel</button> <button data-handoff="done" data-tab="${Number(h.tabId)}" class="primary">Done</button></span></li>`)
+    .map((h) => `<li data-handoff-tab="${Number(h.tabId)}"><span><b>${esc(h.sessionLabel)}</b> · ${esc(h.origin)}<br><span class="muted small">${esc(h.reason)}</span></span><span class="actions"><button data-handoff="cancel" data-tab="${Number(h.tabId)}">Cancel</button> <button data-handoff="done" data-tab="${Number(h.tabId)}" class="primary">Done</button></span></li>`)
     .join("");
   window.dispatchEvent(new CustomEvent("tabagent:handoffs", { detail: list }));
 }
@@ -80,10 +83,9 @@ function renderHandoffs() {
 function renderSessions() {
   const ul = $("sessions");
   if (!state.sessions.length) {
-    ul.innerHTML = `<li class="muted">No sessions.</li>`;
-    return;
-  }
-  ul.innerHTML = (state.sessions as SessionView[]).map(sessionRowHtml).join("");
+    ul.innerHTML = `<li class="empty-row">No sessions.</li>`;
+  } else ul.innerHTML = (state.sessions as SessionView[]).map(sessionRowHtml).join("");
+  renderSections();
 }
 
 let sessionsNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -97,13 +99,39 @@ function sessionsNotice(text: string) {
 }
 
 function feedLine(e: FeedEntry) {
-  const t = new Date(e.ts).toLocaleTimeString();
+  const t = new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
   const tool = e.action ? `${e.tool} ${e.action}` : e.tool;
-  return `<li data-feed-id="${e.id}"><span class="muted">${t}</span> <b>${esc(e.label)}</b> ${esc(tool)} <span class="muted">${esc(e.origin ?? "")} ${esc(summarizeParams(e.params))}</span> <span class="${esc(e.status)}">${esc(e.status)}${e.errorCode ? ` ${esc(e.errorCode)}` : ""}${e.ms != null ? ` ${e.ms}ms` : ""}</span></li>`;
+  const detail = [e.origin ?? "", summarizeParams(e.params)].filter(Boolean).join(" ");
+  return `<li data-feed-id="${e.id}"><span class="f-time">${esc(t)}</span><span class="f-main"><b>${esc(e.label)}</b> <span class="f-tool">${esc(tool)}</span>${detail ? `<span class="f-detail" title="${esc(detail)}">${esc(detail)}</span>` : ""}</span><span class="f-status ${esc(e.status)}">${esc(e.status)}${e.errorCode ? ` ${esc(e.errorCode)}` : ""}${e.ms != null ? `<span class="ms">${e.ms}ms</span>` : ""}</span></li>`;
 }
 
 function renderFeed() {
-  $("feed").innerHTML = state.feed.slice().reverse().map(feedLine).join("") || `<li class="muted">Nothing yet.</li>`;
+  $("feed").innerHTML = state.feed.slice().reverse().map(feedLine).join("") || `<li class="empty">Nothing yet.</li>`;
+  renderSections();
+}
+
+// ---------------------------------------------------------------------------
+// Collapsible sections (#156): closed by default, opened on their own when they need attention, and kept the
+// way the user left them. Counts and a short summary show while closed. Decisions in ../pure/panelSections.
+// ---------------------------------------------------------------------------
+const SECTIONS: Exclude<SectionId, "settings">[] = ["sessions", "activity", "workflows"];
+const touchedSections = new Set<string>();
+
+function renderSections() {
+  if (!state) return;
+  const sum = sectionSummaries({
+    sessions: state.sessions ?? [],
+    feed: state.feed ?? [],
+    workflows: state.workflows ?? [],
+    capturing: (state.activeCaptures ?? []).some((c: any) => c.source === "manual"),
+  });
+  for (const id of SECTIONS) {
+    const box = $(`${id}Box`) as HTMLDetailsElement;
+    const open = nextOpen(box.open, sum[id].attention, touchedSections.has(id));
+    if (box.open !== open) box.open = open;
+    $(`${id}Count`).textContent = sum[id].count;
+    $(`${id}Meta`).textContent = sum[id].meta;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,10 +180,11 @@ let lastAgentsHtml = "";
 function renderAgentList() {
   const now = Date.now();
   const html = !agentsLoaded
-    ? `<li class="muted">Looking for agents…</li>`
+    ? `<li class="empty">Looking for agents…</li>`
     : agentsError
-      ? `<li class="err">${esc(agentsError)}</li>`
-      : agentListHtml(agents.map((a) => agentRowView(a, now)), selectedAgentId, agentsOtherOpen) || `<li class="muted">No agents running.</li>`;
+      ? `<li class="err small">${esc(agentsError)}</li>`
+      : agentListHtml(agents.map((a) => agentRowView(a, now)), selectedAgentId, agentsOtherOpen) || `<li class="empty">No agents running. Start Claude Code or Codex on this computer.</li>`;
+  $("agentsCount").textContent = agentsLoaded && !agentsError && agents.length ? String(agents.length) : "";
   if (html !== lastAgentsHtml) {
     // #151: the Quick send composer sits inside the list; park it (keeping its text) while the rows are rebuilt.
     const focused = document.activeElement as HTMLTextAreaElement | null;
@@ -416,13 +445,15 @@ function renderWorkflows() {
     .map((w) => {
       const steps = (w.steps ?? []).map((step: any, index: number) => {
         const detail = workflowStepDetail(step);
-        const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
+        const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button class="ghost" data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
         const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
-        return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
+        return `<li><span class="step-text">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}</span>${w.status === "draft" ? `<button class="ghost" data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
       }).join("");
-      return `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}<ol class="workflow-steps">${steps}</ol></span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`;
+      const tag = w.status === "draft" ? "warn" : w.status === "reviewed" ? "ok" : "";
+      return `<li class="recipe"><div class="recipe-head"><b>${esc(w.name)}</b> <span class="tag ${tag}">${esc(w.status)}</span></div><div class="recipe-meta">${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</div><div class="recipe-rules">${esc((w.stopRules ?? []).join("; "))}</div>${w.dedupeKey ? `<div class="recipe-rules">Duplicate key: ${esc(w.dedupeKey)}</div>` : ""}<ol class="workflow-steps">${steps}</ol>${w.status === "draft" ? `<div class="recipe-review"><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></div>` : ""}</li>`;
     })
-    .join("") || `<li class="muted">No captured recipes yet.</li>`;
+    .join("") || `<li class="empty">No captured recipes yet.</li>`;
+  renderSections();
 }
 
 /** #109: a timed YOLO (policy.mode_change durationMin) shows the time left; the worker switches it off. */
@@ -476,8 +507,8 @@ function renderSites() {
     rows
       .map(([o, e]) => {
         const pol = e.policy ?? "ask";
-        const pre = CATS.map((c) => `<label class="chip"><input type="checkbox" data-pre="${c}" data-origin="${esc(o)}" ${e.preapproved?.[c] ? "checked" : ""}/>${CAT_LABEL[c]}</label>`).join("");
-        return `<tr data-site="${esc(o)}"><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}</td>${signInCell(o, e)}<td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
+        const pre = CATS.map((c) => `<label class="chip" title="Pre-approve ${CAT_LABEL[c]} on this site"><input type="checkbox" data-pre="${c}" data-origin="${esc(o)}" ${e.preapproved?.[c] ? "checked" : ""}/>${CAT_LABEL[c]}</label>`).join("");
+        return `<tr data-site="${esc(o)}"><td class="origin">${esc(o)}</td><td class="policy"><select data-policy data-origin="${esc(o)}" aria-label="Policy for ${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td class="lite"><label class="chip" title="Lite mode on this site (no debugger)"><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/>lite</label></td><td class="pre">${pre}</td>${signInCell(o, e)}<td class="del"><button data-del="${esc(o)}" title="Revoke everything for this site" aria-label="Remove ${esc(o)}">✕</button></td></tr>`;
       })
       .join("") || `<tr><td colspan="6" class="muted">${filtering && total ? "No sites match." : "No site settings yet."}</td></tr>`;
 }
@@ -534,6 +565,9 @@ chrome.runtime.onMessage.addListener((m: any) => {
       break;
   }
 });
+
+// #156: a section the user opened or closed stays that way (summary clicks include Enter and Space).
+for (const id of SECTIONS) $(`${id}Box`).querySelector("summary")!.addEventListener("click", () => touchedSections.add(id));
 
 $("pairForm").addEventListener("submit", async (e) => {
   e.preventDefault();
