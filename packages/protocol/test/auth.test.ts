@@ -55,8 +55,8 @@ function isStrict(schema: z.ZodType): boolean {
 
 describe("DA1 registry: secret tools", () => {
   const secret = tools.filter((t) => t.secret);
-  it("auth.login and auth.code are the secret tools", () => {
-    expect(secret.map((t) => t.name).sort()).toEqual(["auth.code", "auth.login"]);
+  it("auth.login, auth.code and auth.confirm_link are the secret tools", () => {
+    expect(secret.map((t) => t.name).sort()).toEqual(["auth.code", "auth.confirm_link", "auth.login"]);
   });
   it.each(secret.map((t) => [t.name, t] as const))("%s result schema has no free-text field and is strict", (_n, t) => {
     expect(freeTextLeaves(t.result)).toEqual([]);
@@ -97,14 +97,14 @@ describe("DA1 registry: secret tools", () => {
 });
 
 describe("DA10 profile", () => {
-  const authNames = ["auth.code", "auth.handoff", "auth.login", "auth.status"];
+  const authNames = ["auth.code", "auth.confirm_link", "auth.handoff", "auth.login", "auth.status"];
   const names = (ts: ToolDef[]) => ts.map((t) => t.name);
   it("core and full exclude auth; --profile auth adds it", () => {
     expect(names(toolsForProfiles("core")).filter((n) => n.startsWith("auth."))).toEqual([]);
     expect(names(toolsForProfiles("full")).filter((n) => n.startsWith("auth."))).toEqual([]);
     expect(names(toolsForProfiles("auth")).filter((n) => n.startsWith("auth.")).sort()).toEqual(authNames);
     expect(names(toolsForProfiles("full,auth")).length).toBe(tools.length);
-    expect(toolsForProfiles("auth")).toHaveLength(13 + 4 + 1); // + captcha.solve (#61)
+    expect(toolsForProfiles("auth")).toHaveLength(13 + 5 + 1); // + captcha.solve (#61)
   });
   it("group auth, lookup by MCP name", () => {
     for (const n of authNames) {
@@ -124,6 +124,15 @@ describe("DA10 profile", () => {
     expect(p.safeParse({ timeout: 120_000 }).success).toBe(true);
     expect(p.safeParse({ timeout: 120_001 }).success).toBe(false);
     expect(p.safeParse({ source: "pigeon" }).success).toBe(false);
+  });
+  it("auth.confirm_link: params { from?, timeout? }; the result never carries a URL", () => {
+    const t = getTool("auth.confirm_link")!;
+    expect(t.params.safeParse({ from: "example.com", timeout: 120_000 }).success).toBe(true);
+    expect(t.params.safeParse({ timeout: 120_001 }).success).toBe(false);
+    expect(t.result.safeParse({ followed: true, next: "done" }).success).toBe(true);
+    expect(t.result.safeParse({ followed: false, next: "handoff_required", reason: "ambiguous" }).success).toBe(true);
+    expect(t.result.safeParse({ followed: true, next: "done", url: "https://example.com/verify?t=1" }).success).toBe(false);
+    expect(t.result.safeParse({ followed: false, next: "handoff_required", reason: "https://example.com/verify" }).success).toBe(false);
   });
   it("auth.login account param must be an account id", () => {
     const p = getTool("auth.login")!.params;

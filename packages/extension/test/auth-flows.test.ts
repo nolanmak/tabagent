@@ -5,7 +5,9 @@ import fc from "fast-check";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { FieldDesc } from "../src/background/auth/pure/fields";
-import { authCode, authLogin, authStatus, CHROME_AUTOFILL_ID, newMemory, type AuthEnv, type AuthPage, type PageField } from "../src/background/auth/pure/flows";
+import { CODE_SINCE_SLACK_MS } from "@tabagent/protocol";
+import type { MailLink } from "../src/background/auth/pure/confirm-link";
+import { authCode, authConfirmLink, authLogin, authStatus, CHROME_AUTOFILL_ID, CONFIRM_LOOKBACK_MS, newMemory, type AuthEnv, type AuthPage, type PageField } from "../src/background/auth/pure/flows";
 
 type Fd = Partial<FieldDesc> & { ref?: string };
 function fields(...xs: Fd[]): PageField[] {
@@ -25,6 +27,7 @@ function fakePage(steps: Step[], o: { autofill?: { usernameMasked?: string } | n
   const values = new Map<string, string>();
   const masked = new Set<string>();
   const order: string[] = [];
+  const visited: string[] = [];
   let urlOverride: string | null = null;
   const cur = () => steps[Math.min(k, steps.length - 1)];
   const snapshot = () =>
@@ -53,8 +56,14 @@ function fakePage(steps: Step[], o: { autofill?: { usernameMasked?: string } | n
       k++;
     },
     async settle() {},
+    async goto(url) {
+      order.push("goto");
+      visited.push(url);
+      urlOverride = null;
+      k++;
+    },
   };
-  return { page, values, masked, order, snapshot, navigate: (u: string) => (urlOverride = u) };
+  return { page, values, masked, order, visited, snapshot, navigate: (u: string) => (urlOverride = u) };
 }
 
 interface EnvOpts {
@@ -67,10 +76,11 @@ interface EnvOpts {
   onConsent?: () => void;
   email?: (o: any) => Promise<string>;
   sms?: () => Promise<string>;
+  mail?: { messages: (o: any) => Promise<{ id: string; date: number }[]>; links: (id: string) => Promise<MailLink[]> };
 }
 
 function fakeEnv(o: EnvOpts = {}) {
-  const calls = { accounts: 0, secret: [] as string[], consent: [] as any[], sms: 0, email: 0 };
+  const calls = { accounts: 0, secret: [] as string[], consent: [] as any[], sms: 0, email: 0, messages: [] as any[], links: [] as string[] };
   const events: { name: string; data: any }[] = [];
   const storage = new Map<string, unknown>();
   const env: AuthEnv = {
@@ -105,6 +115,7 @@ function fakeEnv(o: EnvOpts = {}) {
       },
     },
     email: o.email ? { fetch: async (x) => (calls.email++, o.email!(x)) } : undefined,
+    confirmMail: o.mail ? { messages: async (x) => (calls.messages.push({ ...x, skip: [...x.skip] }), o.mail!.messages(x)), links: async (id) => (calls.links.push(id), o.mail!.links(id)) } : undefined,
     event: (name, data) => events.push({ name, data }),
     now: () => 1_000_000,
   };
@@ -601,5 +612,150 @@ describe("Sign in with Google (#82, #83)", () => {
     expect(r.source).toBe("sms");
     expect(pg.values.get("e1")).toBe("222222");
     expect(e.calls.email).toBe(0);
+  });
+});
+
+describe("auth.confirm_link (#113)", () => {
+  const SITE = "https://example.com";
+  const checkEmail = () => fakePage([{ url: `${SITE}/signup/check-email`, fields: [] }, { url: `${SITE}/welcome`, fields: fields({ name: "q", label: "Search" }) }]);
+  const L = (href: string, text = ""): MailLink => ({ href, text });
+  /** A reader holding fixed messages (newest first); `skip` is honoured like the real poll. */
+  const mailbox = (links: Record<string, MailLink[]>) => ({
+    messages: async (o: { skip: Set<string> }) => {
+      const ids = Object.keys(links).filter((id) => !o.skip.has(id));
+      if (!ids.length) throw Object.assign(new Error("No matching email arrived"), { code: "TIMEOUT" });
+      return ids.map((id, i) => ({ id, date: 1_000_000 - i }));
+    },
+    links: async (id: string) => links[id] ?? [],
+  });
+  const cenv = (mail: EnvOpts["mail"], extra: EnvOpts = {}) => fakeEnv({ enabled: [SITE], mail, ...extra });
+
+  it("one confirmation link on the site's domain → consent, tab navigated to it, { followed: true, next }", async () => {
+    const pg = checkEmail();
+    const e = cenv(mailbox({ m1: [L("https://example.com/", "Home"), L("https://id.example.com/verify?token=t1", "Verify email"), L("https://example.com/unsubscribe", "Unsubscribe")] }));
+    const r = await authConfirmLink(e.env, pg.page, {}, newMemory());
+    expect(r).toEqual({ followed: true, next: "done" });
+    expect(pg.visited).toEqual(["https://id.example.com/verify?token=t1"]);
+    expect(e.calls.consent).toHaveLength(1);
+    expect(e.calls.consent[0].summary).toBe("Open the confirmation email from example.com in Gmail and follow its link?");
+    expect(e.calls.consent[0].who.accountId).toBe("confirm-link:email");
+    expect(e.calls.messages[0]).toMatchObject({ from: "example.com", timeout: 60_000 });
+    expect(e.events).toEqual([{ name: "auth.confirm_link", data: { origin: SITE, outcome: "followed", next: "done" } }]);
+  });
+
+  it("consent once per origin; a followed message is not followed again", async () => {
+    const e = cenv(mailbox({ m1: [L("https://example.com/confirm/1")] }));
+    const mem = newMemory();
+    await authConfirmLink(e.env, checkEmail().page, {}, mem);
+    await expect(authConfirmLink(e.env, checkEmail().page, {}, mem)).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(e.calls.consent).toHaveLength(1);
+    expect(e.calls.messages[1].skip).toEqual(["m1"]);
+  });
+
+  it("`since` is the last auth action on the tab minus slack; otherwise a short lookback", async () => {
+    const e = cenv(mailbox({ m1: [L("https://example.com/confirm/1")] }));
+    const mem = newMemory();
+    mem.lastLogin.set(5, 1_000_000 - 90_000);
+    await authConfirmLink(e.env, checkEmail().page, { from: "mailer.example.com", timeout: 5000 }, mem);
+    expect(e.calls.messages[0]).toMatchObject({ since: 1_000_000 - 90_000 - CODE_SINCE_SLACK_MS, from: "mailer.example.com", timeout: 5000 });
+    const e2 = cenv(mailbox({ m1: [L("https://example.com/confirm/1")] }));
+    await authConfirmLink(e2.env, checkEmail().page, {}, newMemory());
+    expect(e2.calls.messages[0].since).toBe(1_000_000 - CONFIRM_LOOKBACK_MS);
+  });
+
+  it("several confirmation links → handoff_required (ambiguous), nothing followed", async () => {
+    const pg = checkEmail();
+    const e = cenv(mailbox({ m1: [L("https://example.com/confirm?k=1"), L("https://example.com/verify?k=2")] }));
+    expect(await authConfirmLink(e.env, pg.page, {}, newMemory())).toEqual({ followed: false, next: "handoff_required", reason: "ambiguous" });
+    expect(pg.visited).toEqual([]);
+    expect(e.events[0].data).toMatchObject({ outcome: "handoff_required", reason: "ambiguous" });
+  });
+
+  it("newest matching mail has no confirmation link (a welcome mail) → the next one is checked", async () => {
+    const pg = checkEmail();
+    const e = cenv(mailbox({ welcome: [L("https://example.com/dashboard", "Get started")], confirm: [L("https://example.com/activate/a1", "Activate")] }));
+    expect(await authConfirmLink(e.env, pg.page, {}, newMemory())).toMatchObject({ followed: true });
+    expect(e.calls.links).toEqual(["welcome", "confirm"]);
+    expect(pg.visited).toEqual(["https://example.com/activate/a1"]);
+  });
+
+  it("only look-alike / off-domain links, then no further mail → handoff_required (none)", async () => {
+    const pg = checkEmail();
+    const e = cenv(mailbox({ m1: [L("https://example.com.evil.net/verify", "Verify"), L("https://click.tracker.example.net/c?u=https%3A%2F%2Fexample.com%2Fverify", "Verify")] }));
+    expect(await authConfirmLink(e.env, pg.page, {}, newMemory())).toEqual({ followed: false, next: "handoff_required", reason: "none" });
+    expect(pg.visited).toEqual([]);
+  });
+
+  it("no matching mail at all → TIMEOUT; Gmail not signed in → NOT_FOUND; no reader → NOT_FOUND", async () => {
+    const fail = (code: string) => cenv({ messages: async () => Promise.reject(Object.assign(new Error(code), { code })), links: async () => [] });
+    await expect(authConfirmLink(fail("TIMEOUT").env, checkEmail().page, {}, newMemory())).rejects.toMatchObject({ code: "TIMEOUT" });
+    await expect(authConfirmLink(fail("NOT_FOUND").env, checkEmail().page, {}, newMemory())).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(authConfirmLink(cenv(undefined).env, checkEmail().page, {}, newMemory())).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("site not enabled for sign-in → PERMISSION_DENIED before consent or any mail read", async () => {
+    const e = fakeEnv({ enabled: [], mail: mailbox({ m1: [L("https://example.com/confirm/1")] }) });
+    await expect(authConfirmLink(e.env, checkEmail().page, {}, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.consent).toEqual([]);
+    expect(e.calls.messages).toEqual([]);
+  });
+
+  it("user declines → PERMISSION_DENIED, mail never read", async () => {
+    const e = cenv(mailbox({ m1: [L("https://example.com/confirm/1")] }), { deny: true });
+    await expect(authConfirmLink(e.env, checkEmail().page, {}, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.messages).toEqual([]);
+  });
+
+  it("refused on accounts.google.com and on http pages", async () => {
+    const G = "https://accounts.google.com";
+    const e = fakeEnv({ enabled: [G], mail: mailbox({ m1: [L(`${G}/confirm`)] }) });
+    await expect(authConfirmLink(e.env, fakePage([{ url: `${G}/signup`, fields: [] }]).page, {}, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    await expect(authConfirmLink(cenv(mailbox({})).env, fakePage([{ url: "http://example.com/x", fields: [] }]).page, {}, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.messages).toEqual([]);
+  });
+
+  it("tab left the site while the mail was read → PERMISSION_DENIED, nothing followed", async () => {
+    const pg = checkEmail();
+    const e = cenv({ messages: async () => (pg.navigate("https://evil.example/"), [{ id: "m1", date: 1 }]), links: async () => [L("https://example.com/confirm/1")] });
+    await expect(authConfirmLink(e.env, pg.page, {}, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(pg.visited).toEqual([]);
+  });
+
+  it("subdomain sign-up page: links anywhere on the registrable domain qualify", async () => {
+    const pg = fakePage([{ url: "https://app.example.com/register/done", fields: [] }, { url: "https://example.com/ok", fields: [] }]);
+    const e = fakeEnv({ enabled: ["https://app.example.com"], mail: mailbox({ m1: [L("https://accounts.example.com/confirm/9", "Confirm")] }) });
+    expect(await authConfirmLink(e.env, pg.page, {}, newMemory())).toMatchObject({ followed: true });
+    expect(e.calls.messages[0].from).toBe("example.com");
+  });
+
+  it("no-leak property: the link and the mail text never reach the result, events or errors", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.stringMatching(/^[A-Za-z0-9]{12,24}$/), fc.boolean(), async (marker, ambiguous) => {
+        const pg = checkEmail();
+        const links = [L(`https://example.com/verify?token=${marker}`, `Verify ${marker}`), ...(ambiguous ? [L(`https://example.com/confirm/${marker}x`)] : [])];
+        const e = cenv(mailbox({ m1: links }));
+        const p = {};
+        let out: unknown;
+        try {
+          out = await authConfirmLink(e.env, pg.page, p, newMemory());
+        } catch (err) {
+          out = { message: (err as Error).message, hint: (err as any).hint };
+        }
+        for (const h of [JSON.stringify(out), audit("auth.confirm_link", p, out), JSON.stringify(e.events), JSON.stringify([...e.storage]), JSON.stringify(e.calls.consent)]) expect(h.includes(marker)).toBe(false);
+      }),
+      { numRuns: 30 },
+    );
+  });
+});
+
+describe("auth.code on a post-sign-up confirm page (#113)", () => {
+  it("an emailed sign-up code is typed into the confirm page's code field", async () => {
+    const pg = fakePage([{ url: "https://github.com/signup/verify-email", fields: fields({ name: "launch_code", autocomplete: "one-time-code", inputMode: "numeric" }) }, { url: "https://github.com/dashboard", fields: [] }]);
+    const e = fakeEnv({ email: async () => "604213" });
+    const mem = newMemory();
+    mem.lastLogin.set(5, 1_000_000 - 30_000); // the sign-up just ran on this tab
+    const r = await authCode(e.env, pg.page, { source: "email", from: "github.com" }, mem);
+    expect(r).toEqual({ filled: true, source: "email", submitted: true });
+    expect(pg.values.get("e1")).toBe("604213");
   });
 });
