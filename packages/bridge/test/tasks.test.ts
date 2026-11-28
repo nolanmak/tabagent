@@ -326,7 +326,10 @@ describe("daemon: timed tasks", () => {
     e.send({ type: "tasks.list", id: "L1" });
     const listed = await e.next("tasks.listed", (m) => m.id === "L1");
     expect(listed.tasks).toHaveLength(1);
-    expect(listed.tasks[0]).toMatchObject({ goal: "check order", outcome: "failed", callCount: 1, explicit: true });
+    expect(listed.tasks[0]).toMatchObject({ goal: "check order", outcome: "failed", callCount: 1, explicit: true, calls: [] });
+    // calls only for the task the panel opened
+    e.send({ type: "tasks.list", id: "L1b", calls: listed.tasks[0].taskId });
+    expect((await e.next("tasks.listed", (m) => m.id === "L1b")).tasks[0].calls.map((c: any) => c.tool)).toEqual(["page.markdown"]);
     e.send({ type: "tasks.label", id: "L2", taskId: listed.tasks[0].taskId, outcome: "success" });
     expect(await e.next("tasks.labeled", (m) => m.id === "L2")).toMatchObject({ ok: true });
     e.send({ type: "tasks.label", id: "L3", taskId: "t-nope", outcome: "success" });

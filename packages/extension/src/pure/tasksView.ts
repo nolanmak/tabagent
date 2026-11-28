@@ -120,8 +120,10 @@ export function taskItemHtml(t: TaskSummary, now: number, open: boolean): string
           `<li><span class="tl-at mono">+${esc(formatDuration(r.atMs))}</span><span class="tl-tool mono">${esc(r.tool)}</span><span class="tl-site muted">${esc(r.site)}</span><span class="tl-status ${esc(r.outcome)}">${esc(r.outcome)}${r.errorCode ? ` ${esc(r.errorCode)}` : ""}</span><span class="tl-dur">${r.durationMs !== undefined ? esc(formatDuration(r.durationMs)) : "—"}</span><span class="tl-gap muted" title="Time since the previous call">${r.gapMs >= 1000 ? `+${esc(formatDuration(r.gapMs))} wait` : ""}</span></li>`,
       )
       .join("");
-    const more = t.callCount > t.calls.length ? `<li class="muted small">…and ${t.callCount - t.calls.length} more calls</li>` : "";
-    body = `<div class="task-detail"><p class="task-split small">In the browser ${esc(formatDuration(v.browserMs))} · between calls ${esc(formatDuration(v.betweenMs))} · total ${esc(formatDuration(v.durationMs))}</p>${v.note ? `<p class="muted small">${esc(v.note)}</p>` : ""}<ol class="task-timeline">${rows || '<li class="empty">No calls.</li>'}${more}</ol></div>`;
+    // The list sends calls only for the opened task, so they can be on their way.
+    const loading = !t.calls.length && t.callCount > 0;
+    const more = !loading && t.callCount > t.calls.length ? `<li class="muted small">…and ${t.callCount - t.calls.length} more calls</li>` : "";
+    body = `<div class="task-detail"><p class="task-split small">In the browser ${esc(formatDuration(v.browserMs))} · between calls ${esc(formatDuration(v.betweenMs))} · total ${esc(formatDuration(v.durationMs))}</p>${v.note ? `<p class="muted small">${esc(v.note)}</p>` : ""}<ol class="task-timeline">${rows || (loading ? '<li class="empty">Loading calls…</li>' : '<li class="empty">No calls.</li>')}${more}</ol></div>`;
   }
   return `<li class="task${open ? " open" : ""}" data-task-id="${esc(v.taskId)}"><div class="task-row"><button class="task-toggle" data-task-toggle="${esc(v.taskId)}" aria-expanded="${open}"><span class="task-title">${esc(v.title)}</span><span class="task-meta muted small">${meta}</span></button>${dur}<span class="task-badge ${v.badge}">${esc(BADGE_TEXT[v.badge])}</span>${label}</div>${body}</li>`;
 }

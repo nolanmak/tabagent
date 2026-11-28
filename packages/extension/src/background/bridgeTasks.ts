@@ -39,8 +39,9 @@ function request<T>(map: Map<string, Waiter<T>>, msg: Record<string, unknown>, w
   });
 }
 
-export function listTasks(limit?: number, timeoutMs = 5000): Promise<TaskSummary[]> {
-  return request(lists, { type: "tasks.list", ...(limit ? { limit } : {}) }, "listed", timeoutMs);
+/** `calls`: the task whose calls to include (the opened row). */
+export function listTasks(limit?: number, calls?: string, timeoutMs = 5000): Promise<TaskSummary[]> {
+  return request(lists, { type: "tasks.list", ...(limit ? { limit } : {}), ...(calls ? { calls } : {}) }, "listed", timeoutMs);
 }
 
 export function labelTask(taskId: string, outcome: "success" | "failed", timeoutMs = 5000): Promise<{ ok: boolean; code?: string }> {

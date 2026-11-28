@@ -511,7 +511,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "ui.tasks_list": {
         // #158: the panel's Tasks section; the bridge builds summaries from the audit log.
         if (!tasksSupported(FEATURES, bridge.bridgeFeatures())) return { supported: false, tasks: [] };
-        return { supported: true, tasks: await listTasks(typeof msg.limit === "number" ? msg.limit : undefined) };
+        return { supported: true, tasks: await listTasks(typeof msg.limit === "number" ? msg.limit : undefined, typeof msg.calls === "string" ? msg.calls : undefined) };
       }
       case "ui.tasks_label": {
         if (!tasksSupported(FEATURES, bridge.bridgeFeatures())) return { ok: false, code: "UNSUPPORTED" };

@@ -262,7 +262,9 @@ export class Daemon {
   private onTasksMessage(ws: WebSocket, msg: unknown): boolean {
     const list = TasksListSchema.safeParse(msg);
     if (list.success) {
-      this.sendTo(ws, { type: "tasks.listed", id: list.data.id, tasks: this.tasks.log.list(list.data.limit ?? TASK_LIMITS.tasks) });
+      // Calls only for the opened task: the panel re-lists up to once a second, and 200 x 200 calls is megabytes.
+      const tasks = this.tasks.log.list(list.data.limit ?? TASK_LIMITS.tasks).map((t) => (t.taskId === list.data.calls ? t : { ...t, calls: [] }));
+      this.sendTo(ws, { type: "tasks.listed", id: list.data.id, tasks });
       return true;
     }
     const label = TasksLabelSchema.safeParse(msg);

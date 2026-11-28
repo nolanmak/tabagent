@@ -361,6 +361,7 @@ let tasksError = "";
 let tasksInFlight = false;
 let tasksTimer: ReturnType<typeof setTimeout> | null = null;
 const TASKS_THROTTLE_MS = 1000;
+const TASKS_LIMIT = 50;
 
 function renderTasks() {
   if (!state) return;
@@ -385,7 +386,7 @@ async function refreshTasks() {
   if (tasksInFlight) return scheduleTasks();
   tasksInFlight = true;
   try {
-    const r = await send({ type: "ui.tasks_list" });
+    const r = await send({ type: "ui.tasks_list", limit: TASKS_LIMIT, ...(openTaskId ? { calls: openTaskId } : {}) });
     if (r?.supported === false) state.tasksSupported = false;
     else tasks = Array.isArray(r?.tasks) ? r.tasks : [];
     tasksError = "";
@@ -644,7 +645,10 @@ $("tasks").addEventListener("click", async (e) => {
   if (!b) return;
   if (b.dataset.taskToggle) {
     openTaskId = openTaskId === b.dataset.taskToggle ? null : b.dataset.taskToggle;
-    return renderTasks();
+    renderTasks();
+    // The list carries calls for the opened task only: fetch them.
+    if (openTaskId) void refreshTasks();
+    return;
   }
   if (b.dataset.taskLabel && b.dataset.task) {
     b.disabled = true;

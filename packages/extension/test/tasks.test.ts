@@ -45,8 +45,8 @@ describe("worker: tasks over the bridge socket", () => {
     expect(tasksSupported(ext, br)).toBe(want);
   });
   it("listTasks sends tasks.list and resolves with the matching tasks.listed", async () => {
-    const p = listTasks(10);
-    expect(sent[0]).toMatchObject({ type: "tasks.list", limit: 10 });
+    const p = listTasks(10, "t-1");
+    expect(sent[0]).toMatchObject({ type: "tasks.list", limit: 10, calls: "t-1" });
     expect(onTasksBridgeMessage({ type: "tasks.listed", id: "other", tasks: [] })).toBe(true);
     onTasksBridgeMessage({ type: "tasks.listed", id: sent[0].id, tasks: [task()] });
     await expect(p).resolves.toEqual([task()]);
@@ -63,8 +63,9 @@ describe("worker: tasks over the bridge socket", () => {
     await expect(q).resolves.toEqual({ ok: true });
   });
   it("NO_EXTENSION when the socket is down; TIMEOUT when the bridge never answers", async () => {
-    const p = listTasks(undefined, 1000);
+    const p = listTasks(undefined, undefined, 1000);
     expect(sent[0]).not.toHaveProperty("limit");
+    expect(sent[0]).not.toHaveProperty("calls");
     vi.advanceTimersByTime(1001);
     await expect(p).rejects.toMatchObject({ code: "TIMEOUT" });
     setTasksSender(() => false);
@@ -149,7 +150,8 @@ describe("tasks HTML", () => {
   it("running row carries data-started for the 1 s tick; unlabeled row has ✓/✗; truncated calls say so", () => {
     const running = dom(taskItemHtml(task({ endedAt: undefined, outcome: null, callCount: 1, calls: [] }), 1_005_000, true));
     expect(running.querySelector(".task-dur.live")!.getAttribute("data-started")).toBe("1000000");
-    expect(running.querySelector(".task-timeline")!.textContent).toContain("No calls.");
+    expect(running.querySelector(".task-timeline")!.textContent).toContain("Loading calls…");
+    expect(dom(taskItemHtml(task({ callCount: 0, calls: [] }), 0, true)).querySelector(".task-timeline")!.textContent).toBe("No calls.");
     const unl = dom(taskItemHtml(task({ outcome: "unknown", note: "out of stock", callCount: 250 }), 0, true));
     expect([...unl.querySelectorAll("[data-task-label]")].map((b) => b.getAttribute("data-task-label"))).toEqual(["success", "failed"]);
     expect(unl.textContent).toContain("out of stock");

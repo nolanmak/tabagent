@@ -64,7 +64,8 @@ export type TaskSummary = z.infer<typeof TaskSummarySchema>;
 // ---------------------------------------------------------------------------
 // Wire: worker <-> bridge (only on the paired socket, only when both advertise TASKS_FEATURE)
 // ---------------------------------------------------------------------------
-export const TasksListSchema = z.object({ type: z.literal("tasks.list"), id: z.string().min(1).max(200), limit: z.number().int().positive().max(TASK_LIMITS.tasks).optional() });
+/** `calls`: the one task whose calls to include (the row the user opened); every other summary comes with calls: []. */
+export const TasksListSchema = z.object({ type: z.literal("tasks.list"), id: z.string().min(1).max(200), limit: z.number().int().positive().max(TASK_LIMITS.tasks).optional(), calls: z.string().max(200).optional() });
 export type TasksList = z.infer<typeof TasksListSchema>;
 
 export const TasksListedSchema = z.object({ type: z.literal("tasks.listed"), id: z.string().min(1).max(200), tasks: z.array(TaskSummarySchema) });
