@@ -31,7 +31,7 @@ describe("claude agents --json parsing (§5)", () => {
     const out = JSON.stringify([claudeRecord(10, 1000), claudeRecord(11, 2000)]);
     const agents = parseClaudeAgents(out);
     expect(agents.map((a) => a.id)).toEqual(["claude:10:1000", "claude:11:2000"]);
-    expect(agents[0]).toEqual({ id: "claude:10:1000", vendor: "claude", name: "agent-10", cwd: "/work/cl", startedAt: 1000, pid: 10, status: "idle" });
+    expect(agents[0]).toEqual({ id: "claude:10:1000", vendor: "claude", name: "agent-10", cwd: "/work/cl", startedAt: 1000, pid: 10, status: "idle", sessionId: "11111111-2222-3333-4444-555555555555" });
   });
   it("includes background sessions as well as interactive ones", () => {
     const out = JSON.stringify([claudeRecord(10, 1000), claudeRecord(12, 3000, { kind: "background", id: "abcd1234", state: "running", status: undefined })]);
@@ -46,6 +46,7 @@ describe("claude agents --json parsing (§5)", () => {
   it("missing name -> null; missing cwd -> empty string", () => {
     const [a] = parseClaudeAgents(JSON.stringify([{ pid: 1, startedAt: 2 }]));
     expect(a).toMatchObject({ name: null, cwd: "", status: "idle" });
+    expect(a.sessionId).toBeUndefined();
   });
   it.each(["not json", "{}", '{"agents":[]}', ""])("throws on output that is not a JSON array: %j", (s) => {
     expect(() => parseClaudeAgents(s)).toThrow();
@@ -88,8 +89,10 @@ describe("codex status map (AD10)", () => {
       cwd: "/work/cx",
       startedAt: 1_795_000_000_000,
       status: "idle",
+      title: "Fix tests",
     });
     expect(codexThreadToAgent(codexThread("t2"))!.name).toBeNull();
+    expect(codexThreadToAgent(codexThread("t2"))!.title).toBeUndefined();
     expect(codexThreadToAgent(codexThread("t3", { type: "notLoaded" }))).toBeNull();
     expect(codexThreadToAgent({ status: { type: "idle" } })).toBeNull();
     expect(codexThreadToAgent(null)).toBeNull();
@@ -107,10 +110,28 @@ describe("route choice (AD6)", () => {
     ["codex busy", T("codex", { status: "busy" }), {}, "queue"],
     ["codex systemError", T("codex", { status: "error" }), {}, "none"],
     ["codex with forceSpawn (Claude only)", T("codex"), { forceSpawn: true }, "none"],
-    ["unlinked claude", T("claude"), {}, "spawn"],
-    ["unlinked claude in error", T("claude", { status: "error" }), {}, "spawn"],
+    // #137: an unlinked Claude session cannot be messaged; a new session needs the explicit forceSpawn.
+    ["unlinked claude", T("claude"), {}, "none"],
+    ["unlinked claude, busy", T("claude", { status: "busy" }), {}, "none"],
+    ["unlinked claude in error", T("claude", { status: "error" }), {}, "none"],
+    ["unlinked claude, user chose Start a new session", T("claude"), { forceSpawn: true }, "spawn"],
+    ["unlinked claude, forceSpawn false", T("claude"), { forceSpawn: false }, "none"],
   ] as const)("%s -> %s", (_n, t, o, want) => {
     expect(chooseRoute(t, o)).toBe(want);
+  });
+});
+
+describe("titles on the wire (#137)", () => {
+  it("toAgent keeps the title, falls back to the vendor name, and never puts the sessionId on the wire", () => {
+    const [base] = parseClaudeAgents(JSON.stringify([claudeRecord(10, 1000, { name: "cl-03" })]));
+    const plain = mergeAgents([[base]])[0];
+    expect(plain.title).toBe("cl-03");
+    expect(plain).not.toHaveProperty("sessionId");
+    const titled = mergeAgents([[{ ...base, title: "Pending user input check" }]])[0];
+    expect(titled.title).toBe("Pending user input check");
+    expect(AgentSchema.safeParse(titled).success).toBe(true);
+    const [unnamed] = parseClaudeAgents(JSON.stringify([{ pid: 1, startedAt: 2 }]));
+    expect(mergeAgents([[unnamed]])[0]).not.toHaveProperty("title");
   });
 });
 
@@ -121,7 +142,7 @@ describe("merge", () => {
     const all = mergeAgents([cl, cx]);
     expect(all.map((a) => [a.id, a.delivery])).toEqual([
       ["codex:t1", "queue"],
-      ["claude:10:1000", "spawn"],
+      ["claude:10:1000", "none"],
       ["codex:t2", "none"],
     ]);
     for (const a of all) {

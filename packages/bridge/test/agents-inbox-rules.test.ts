@@ -179,13 +179,13 @@ describe("linking in discovery (AD4)", () => {
     expect(a).toMatchObject({ linked: true, canDriveTab: true, delivery: "piggyback" });
     expect(AgentSchema.safeParse(a).success).toBe(true);
     expect(toAgent(base, { canDriveTab: false, channels: false })).toMatchObject({ linked: true, canDriveTab: false, delivery: "piggyback" });
-    expect(toAgent(base, null)).toMatchObject({ linked: false, canDriveTab: false, delivery: "spawn" });
+    expect(toAgent(base, null)).toMatchObject({ linked: false, canDriveTab: false, delivery: "none" });
   });
   it("mergeAgents applies the link lookup per agent", () => {
     const bases = parseClaudeAgents(JSON.stringify([claudeRecord(10, 1000), claudeRecord(11, 2000)]));
     const all = mergeAgents([bases], (a) => (a.pid === 10 ? { canDriveTab: true, channels: false } : null));
     expect(all.map((a) => [a.id, a.linked, a.delivery])).toEqual([
-      ["claude:11:2000", false, "spawn"],
+      ["claude:11:2000", false, "none"],
       ["claude:10:1000", true, "piggyback"],
     ]);
   });
