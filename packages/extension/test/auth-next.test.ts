@@ -22,6 +22,12 @@ describe("classifyNext", () => {
     ["form gone, URL changed → done", { url: B, fields: PLAIN(), webauthn: false, captcha: false }, "done"],
     ["form gone, only the hash changed, nothing recognisable → handoff_required", { url: A + "#x", fields: [], webauthn: false, captcha: false }, "handoff_required"],
     ["login form still there (wrong password) → unknown", { url: A, fields: LOGIN(), webauthn: false, captcha: false }, "unknown"],
+    // #83 D8: on accounts.google.com a form-less page is a challenge, never "done"
+    ["Google phone prompt (URL changed, no form) → handoff_required", { url: "https://accounts.google.com/v3/signin/challenge/dp", fields: [], webauthn: false, captcha: false }, "handoff_required"],
+    ["Google interstitial with only non-login fields → handoff_required", { url: "https://accounts.google.com/signin/v2/recoveryoptions", fields: PLAIN(), webauthn: false, captcha: false }, "handoff_required"],
+    ["Google code page → code_required", { url: "https://accounts.google.com/v3/signin/challenge/ipp", fields: OTP(), webauthn: false, captcha: false }, "code_required"],
+    ["Google password step → unknown (call auth.login again)", { url: "https://accounts.google.com/v3/signin/challenge/pwd", fields: [f({ type: "password", name: "Passwd" })], webauthn: false, captcha: false }, "unknown"],
+    ["left Google for the third-party site → done", { url: "https://www.example-shop.com/account", fields: PLAIN(), webauthn: false, captcha: false }, "done"],
     ["next step of a two-step login (password page) → unknown", { url: "https://github.com/login/password", fields: [f({ type: "password" })], webauthn: false, captcha: false }, "unknown"],
   ];
   for (const [name, after, want] of rows) it(name, () => expect(classifyNext(A, after)).toBe(want));

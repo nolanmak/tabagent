@@ -520,3 +520,86 @@ describe("DA1 structural (security review H1): taint the tab before any secret r
     expect(pg.values.size).toBe(0);
   });
 });
+
+
+describe("Sign in with Google (#82, #83)", () => {
+  const G = "https://accounts.google.com";
+  const GA = (id: string, masked: string) => ({ id: `bitwarden:${id}`, provider: "bitwarden", accountMasked: masked, uris: [{ uri: G }] });
+  const idPage = () => fields({ type: "email", name: "identifier", autocomplete: "username" });
+  const pwPage = () => fields({ type: "password", name: "Passwd" });
+  const genv = (extra: EnvOpts = {}) => fakeEnv({ enabled: [G], accounts: [GA("a1", "nol•••k7@gmail.com"), GA("a2", "nat•••.k@gmail.com")], secrets: { username: "u@gmail.com", password: "pw" }, ...extra });
+
+  it("two-step: the password call reuses the identifier call's account and does not ask again (D6e)", async () => {
+    const pg = fakePage([
+      { url: `${G}/v3/signin/identifier`, fields: idPage() },
+      { url: `${G}/v3/signin/challenge/pwd`, fields: pwPage() },
+      { url: "https://www.example-shop.com/", fields: fields({ name: "q", label: "Search" }) },
+    ]);
+    const e = genv();
+    const mem = newMemory();
+    const r1 = await authLogin(e.env, pg.page, { account: "bitwarden:a1" }, mem);
+    expect(r1.next).toBe("unknown");
+    const r2 = await authLogin(e.env, pg.page, {}, mem);
+    expect(r2).toMatchObject({ filled: true, account: "nol•••k7@gmail.com", next: "done" });
+    expect(e.calls.consent).toHaveLength(1);
+  });
+
+  it("two-step: naming a different account on the second call is a new sign-in and asks", async () => {
+    const pg = fakePage([
+      { url: `${G}/v3/signin/identifier`, fields: idPage() },
+      { url: `${G}/v3/signin/challenge/pwd`, fields: pwPage() },
+      { url: "https://www.example-shop.com/", fields: fields({ name: "q", label: "Search" }) },
+    ]);
+    const e = genv();
+    const mem = newMemory();
+    await authLogin(e.env, pg.page, { account: "bitwarden:a1" }, mem);
+    await authLogin(e.env, pg.page, { account: "bitwarden:a2" }, mem);
+    expect(e.calls.consent).toHaveLength(2);
+  });
+
+  it("without an account and several Google logins, it returns the list instead of guessing", async () => {
+    const pg = fakePage([{ url: `${G}/v3/signin/identifier`, fields: idPage() }]);
+    const r = await authLogin(genv().env, pg.page, {}, newMemory());
+    expect(r.filled).toBe(false);
+    expect(r.accounts?.map((a) => a.accountMasked)).toEqual(["nol•••k7@gmail.com", "nat•••.k@gmail.com"]);
+  });
+
+  it("a popup that closes after the password submit reports done instead of throwing (D11)", async () => {
+    const pg = fakePage([{ url: `${G}/v3/signin/challenge/pwd`, fields: pwPage() }]);
+    let closed = false;
+    const page: AuthPage = {
+      ...pg.page,
+      async submit(ref) {
+        await pg.page.submit(ref);
+        closed = true;
+      },
+      url: async () => {
+        if (closed) throw new Error("No tab with id: 5");
+        return `${G}/v3/signin/challenge/pwd`;
+      },
+      fields: async () => {
+        if (closed) throw new Error("No tab with id: 5");
+        return pwPage();
+      },
+      closed: async () => closed,
+    };
+    const r = await authLogin(genv().env, page, { account: "bitwarden:a1" }, newMemory());
+    expect(r).toMatchObject({ filled: true, submitted: true, next: "done" });
+  });
+
+  it("source=email is refused on accounts.google.com (D7b)", async () => {
+    const pg = fakePage([{ url: `${G}/v3/signin/challenge/ipp`, fields: fields({ autocomplete: "one-time-code" }) }]);
+    const e = genv({ email: async () => "123456" });
+    await expect(authCode(e.env, pg.page, { source: "email" }, newMemory())).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.email).toBe(0);
+  });
+
+  it("source=auto on accounts.google.com skips email and uses SMS (D7b)", async () => {
+    const pg = fakePage([{ url: `${G}/v3/signin/challenge/ipp`, fields: fields({ autocomplete: "one-time-code" }) }]);
+    const e = genv({ email: async () => "111111", sms: async () => "222222", codeSources: [{ name: "sms", state: "available" }] });
+    const r = await authCode(e.env, pg.page, { source: "auto", submit: false }, newMemory());
+    expect(r.source).toBe("sms");
+    expect(pg.values.get("e1")).toBe("222222");
+    expect(e.calls.email).toBe(0);
+  });
+});

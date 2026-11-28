@@ -38,8 +38,9 @@ export const AUTH_HANDOFF_TIMEOUT = 5 * 60_000;
 const BULLETS = "•••";
 
 /**
- * Mask an account name for display: `nolan@gmail.com` → `n•••@gmail.com`, `nolanmak` → `n•••k`.
- * Never returns more than the first and last character of the local part.
+ * Mask an account name for display: `nolan@gmail.com` → `n•••@gmail.com`, `nolanmak7@gmail.com` →
+ * `nol•••k7@gmail.com`. A local part of 7+ characters keeps its first 3 and last 2 (#82 D10, so several
+ * logins on one domain can be told apart); shorter ones keep at most the first and last character.
  */
 export function maskAccount(account: string | null | undefined): string {
   const a = (account ?? "").trim();
@@ -47,10 +48,21 @@ export function maskAccount(account: string | null | undefined): string {
   const at = a.lastIndexOf("@");
   if (at > 0) {
     const domain = a.slice(at + 1).replace(/[^A-Za-z0-9.-]/g, "").slice(0, 253);
-    return `${firstChar(a)}${BULLETS}${domain ? "@" + domain : ""}`;
+    const local = [...a.slice(0, at)];
+    const shown = local.length >= LONG_LOCAL && allSafe(local) ? `${safeChars(local.slice(0, 3))}${BULLETS}${safeChars(local.slice(-2))}` : `${firstChar(a)}${BULLETS}`;
+    return `${shown}${domain ? "@" + domain : ""}`;
   }
   const chars = [...a];
+  if (chars.length >= LONG_LOCAL && allSafe(chars)) return `${safeChars(chars.slice(0, 3))}${BULLETS}${safeChars(chars.slice(-2))}`;
   return chars.length <= 2 ? `${firstChar(a)}${BULLETS}` : `${firstChar(a)}${BULLETS}${safeChar(chars[chars.length - 1])}`;
+}
+const LONG_LOCAL = 7;
+/** The longer mask is only for plain names; anything with markup or odd characters keeps the short one. */
+function allSafe(cs: string[]): boolean {
+  return cs.every((c) => safeChar(c) !== "");
+}
+function safeChars(cs: string[]): string {
+  return cs.map(safeChar).join("");
 }
 function firstChar(s: string): string {
   return safeChar([...s][0] ?? "");
@@ -60,7 +72,7 @@ function safeChar(c: string): string {
 }
 
 /** What maskAccount can produce, and nothing longer: the DA1 shape of every account string in a result. */
-export const MASKED_ACCOUNT_RE = /^[\p{L}\p{N}_.+-]?•••(@[A-Za-z0-9.-]{1,253}|[\p{L}\p{N}_.+-])?$/u;
+export const MASKED_ACCOUNT_RE = /^[\p{L}\p{N}_.+-]{0,3}•••[\p{L}\p{N}_.+-]{0,2}(@[A-Za-z0-9.-]{1,253})?$/u;
 
 /** Account ids on the wire: `<provider>:<provider-local id>`. Opaque, never a username. */
 export const ACCOUNT_ID_RE = /^(chrome-autofill|1password|bitwarden):[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;

@@ -61,6 +61,12 @@ function realPage(tabId: number): AuthPage {
   const d = async () => (drv ??= await driverFor(tabId, await tabUrl(tabId)));
   return {
     url: () => tabUrl(tabId),
+    async closed() {
+      return chrome.tabs.get(tabId).then(
+        () => false,
+        () => true,
+      );
+    },
     async fields() {
       const v = (await (await d()).call("authFields", [])) as (PageField & { ref: string | null })[];
       return v.filter((f) => !!f.ref) as PageField[];

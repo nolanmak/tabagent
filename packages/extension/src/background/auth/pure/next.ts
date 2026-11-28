@@ -12,6 +12,16 @@ export interface PageSignals {
   captcha: boolean;
 }
 
+/** Google's sign-in host: a form-less page there is a challenge or interstitial, never success (#83 D8). */
+const GOOGLE_SIGNIN_HOST = "accounts.google.com";
+function hostOf(u: string) {
+  try {
+    return new URL(u).hostname;
+  } catch {
+    return "";
+  }
+}
+
 function stripHash(u: string) {
   return u.split("#")[0];
 }
@@ -28,6 +38,7 @@ export function classifyNext(beforeUrl: string, after: PageSignals): Next {
   const login = detectLogin(after.fields);
   if (code.ok && !(login.ok && login.kind !== "username-only")) return "code_required";
   if (login.ok) return "unknown";
+  if (hostOf(after.url) === GOOGLE_SIGNIN_HOST) return "handoff_required";
   if (stripHash(after.url) !== stripHash(beforeUrl)) return "done";
   return "handoff_required";
 }

@@ -23,6 +23,8 @@ export interface AuthPage {
   url(): Promise<string>;
   fields(): Promise<PageField[]>;
   signals(): Promise<{ webauthn: boolean; captcha: boolean }>;
+  /** True once the tab is gone (an OAuth popup closes itself after the last step, #83 D11). */
+  closed?(): Promise<boolean>;
   /** chrome-autofill provider (#32): Chrome pre-filled this form from its password manager. */
   chromeAutofill(): Promise<{ usernameMasked?: string } | null>;
   /** Focus + CDP insertText through the action pipeline. */
@@ -68,6 +70,15 @@ export interface AuthMemory {
   lastAccount: Map<number, { id: string; origin: string }>;
   approvedSources: Set<string>;
 }
+/** How long the second auth.login call of a two-step login reuses the first call's account and consent. */
+export const TWO_STEP_REUSE_MS = 2 * 60_000;
+const GOOGLE_SIGNIN_HOST = "accounts.google.com";
+
+async function readAfter(page: AuthPage) {
+  const sig = await page.signals().catch(() => ({ webauthn: false, captcha: false }));
+  return { url: await page.url(), fields: await page.fields(), ...sig };
+}
+
 export const newMemory = (): AuthMemory => ({ lastLogin: new Map(), lastAccount: new Map(), approvedSources: new Set() });
 
 export const CHROME_AUTOFILL_ID = "chrome-autofill:saved";
@@ -181,10 +192,16 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
   if (!form0.ok) throw new TabAgentError("NOT_FOUND", form0.reason, form0.signup ? "auth.login only signs in; it never fills sign-up or change-password forms." : "Navigate to the site's sign-in page first.");
   const { accounts, providers, rejected } = await gatherAccounts(env, page, origin, url0); // (2)
 
+  // #82 D6e: the password step of a two-step login reuses the identifier step's account.
+  const prev = mem.lastAccount.get(env.tabId);
+  const prevAt = mem.lastLogin.get(env.tabId);
+  const recent = !!prev && prev.origin === origin && prevAt !== undefined && env.now() - prevAt < TWO_STEP_REUSE_MS;
+  const wantId = p.account ?? (recent ? prev!.id : undefined);
+
   let chosen: AuthAccount | undefined;
-  if (p.account) {
-    chosen = accounts.find((a) => a.id === p.account);
-    if (!chosen) throw new TabAgentError("NOT_FOUND", `No saved account ${p.account} matches ${origin}`, "Call auth.status to list matching accounts.");
+  if (wantId) {
+    chosen = accounts.find((a) => a.id === wantId);
+    if (!chosen) throw new TabAgentError("NOT_FOUND", `No saved account ${wantId} matches ${origin}`, "Call auth.status to list matching accounts.");
   } else {
     for (const name of providerOrder(providers)) {
       const hits = accounts.filter((a) => a.provider === name);
@@ -207,7 +224,8 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
   if (chosen.reprompt) throw new TabAgentError("PERMISSION_DENIED", "This item asks for the master password before every use; TabAgent never fills it", "Use auth.handoff and let the user sign in.");
 
   const host = new URL(origin).host;
-  await env.consent(url0, { accountId: chosen.id, accountMasked: chosen.accountMasked, provider: chosen.provider }, `Sign in to ${host} as ${chosen.accountMasked} with ${chosen.provider}?`); // (3)
+  // One consent covers both steps of the same sign-in (same tab, origin and account, within TWO_STEP_REUSE_MS).
+  if (!(recent && chosen.id === prev!.id)) await env.consent(url0, { accountId: chosen.id, accountMasked: chosen.accountMasked, provider: chosen.provider }, `Sign in to ${host} as ${chosen.accountMasked} with ${chosen.provider}?`); // (3)
 
   // (5) the tab may have navigated during the prompt
   const url1 = await sameOrigin(page, origin, "sign-in");
@@ -255,8 +273,15 @@ export async function authLogin(env: AuthEnv, page: AuthPage, p: { account?: str
     submitted = true;
     await page.settle();
   }
-  const sig = await page.signals().catch(() => ({ webauthn: false, captcha: false }));
-  const next: Next = submitted ? classifyNext(url1, { url: await page.url(), fields: await page.fields(), ...sig }) : "unknown"; // (7)
+  let next: Next = "unknown";
+  if (submitted) {
+    // (7) A popup that closed itself after the submit finished the flow (#83 D11).
+    const after = await readAfter(page).catch(async (e) => {
+      if (await page.closed?.().catch(() => false)) return null;
+      throw e;
+    });
+    next = after === null ? "done" : classifyNext(url1, after);
+  }
   env.event("auth.login", { origin, provider: chosen.provider, account: chosen.accountMasked, outcome: "filled", submitted, next });
   return { filled: true, account: chosen.accountMasked, source: chosen.provider, submitted, next };
 }
@@ -294,6 +319,9 @@ export async function authCode(
   }
 
   const want = p.source ?? "auto";
+  // #83 D7b: on Google's sign-in host the signed-in Gmail may be another account; never read email codes there.
+  const google = new URL(origin).hostname === GOOGLE_SIGNIN_HOST;
+  if (google && want === "email") throw new TabAgentError("PERMISSION_DENIED", "Email codes are not read on accounts.google.com", "Use source=sms or source=totp, or auth.handoff.");
   let totpAccount: AuthAccount | undefined;
   let smsAvailable = want === "sms";
   if (want === "auto" || want === "totp") {
@@ -308,7 +336,7 @@ export async function authCode(
     }
     smsAvailable = (res.codeSources ?? []).some((s) => s.name === "sms" && s.state === "available");
   }
-  const order: CodeSourceName[] = want === "auto" ? (["totp", "email", "sms"] as CodeSourceName[]).filter((s) => (s === "totp" ? !!totpAccount : s === "email" ? !!env.email : smsAvailable)) : [want];
+  const order: CodeSourceName[] = want === "auto" ? (["totp", "email", "sms"] as CodeSourceName[]).filter((s) => (s === "totp" ? !!totpAccount : s === "email" ? !!env.email && !google : smsAvailable)) : [want];
   if (!order.length) throw new TabAgentError("NOT_FOUND", `No code source is available for ${origin}`, "auth.status lists code sources and why they are unavailable.");
 
   const host = new URL(origin).host;
