@@ -128,6 +128,22 @@ describe("REST dispatch", () => {
     expect(e.msgs.filter((m) => m.type === "command")).toHaveLength(0);
     e.close();
   });
+  it("#106 resume stays panel-only: no REST route, legacy call or settings change resumes, and nothing reaches the extension", async () => {
+    const { d, base, cfg } = await boot();
+    const e = await pairedExt(d);
+    for (const path of ["/v1/resume", "/v1/ui.resume", "/v1/session.resume", "/v1/call/ui.resume", "/v1/admin/resume", "/v1/session/resume"]) {
+      const r = await rest(base, path, cfg.secret, {});
+      expect(r.status, path).toBe(404);
+    }
+    expect((await rest(base, "/v1/call", cfg.secret, { tool: "ui.resume", params: {} })).status).toBe(404);
+    expect(e.msgs.filter((m) => m.type !== "welcome")).toHaveLength(0);
+    // kill_all goes through to the extension like any tool, with no extra session state needed
+    e.onCommand = (c) => okEnvelope({ status: "killed", alreadyPaused: false }, c.tool);
+    const k = await rest(base, "/v1/session.kill_all", cfg.secret, {});
+    expect(k.body).toMatchObject({ ok: true, result: { status: "killed" } });
+    expect(e.msgs.filter((m) => m.type === "command").map((m) => m.tool)).toEqual(["session.kill_all"]);
+    e.close();
+  });
   it("extension errors map to HTTP status and untrusted messages are wrapped, hints not", async () => {
     const { d, base, cfg } = await boot();
     const e = await pairedExt(d);
