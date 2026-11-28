@@ -1,6 +1,6 @@
 # Spec: Send to agent — prompt local Claude Code / Codex sessions from the browser
 
-Status: **audited draft v2** (2026-11-27). Spec-interrogation audit: fresh-eyes pass, 38-seam swarm, and
+Status: **audited v3** (2026-11-27). v3 folds in the P0 spike results ([agent-inbox-spike.md](agent-inbox-spike.md)). Spec-interrogation audit: fresh-eyes pass, 38-seam swarm, and
 a conversation check. Findings and their resolutions are in [agent-inbox-audit.md](agent-inbox-audit.md).
 Epic: see the GitHub issue that links this file. Where this spec and an issue differ, the spec wins
 until it is amended.
@@ -92,10 +92,10 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   |---|---|---|---|
   | channel | `sent`, after the proxy acks the push. This means unconfirmed. | — | — |
   | piggyback | `held` | `delivered`, when attached to a successful tool result and flushed; or `expired` | TTL 30 min, or session end, or replaced by spawn |
-  | queue | `queued` if the Codex `codex queue` exit code is 0, else `failed` | — | — |
+  | queue | `queued` once `thread/queue/add` succeeds, else `failed` | `delivered`, when the submission leaves `thread/queue/list` (checked on `thread/queue/changed`, and every 10 s) | 30 min, then the bridge stops watching and leaves it `queued` |
   | spawn | `started` if `claude --bg` exits 0 (its printed id is shown with an `attach` hint), else `failed` | — | — |
 
-  Changes after the immediate state go out as `agent.status {requestId, state, detail?}`. Only `delivered` means the text reached the agent's context. Nothing claims the agent read or acted on it.
+  Changes after the immediate state go out as `agent.status {requestId, state, detail?}`. Only `delivered` means the text reached the agent's context (piggyback: in a tool result; queue: Codex took it off the queue and started a turn). Nothing claims the agent read or acted on it.
 - **AD8. Piggyback.**
   - The bridge holds up to 3 messages per linked session, FIFO, in memory only. A daemon restart turns held messages into `expired` (lost) on the restart. Extra sends beyond 3 are rejected with `failed` / `QUEUE_FULL`.
   - Messages are attached by the daemon to the **next successful** tool result for that session. They go in a separate result field `userMessages: string[]`, and the proxy renders that field as its own text content block **before** the tool output, outside any PAGE_DATA wrapper.
@@ -104,14 +104,13 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   - Accepted risk AR2: a model may still treat tool-result text as data.
 - **AD9. Channel route: experimental and gated.**
   - The proxy declares `experimental["claude/channel"]` **only** if its agent process's argv (from `ps -o args= -p <agentPid>`) contains `--channels` or `--dangerously-load-development-channels` with an entry naming `tabagent`. It reports `x-tabagent-channels`.
-  - The bridge offers the channel route only after the P0 spike has recorded that a pushed message lands and is acted on. Until then, `channels=1` sessions use piggyback.
+  - **P0 confirmed it** (spike §2): pushes land as a user turn when idle and queue behind the current turn when busy. The notification is `{method: "notifications/claude/channel", params: {content, meta: {source: "tabagent"}}}`. Launching needs `--dangerously-load-development-channels server:tabagent` plus a one-time "local development" confirmation dialog. Claude does not advertise channel support in `initialize`, so argv is the only signal.
   - Channels can be silently dropped: by org policy, on third-party providers, on a protocol revision, or when the server is not in the flag list. That is why the state is only `sent`.
   - The proxy never declares any permission-relay capability. If `channel/permission_request` arrives anyway, it ignores it and logs it to the audit.
-- **AD10. Codex discovery and queue.**
-  - Discovery runs over `codex app-server proxy` (stdio JSON-RPC to the running control socket) with `thread/loaded/list`, then `thread/read` for each thread. The bridge never starts the daemon. If the daemon is down, there are no Codex entries and `sources.codex = "unavailable"`.
+- **AD10. Codex discovery and queue** (transport confirmed in spike §4).
+  - The bridge connects with JSON-RPC over WebSocket to the control socket: `ws+unix://~/.codex/app-server-control/app-server-control.sock:/`. It sends `initialize {clientInfo: {name: "tabagent", version}}`, then the `initialized` notification. Discovery: `thread/loaded/list`, then `thread/read {threadId}` for each thread. The bridge never starts the daemon. If the socket is missing or refused, there are no Codex entries and `sources.codex = "unavailable"`. Only threads hosted by the daemon are discoverable; threads hosted by the Codex desktop app, the IDE or a plain TUI process are not (non-goal).
   - Status map: `active` → busy; `idle` → idle; `notLoaded` → not listed; `systemError` → listed but not sendable. `waitingOnApproval`/`waitingOnUserInput` → busy, with that label.
-  - Queue command: `execFile("codex", ["queue", "--thread", thread.id, "--message=" + text])`, with a 10 s timeout.
-  - The P0 spike confirms that `queue` reaches a thread hosted by a plain `codex` TUI. If it does not, those threads are `none`.
+  - Queue: `thread/queue/add {threadId, clientUserMessageId: requestId, input: [{type: "text", text}]}` over the same connection, with a 10 s timeout. No `codex queue` subprocess, so the text never appears in argv. A JSON-RPC error → `failed` / `QUEUE_FAILED`, with the message as the detail. An idle thread starts a turn right away (spike §4).
 - **AD11. Tab grant: a user-initiated Send counts as the attach consent.** This amends D9 and D18(f).
   1. On `agent.send` with a tab, for a target with canDriveTab, the bridge first resolves the target and route.
   2. The bridge sends `agent.grant {requestId, meta: SessionMeta, tabId}`.
@@ -187,7 +186,7 @@ Sequence: worker → bridge `agent.send`. Then:
 
 The bridge **always** replies, including on failure. The worker times out after 20 s, with `failed` / `TIMEOUT`.
 
-`spawn` details: `execFile("claude", ["--bg", text], {cwd: agent.cwd})`. If the cwd no longer exists, the result is `failed` / `NO_CWD`. Spawn uses the no-tab template, because the new session has no TabAgent session yet, and it uses Claude's default permission mode. Choosing spawn for an agent that already has a `held` message drops that held message (`expired`).
+`spawn` details: `execFile("claude", ["--bg", text], {cwd: agent.cwd, timeout: 30000})`. Parse `backgrounded · <shortId>` from stdout and return it in `detail` with an `attach` hint. If the cwd no longer exists, the result is `failed` / `NO_CWD`. If stdout or stderr contains `Workspace not trusted`, the result is `failed` / `WORKSPACE_UNTRUSTED`, with the CLI message as the detail. Claude refuses `--bg` in folders whose trust prompt was never accepted, including home and folders used only with `--dangerously-skip-permissions` (spike §5). Spawn uses the no-tab template, because the new session has no TabAgent session yet, and it uses Claude's default permission mode. Choosing spawn for an agent that already has a `held` message drops that held message (`expired`).
 
 ## 7. UI
 
@@ -262,10 +261,10 @@ The bridge **always** replies, including on failure. The worker times out after 
 
 | # | Question | Blocks | Owner / trigger |
 |---|---|---|---|
-| OT1 ★ | Does the ancestor walk find the agent under `npx` and other wrappers? | P2 linking, and therefore the grant and piggyback | P0 item 1 |
-| OT2 ★ | Do channel pushes land and get acted on? What argv signal is there, and does the permission relay get triggered? | P3 | P0 item 2 |
-| OT3 | Is piggyback framing obeyed? | Whether P2 piggyback ships or is cut | P0 item 3 |
-| OT4 | Is a plain-TUI Codex thread reachable by `queue`, and does `Thread.id` work as `--thread`? | P1 Codex route scope | P0 item 4 |
+| OT1 | ~~Ancestor walk under npx~~ **Closed:** works (spike §1) | — | — |
+| OT2 | ~~Channel pushes~~ **Closed:** land and are acted on; signal is argv; no permission relay (spike §2) | — | — |
+| OT3 | ~~Piggyback obeyed~~ **Closed:** yes, Claude 2/2 and Codex 1/1 on a harmless request; AR2 stands (spike §3) | — | — |
+| OT4 | ~~Codex reach~~ **Closed:** daemon-hosted threads only, via `thread/queue/add`; `Thread.id` is the key (spike §4) | — | — |
 | OT5 | Claude Code plugin for TabAgent plus channel allowlisting (`plugin:tabagent@<marketplace>`, Anthropic or org `allowedChannelPlugins`) | Removing the dev flag | After P3; owner: maintainer |
 | OT6 | `panel.reply` (agent → panel answer): params `{requestId, text}`, level `read`, plain-text rendering, 4,000 chars, linked agents only | Nothing in P0–P3 | Trigger: P2 shipped |
 
