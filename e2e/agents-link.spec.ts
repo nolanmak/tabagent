@@ -2,6 +2,8 @@
 // `tabagent mcp` under an npx-style wrapper whose parent is a process named `claude`. The proxy's ancestor
 // walk finds that pid, the stub `claude agents --json` lists it, so the agent is linked; a send to it is
 // held, its next successful tool call carries the message block first, and a held message expires.
+// P3 (AD9): launched with `--dangerously-load-development-channels server:tabagent`, the proxy declares
+// claude/channel and a send is pushed to the client as notifications/claude/channel, `sent` after the ack.
 import { existsSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -66,17 +68,19 @@ async function watchStatus(w: W) {
 const statuses = (w: W) => w.panel.evaluate(() => (globalThis as any).__agentStatus as any[]);
 
 /** Launch `claude` (node via a symlink) -> npm-exec stand-in -> `tabagent mcp`, and connect a client to it. */
-async function agentUnderClaude(w: W): Promise<{ client: Client; pid: number }> {
+async function agentUnderClaude(w: W, claudeArgs: string[] = []): Promise<{ client: Client; pid: number; notes: { method: string; params?: any }[] }> {
   const dir = mkdtempSync(join(tmpdir(), "ta-tree-"));
   const launcher = join(dir, "claude");
   symlinkSync(process.execPath, launcher);
   const pidFile = join(dir, "pid");
   const env: Record<string, string> = { ...(process.env as Record<string, string>), TABAGENT_HOME: w.h.home, TA_NODE: process.execPath, TA_CLI: CLI, TA_PID_FILE: pidFile };
-  const transport = new StdioClientTransport({ command: launcher, args: [TREE, "claude", "--profile", "full"], env, stderr: "pipe" });
+  const transport = new StdioClientTransport({ command: launcher, args: [TREE, "claude", ...claudeArgs, "--profile", "full"], env, stderr: "pipe" });
   const client = new Client({ name: "claude-code", version: "2.1.332" });
+  const notes: { method: string; params?: any }[] = [];
+  client.fallbackNotificationHandler = async (n) => void notes.push(n);
   await client.connect(transport);
   await expect.poll(() => existsSync(pidFile)).toBe(true);
-  return { client, pid: Number(readFileSync(pidFile, "utf8")) };
+  return { client, pid: Number(readFileSync(pidFile, "utf8")), notes };
 }
 
 test("linked through the npx-style wrapper: held, delivered on the next successful tool call, then expired after the TTL", async ({ w }) => {
@@ -134,6 +138,41 @@ test("'Start new session instead' (forceSpawn) spawns and drops the held message
     expect(spawned).toMatchObject({ route: "spawn", state: "started" });
     expect(w.claude.read("bg.text")).toBe(`${H}\nStart over`);
     await expect.poll(() => statuses(w), { timeout: 5000 }).toContainEqual(expect.objectContaining({ requestId: "e2e-h", state: "expired" }));
+  } finally {
+    await client.close();
+  }
+});
+
+test("channel route: launched with --dangerously-load-development-channels server:tabagent, the panel send arrives as notifications/claude/channel and shows sent", async ({ w }) => {
+  const { client, pid, notes } = await agentUnderClaude(w, ["--dangerously-load-development-channels", "server:tabagent"]);
+  const startedAt = 1_795_639_400_000;
+  const agentId = `claude:${pid}:${startedAt}`;
+  w.claude.agents([claudeRecord(pid, startedAt, { cwd: w.claude.dir, name: "channel-target" })]);
+  try {
+    // AD9: the argv check passed, so the proxy declared the channel capability before connecting.
+    expect(client.getServerCapabilities()?.experimental).toEqual({ "claude/channel": {} });
+    await expect
+      .poll(async () => (await ui(w, { type: "ui.agents_list" })).agents.find((a: any) => a.id === agentId), { timeout: 15_000 })
+      .toMatchObject({ linked: true, delivery: "channel" });
+
+    // Through the real panel: the row says "instant", and the feed line ends at `sent` (never `delivered`).
+    const p = w.panel;
+    const row = p.locator(`#agents [data-agent-id="${agentId}"]`);
+    await expect(row).toContainText("instant", { timeout: 15_000 });
+    await row.click();
+    await p.fill("#agentPrompt", "Reply with CHANNEL-OK");
+    await p.click("#agentSend");
+    const line = p.locator("#agentFeed li").filter({ hasText: "channel-target" });
+    await expect(line).toContainText("instant");
+    await expect(line.locator(".agent-state")).toHaveText("sent", { timeout: 15_000 });
+
+    // The stub client (acting as Claude) got the composed message as a channel notification.
+    await expect.poll(() => notes.filter((n) => n.method === "notifications/claude/channel").length, { timeout: 5000 }).toBe(1);
+    const n = notes.find((x) => x.method === "notifications/claude/channel")!;
+    expect(n.params).toEqual({ content: `${H}\nReply with CHANNEL-OK`, meta: { source: "tabagent" } });
+    // Nothing was held: the next tool result carries no piggyback copy.
+    const r: any = await client.callTool({ name: "tabs", arguments: { action: "list" } });
+    expect(r.content.some((c: any) => c.type === "text" && c.text.startsWith(H))).toBe(false);
   } finally {
     await client.close();
   }
