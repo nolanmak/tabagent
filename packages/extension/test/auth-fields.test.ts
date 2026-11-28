@@ -1,6 +1,6 @@
 // #33 login-form detection table, #34 code-destination table.
 import { describe, expect, it } from "vitest";
-import { detectCodeField, detectLogin, isOneTimeCodeAutocomplete, type FieldDesc } from "../src/background/auth/pure/fields";
+import { detectCodeField, detectLogin, detectSignup, isOneTimeCodeAutocomplete, type FieldDesc } from "../src/background/auth/pure/fields";
 
 let n = 0;
 export function f(o: Partial<FieldDesc>): FieldDesc {
@@ -43,6 +43,31 @@ describe("detectLogin", () => {
   it("a newsletter email box is not a username step", () => expect(detectLogin(list({ type: "email", name: "newsletter", label: "Subscribe" }))).toMatchObject({ ok: false }));
   it("disabled and readonly fields are ignored", () => expect(detectLogin(list({ name: "user", disabled: true }, { type: "password", readOnly: true }))).toMatchObject({ ok: false }));
   it("one-time-code field is never a username", () => expect(detectLogin(list({ name: "otp", autocomplete: "one-time-code", label: "Login code" }))).toMatchObject({ ok: false }));
+});
+
+describe("detectSignup (#112)", () => {
+  const rows: [string, FieldDesc[], ReturnType<typeof detectSignup>][] = [
+    ["email + password + confirm", list({ type: "email", name: "email" }, { type: "password", name: "password" }, { type: "password", name: "confirm" }), { ok: true, email: 0, passwords: [1, 2], form: 0 }],
+    ["new-password only", list({ type: "text", name: "email", label: "Email address" }, { type: "password", autocomplete: "new-password" }), { ok: true, email: 0, passwords: [1], form: 0 }],
+    [
+      "username + email + new-password",
+      list({ name: "user_login", autocomplete: "username" }, { type: "email", name: "email" }, { type: "password", autocomplete: "new-password" }),
+      { ok: true, username: 0, email: 1, passwords: [2], form: 0 },
+    ],
+    ["username only", list({ name: "handle", label: "Username" }, { type: "password", autocomplete: "new-password" }), { ok: true, username: 0, passwords: [1], form: 0 }],
+    [
+      "ignores name fields and the search box outside the form",
+      list({ name: "q", label: "Search", form: -1 }, { name: "first_name", label: "First name" }, { type: "email", name: "email" }, { type: "password", autocomplete: "new-password" }, { type: "password", autocomplete: "new-password" }),
+      { ok: true, email: 2, passwords: [3, 4], form: 0 },
+    ],
+  ];
+  for (const [name, fields, want] of rows) it(name, () => expect(detectSignup(fields)).toEqual(want));
+
+  it("a login form is not a sign-up form", () => expect(detectSignup(list({ type: "email" }, { type: "password", autocomplete: "current-password" }))).toMatchObject({ ok: false }));
+  it("a change-password form is not a sign-up form", () =>
+    expect(detectSignup(list({ type: "password", autocomplete: "current-password" }, { type: "password", autocomplete: "new-password" }, { type: "password", autocomplete: "new-password" }))).toMatchObject({ ok: false }));
+  it("three unmarked password fields are ambiguous", () => expect(detectSignup(list({ type: "email" }, { type: "password" }, { type: "password" }, { type: "password" }))).toMatchObject({ ok: false }));
+  it("no email or username field → not fillable", () => expect(detectSignup(list({ type: "password", autocomplete: "new-password" }, { type: "password", autocomplete: "new-password" }))).toMatchObject({ ok: false }));
 });
 
 describe("detectCodeField", () => {

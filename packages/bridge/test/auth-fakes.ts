@@ -13,7 +13,7 @@ export interface FakeCliDir {
   log: string;
   bin(name: string): string;
   scenario(name: string, s: Record<string, unknown>): void;
-  calls(): { name: string; argv: string[]; BW_SESSION: string | null; BITWARDENCLI_APPDATA_DIR: string | null; stdinClosed: boolean }[];
+  calls(): { name: string; argv: string[]; BW_SESSION: string | null; BITWARDENCLI_APPDATA_DIR: string | null; stdinClosed: boolean; stdinBytes: number }[];
 }
 
 export function fakeCliDir(): FakeCliDir {
@@ -139,6 +139,8 @@ export function bwScenario(o: {
   rejectAfterUnlock?: boolean;
   slowList?: number;
   garbageList?: boolean;
+  /** #112: what `bw create item` answers; `bw generate` returns this item's password. */
+  create?: ReturnType<typeof bwItem>;
 }) {
   const unlockedOnly = (entry: unknown) => ({ ...(entry as object), requiresSession: true, otherwise: bad() });
   const s: Record<string, unknown> = {
@@ -154,6 +156,13 @@ export function bwScenario(o: {
     s[`get username ${it.id}`] = unlockedOnly(ok({ object: "string", data: it.login.username }));
     const t = o.totp?.[it.id];
     s[`get totp ${it.id}`] = unlockedOnly(t ? ok({ object: "string", data: t }) : bad("Premium status is required to use this feature."));
+  }
+  if (o.create) {
+    const c = o.create;
+    s["generate -ulns --length 24"] = unlockedOnly(ok({ object: "string", data: c.login.password }));
+    s["create item"] = unlockedOnly(ok(c));
+    s[`get password ${c.id}`] = unlockedOnly(ok({ object: "string", data: c.login.password }));
+    s[`get username ${c.id}`] = unlockedOnly(ok({ object: "string", data: c.login.username }));
   }
   if (o.rejectAfterUnlock) s.status = { ...bwStatus("locked") };
   return s;

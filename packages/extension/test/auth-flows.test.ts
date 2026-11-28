@@ -5,7 +5,7 @@ import fc from "fast-check";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { FieldDesc } from "../src/background/auth/pure/fields";
-import { authCode, authLogin, authStatus, CHROME_AUTOFILL_ID, newMemory, type AuthEnv, type AuthPage, type PageField } from "../src/background/auth/pure/flows";
+import { authCode, authLogin, authSignup, authStatus, CHROME_AUTOFILL_ID, newMemory, type AuthEnv, type AuthPage, type PageField } from "../src/background/auth/pure/flows";
 
 type Fd = Partial<FieldDesc> & { ref?: string };
 function fields(...xs: Fd[]): PageField[] {
@@ -67,10 +67,11 @@ interface EnvOpts {
   onConsent?: () => void;
   email?: (o: any) => Promise<string>;
   sms?: () => Promise<string>;
+  create?: (origin: string, username?: string) => Promise<any>;
 }
 
 function fakeEnv(o: EnvOpts = {}) {
-  const calls = { accounts: 0, secret: [] as string[], consent: [] as any[], sms: 0, email: 0 };
+  const calls = { accounts: 0, secret: [] as string[], consent: [] as any[], sms: 0, email: 0, create: [] as { origin: string; username?: string }[] };
   const events: { name: string; data: any }[] = [];
   const storage = new Map<string, unknown>();
   const env: AuthEnv = {
@@ -102,6 +103,11 @@ function fakeEnv(o: EnvOpts = {}) {
         calls.sms++;
         if (!o.sms) throw Object.assign(new Error("no sms"), { code: "NOT_FOUND" });
         return o.sms();
+      },
+      async createLogin(_c, origin, username) {
+        calls.create.push({ origin, username });
+        if (!o.create) throw Object.assign(new Error("no create"), { code: "UNSUPPORTED" });
+        return o.create(origin, username);
       },
     },
     email: o.email ? { fetch: async (x) => (calls.email++, o.email!(x)) } : undefined,
@@ -601,5 +607,160 @@ describe("Sign in with Google (#82, #83)", () => {
     expect(r.source).toBe("sms");
     expect(pg.values.get("e1")).toBe("222222");
     expect(e.calls.email).toBe(0);
+  });
+});
+
+describe("auth.signup (#112)", () => {
+  const SIGNUP = () => fields({ type: "email", name: "email", autocomplete: "email" }, { type: "password", name: "password", autocomplete: "new-password" }, { type: "password", name: "confirm", autocomplete: "new-password" });
+  const signupSteps = (after: PageField[] = fields({ name: "q", label: "Search" })): Step[] => [
+    { url: "https://github.com/signup", fields: SIGNUP() },
+    { url: "https://github.com/welcome", fields: after },
+  ];
+  const BW = { name: "bitwarden", state: "unlocked", userMasked: "o•••@example.invalid" };
+  const NEW = { id: "bitwarden:new-1", provider: "bitwarden", accountMasked: "n•••@gmail.com", uris: [{ uri: "https://github.com", match: "domain" }] };
+  const senv = (o: EnvOpts & { pw?: string } = {}) => {
+    const log: string[] = [];
+    const e = fakeEnv({
+      providers: [BW],
+      secrets: { password: o.pw ?? "GEN-pw-marker", username: "owner@example.invalid" },
+      create: async () => (log.push("create"), NEW),
+      ...o,
+      onConsent: () => (log.push("consent"), o.onConsent?.()),
+    });
+    const filled: string[] = [];
+    e.env.filled = (kind, secret) => filled.push(`${kind}:${secret === null ? "-" : "secret"}`);
+    return { ...e, log, filled };
+  };
+
+  it("creates the login after consent, fills email + both new-password fields with the same secret, submits", async () => {
+    const PW = `GEN-${Math.random().toString(36).slice(2)}`;
+    const pg = fakePage(signupSteps());
+    const e = senv({ pw: PW });
+    const r = await authSignup(e.env, pg.page, { email: "nolan@gmail.com" });
+    expect(r).toEqual({ created: true, account: "n•••@gmail.com", accountId: "bitwarden:new-1", source: "bitwarden", filled: true, submitted: true, next: "done" });
+    expect(e.log).toEqual(["consent", "create"]);
+    expect(e.calls.create).toEqual([{ origin: "https://github.com", username: "nolan@gmail.com" }]);
+    expect(e.calls.consent).toHaveLength(1);
+    expect(e.calls.consent[0].summary).toBe("Create an account on github.com as n•••@gmail.com and save it to Bitwarden?");
+    expect(e.calls.consent[0].who).toMatchObject({ provider: "bitwarden", accountMasked: "n•••@gmail.com", signup: true });
+    // One password fetch for the new item, typed into both fields.
+    expect(e.calls.secret).toEqual(["bitwarden:new-1:password"]);
+    expect(pg.values.get("e1")).toBe("nolan@gmail.com");
+    expect(pg.values.get("e2")).toBe(PW);
+    expect(pg.values.get("e3")).toBe(PW);
+    expect(pg.order).toEqual(["mask e1", "type e1", "mask e2", "type e2", "mask e3", "type e3", "submit e3"]);
+    // DA1: the tab is tainted with the password before it is typed.
+    expect(e.filled).toEqual(["username:-", "password:secret"]);
+    for (const h of [JSON.stringify(r), JSON.stringify(e.events), JSON.stringify(e.calls.consent), pg.snapshot()]) expect(h).not.toContain(PW);
+    expect(e.events.at(-1)).toMatchObject({ name: "auth.signup", data: { origin: "https://github.com", provider: "bitwarden", account: "n•••@gmail.com", outcome: "filled" } });
+  });
+
+  it("consent is asked every time, even after the user said Always for that account", async () => {
+    const e = senv();
+    await authSignup(e.env, fakePage(signupSteps()).page, { email: "nolan@gmail.com" });
+    expect(e.storage.size).toBe(1); // the fake gate stored an Always
+    await authSignup(e.env, fakePage(signupSteps()).page, { email: "nolan@gmail.com" });
+    expect(e.calls.consent).toHaveLength(2);
+  });
+
+  it("without email: names the Bitwarden account email in the prompt and types it from the new item", async () => {
+    const pg = fakePage(signupSteps());
+    const e = senv({ create: async () => ({ ...NEW, accountMasked: "o•••@example.invalid" }) });
+    const r = await authSignup(e.env, pg.page, {});
+    expect(e.calls.consent[0].summary).toBe("Create an account on github.com as o•••@example.invalid and save it to Bitwarden?");
+    expect(e.calls.create).toEqual([{ origin: "https://github.com", username: undefined }]);
+    expect(e.calls.secret).toEqual(["bitwarden:new-1:username", "bitwarden:new-1:password"]);
+    expect(pg.values.get("e1")).toBe("owner@example.invalid");
+    expect(r.account).toBe("o•••@example.invalid");
+  });
+
+  it("username field too: fills email and username", async () => {
+    const pg = fakePage([{ url: "https://github.com/signup", fields: fields({ type: "text", name: "username", autocomplete: "username" }, { type: "email", name: "email" }, { type: "password", name: "password", autocomplete: "new-password" }) }]);
+    const e = senv();
+    await authSignup(e.env, pg.page, { email: "nolan@gmail.com", username: "nolan-dev", submit: false });
+    expect(pg.values.get("e1")).toBe("nolan-dev");
+    expect(pg.values.get("e2")).toBe("nolan@gmail.com");
+    expect(e.calls.create).toEqual([{ origin: "https://github.com", username: "nolan@gmail.com" }]);
+  });
+
+  it("a form that wants a username and an email without username= → BAD_REQUEST before the prompt", async () => {
+    const pg = fakePage([{ url: "https://github.com/signup", fields: fields({ type: "text", name: "username", autocomplete: "username" }, { type: "email", name: "email" }, { type: "password", name: "password", autocomplete: "new-password" }) }]);
+    const e = senv();
+    await expect(authSignup(e.env, pg.page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(e.calls.consent).toEqual([]);
+    expect(e.calls.create).toEqual([]);
+  });
+
+  it("refuses a login page (not a sign-up form): no prompt, nothing created", async () => {
+    const pg = fakePage(okSteps());
+    const e = senv();
+    await expect(authSignup(e.env, pg.page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(e.calls.consent).toEqual([]);
+    expect(e.calls.create).toEqual([]);
+  });
+
+  it("refuses a change-password form (current-password present)", async () => {
+    const pg = fakePage([{ url: "https://github.com/settings", fields: fields({ type: "password", autocomplete: "current-password" }, { type: "password", autocomplete: "new-password" }, { type: "password", autocomplete: "new-password" }) }]);
+    const e = senv();
+    await expect(authSignup(e.env, pg.page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(e.calls.create).toEqual([]);
+  });
+
+  it("Bitwarden locked → NOT_FOUND with the unlock hint, no prompt, nothing created", async () => {
+    const pg = fakePage(signupSteps());
+    const e = senv({ providers: [{ name: "bitwarden", state: "locked", hint: "Bitwarden is locked: ask the user to run `tabagent bitwarden unlock`." }] });
+    await expect(authSignup(e.env, pg.page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "NOT_FOUND", hint: expect.stringContaining("tabagent bitwarden unlock") });
+    expect(e.calls.consent).toEqual([]);
+    expect(e.calls.create).toEqual([]);
+  });
+
+  it("only 1Password → UNSUPPORTED (only Bitwarden creates logins)", async () => {
+    const pg = fakePage(signupSteps());
+    const e = senv({ providers: [{ name: "1password", state: "unlocked" }] });
+    await expect(authSignup(e.env, pg.page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(e.calls.consent).toEqual([]);
+  });
+
+  it("site not enabled / denylisted → PERMISSION_DENIED before anything else", async () => {
+    const pg = fakePage(signupSteps());
+    const e = senv({ enabled: [] });
+    await expect(authSignup(e.env, pg.page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.accounts).toBe(0);
+    expect(e.calls.consent).toEqual([]);
+  });
+
+  it("user denies → nothing created", async () => {
+    const e = senv({ deny: true });
+    await expect(authSignup(e.env, fakePage(signupSteps()).page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.create).toEqual([]);
+  });
+
+  it("tab navigates during the prompt → refused, nothing created", async () => {
+    const pg = fakePage(signupSteps());
+    const e = senv({ onConsent: () => pg.navigate("https://evil.example/signup") });
+    await expect(authSignup(e.env, pg.page, { email: "nolan@gmail.com" })).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(e.calls.create).toEqual([]);
+  });
+
+  it("fill fails after the item was created → the error names the kept item", async () => {
+    const pg = fakePage(signupSteps());
+    const type = pg.page.type;
+    pg.page.type = async (ref, v) => {
+      if (ref === "e2") throw Object.assign(new Error("Node is detached"), { code: "REF_STALE" });
+      return type(ref, v);
+    };
+    const e = senv();
+    const err = await authSignup(e.env, pg.page, { email: "nolan@gmail.com" }).catch((x) => x);
+    expect(err.code).toBe("REF_STALE");
+    expect(err.message).toContain("bitwarden:new-1");
+    expect(err.message).toContain("n•••@gmail.com");
+    expect(err.message).not.toContain("GEN-pw-marker");
+    expect(e.calls.create).toHaveLength(1);
+  });
+
+  it("sign-up form still there after submit → next unknown", async () => {
+    const pg = fakePage([{ url: "https://github.com/signup", fields: SIGNUP() }]);
+    const r = await authSignup(senv().env, pg.page, { email: "nolan@gmail.com" });
+    expect(r).toMatchObject({ created: true, filled: true, submitted: true, next: "unknown" });
   });
 });

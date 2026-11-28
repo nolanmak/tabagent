@@ -8,17 +8,25 @@ import { basename } from "node:path";
 
 const argv = process.argv.slice(2);
 let stdinClosed = false;
+// Bytes piped on stdin (only the count is logged: stdin may carry an item with a password, #112).
+let stdinBytes = 0;
 try {
-  stdinClosed = readSync(0, Buffer.alloc(1), 0, 1, null) === 0;
+  const buf = Buffer.alloc(65536);
+  let n = readSync(0, buf, 0, 1, null);
+  stdinClosed = n === 0;
+  while (n > 0) {
+    stdinBytes += n;
+    n = readSync(0, buf, 0, buf.length, null);
+  }
 } catch {
-  stdinClosed = true;
+  stdinClosed = stdinBytes === 0;
 }
 const name = basename(process.argv[1]);
 const log = process.env.FAKE_CLI_LOG;
 if (log) {
   appendFileSync(
     log,
-    JSON.stringify({ name, argv, BW_SESSION: process.env.BW_SESSION ?? null, BITWARDENCLI_APPDATA_DIR: process.env.BITWARDENCLI_APPDATA_DIR ?? null, stdinClosed, pid: process.pid }) + "\n",
+    JSON.stringify({ name, argv, BW_SESSION: process.env.BW_SESSION ?? null, BITWARDENCLI_APPDATA_DIR: process.env.BITWARDENCLI_APPDATA_DIR ?? null, stdinClosed, stdinBytes, pid: process.pid }) + "\n",
   );
 }
 const scenarioPath = process.env[`FAKE_${name.toUpperCase()}_SCENARIO`] ?? process.env.FAKE_CLI_SCENARIO;

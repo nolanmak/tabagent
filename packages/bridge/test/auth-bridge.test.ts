@@ -198,6 +198,17 @@ describe("secret channel (1Password through fake op)", () => {
     expect(ev.data).toMatchObject({ kind: "auth", source: "sms", outcome: "error" });
   });
 
+  it("#112 auth.signup with only 1Password: creating a login is UNSUPPORTED, op is never asked to create", async () => {
+    const { cmd, resp } = await call("auth.signup", { email: "new@example.com" });
+    await ask({ type: "auth.accounts", commandId: cmd.id, origin: "https://github.com" }, "auth.accounts.result");
+    const r = await ask({ type: "auth.signup.request", commandId: cmd.id, origin: "https://github.com", username: "new@example.com" }, "auth.signup.result");
+    expect(r).toMatchObject({ ok: false, error: { code: "UNSUPPORTED" } });
+    expect(r.account).toBeUndefined();
+    expect(fake.calls().filter((c) => c.argv[0] !== "item" || c.argv[1] !== "list")).toEqual([]);
+    ext.send(envelope(cmd.id, { code: "UNSUPPORTED", message: "x" }, "auth.signup", false));
+    await resp;
+  });
+
   it("auth.handoff gets the 5-minute wait budget", () => {
     // the daemon's command timer is prompt + tool timeout + slack + authExtraTimeout(tool)
     expect(getTool("auth.handoff")).toBeDefined();
@@ -208,14 +219,17 @@ describe("#37 admin route and Bitwarden through the daemon", () => {
   let KEY: string;
   let PW: string;
   let SEED: string;
+  let GEN: string;
   const BW_ID = "bw-item-000001";
+  const NEW_ID = "bw-item-000099";
   beforeEach(async () => {
     KEY = "K" + randomBytes(24).toString("base64url");
     PW = marker("BWPW");
     SEED = marker("SEED");
+    GEN = marker("GEN");
     fake = fakeCliDir();
     const bw = fake.bin("bw");
-    fake.scenario("bw", bwScenario({ key: KEY, items: [bwItem({ id: BW_ID, uris: [{ uri: "https://github.com", match: 1 }], password: PW, totp: SEED, username: "nolan@gmail.com" })], totp: { [BW_ID]: "135246" } }));
+    fake.scenario("bw", bwScenario({ key: KEY, items: [bwItem({ id: BW_ID, uris: [{ uri: "https://github.com", match: 1 }], password: PW, totp: SEED, username: "nolan@gmail.com" })], totp: { [BW_ID]: "135246" }, create: bwItem({ id: NEW_ID, uris: [{ uri: "https://github.com", match: 0 }], password: GEN, username: "new@example.com", name: "github.com" }) }));
     process.env.BW_SESSION = "inherited-should-be-removed";
     await boot({ providers: ["bitwarden"], bitwarden: { bin: bw } }, {});
     // boot() made a new fake dir for op; keep the bw scenario env from the first
@@ -295,6 +309,54 @@ describe("#37 admin route and Bitwarden through the daemon", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(ctx.d.auth.bitwarden.unlocked).toBe(false);
     e2.close();
+  });
+
+  it("#112 auth.signup: accounts → create (bw generate + bw create) → password for the new item only; nothing leaks", async () => {
+    expect((await admin("POST", { key: KEY })).status).toBe(204);
+    const { cmd, resp } = await call("auth.signup", { email: "new@example.com" });
+    const acc = await ask({ type: "auth.accounts", commandId: cmd.id, origin: "https://github.com" }, "auth.accounts.result");
+    // The default sign-up account (the Bitwarden account email), masked, so the prompt can name it.
+    expect(acc.providers).toEqual([{ name: "bitwarden", state: "unlocked", totp: "unknown", userMasked: "o•••@example.invalid" }]);
+    // Another origin than the one the accounts call bound → refused, nothing created.
+    const wrong = await ask({ type: "auth.signup.request", commandId: cmd.id, origin: "https://gitlab.com", username: "new@example.com" }, "auth.signup.result");
+    expect(wrong).toMatchObject({ ok: false, error: { code: "PERMISSION_DENIED" } });
+    expect(fake.calls().some((c) => c.argv[0] === "create")).toBe(false);
+
+    const made = await ask({ type: "auth.signup.request", commandId: cmd.id, origin: "https://github.com", username: "new@example.com" }, "auth.signup.result");
+    expect(made).toMatchObject({ ok: true, account: { id: `bitwarden:${NEW_ID}`, provider: "bitwarden", accountMasked: "n•••@example.com" } });
+    // Once per command.
+    expect(await ask({ type: "auth.signup.request", commandId: cmd.id, origin: "https://github.com", username: "new@example.com" }, "auth.signup.result")).toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
+    // An existing item's password is not handed out during a sign-up; the new one's is, once.
+    expect(await ask({ type: "auth.secret.request", commandId: cmd.id, accountId: `bitwarden:${BW_ID}`, field: "password" }, "secret")).toMatchObject({ ok: false, error: { code: "PERMISSION_DENIED" } });
+    const sec = await ask({ type: "auth.secret.request", commandId: cmd.id, accountId: `bitwarden:${NEW_ID}`, field: "password" }, "secret");
+    expect(sec).toMatchObject({ ok: true, field: "password", value: GEN });
+    ext.send(envelope(cmd.id, { created: true, account: "n•••@example.com", accountId: `bitwarden:${NEW_ID}`, source: "bitwarden", filled: true, submitted: true, next: "done" }, "auth.signup"));
+    const r = await resp;
+    expect(JSON.parse(r.text).result).toMatchObject({ created: true, accountId: `bitwarden:${NEW_ID}` });
+
+    const gen = fake.calls().find((c) => c.argv[0] === "generate");
+    const create = fake.calls().find((c) => c.argv[0] === "create");
+    expect(gen?.BW_SESSION).toBe(KEY);
+    expect(create?.BW_SESSION).toBe(KEY);
+    expect(create?.stdinBytes).toBeGreaterThan(0);
+    const sweep = [r.text, logs.join("\n"), everythingOnDisk(ctx.home), JSON.stringify(process.env), JSON.stringify(fake.calls().map((c) => c.argv))];
+    for (const s of sweep) {
+      expect(s).not.toContain(GEN);
+      expect(s).not.toContain(KEY);
+    }
+    const audit = readFileSync(join(ctx.home, "audit.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(audit.find((l) => l.event === "auth.signup")?.data).toMatchObject({ kind: "auth", tool: "auth.signup", origin: "https://github.com", provider: "bitwarden", account: "n•••@example.com", outcome: "ok" });
+  });
+
+  it("#112 a sign-up request is refused for any command but auth.signup", async () => {
+    expect((await admin("POST", { key: KEY })).status).toBe(204);
+    const { cmd, resp } = await call("auth.login");
+    await ask({ type: "auth.accounts", commandId: cmd.id, origin: "https://github.com" }, "auth.accounts.result");
+    const r = await ask({ type: "auth.signup.request", commandId: cmd.id, origin: "https://github.com", username: "x@example.com" }, "auth.signup.result");
+    expect(r).toMatchObject({ ok: false, error: { code: "PERMISSION_DENIED" } });
+    expect(fake.calls().some((c) => c.argv[0] === "generate" || c.argv[0] === "create")).toBe(false);
+    ext.send(envelope(cmd.id, { code: "PERMISSION_DENIED", message: "x" }, "auth.login", false));
+    await resp;
   });
 
   it("locked → auth.accounts reports the state with the user hint and no accounts", async () => {
