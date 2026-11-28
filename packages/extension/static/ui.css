@@ -316,7 +316,7 @@ details.section:last-of-type { border-bottom: 1px solid var(--border); }
 .section-note { color: var(--muted); font-size: var(--text-xs); margin: 0 2px var(--s-2); }
 .empty { color: var(--faint); font-size: var(--text-sm); padding: 6px 2px; }
 
-/* Agents list: T3-style session rows */
+/* Agents list: session rows */
 #agentsBox { margin-top: 2px; }
 .agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .agents > li { min-width: 0; }
