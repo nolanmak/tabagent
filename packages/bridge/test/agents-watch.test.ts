@@ -113,6 +113,8 @@ describe("TranscriptWatchers", () => {
     writeFileSync(file, "");
     w = new TranscriptWatchers({ resolve: async () => path, pollMs: 60_000, max: 2 });
     expect(await w.watch("a", push)).toBe(true);
+    expect(w.started("a")).toBe(true);
+    expect(w.started("zzz")).toBe(false);
     expect(await w.watch("a", push)).toBe(true);
     expect(w.size).toBe(1);
     expect(await w.watch("b", push)).toBe(true);

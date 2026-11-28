@@ -89,7 +89,8 @@ describe("agent.watch -> agent.entries", () => {
     // Unlisted and Codex agents are never watched.
     ext.send({ type: "agent.watch", agentId: "claude:99:9" });
     ext.send({ type: "agent.watch", agentId: "codex:t-1" });
-    await expect.poll(() => d.agents.transcripts.size, { timeout: 5000 }).toBe(1);
+    await expect.poll(() => d.agents.transcripts.started(AGENT), { timeout: 5000 }).toBe(true);
+    expect(d.agents.transcripts.size).toBe(1);
     claude.appendTranscript(claude.dir, SID, [tx.channel("Reply with OK"), tx.assistant([tx.text("SECRET-OK")])]);
     const m = await ext.next("agent.entries", () => true, 5000);
     const { __seen: _s, ...wire } = m;

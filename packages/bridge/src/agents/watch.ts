@@ -28,6 +28,8 @@ interface Watch {
   busy: boolean;
   lastResolve: number;
   stopped: boolean;
+  /** The start offset is known: lines written from now on will be pushed. */
+  started: boolean;
 }
 
 function stat(path: string): { ino: number; size: number } | null {
@@ -59,6 +61,11 @@ export class TranscriptWatchers {
     return this.watches.has(agentId);
   }
 
+  /** True once the watch knows where to start, so anything written after this is pushed. */
+  started(agentId: string): boolean {
+    return !!this.watches.get(agentId)?.started;
+  }
+
   /** Start pushing for this agent (again a no-op when already watched). False when over the cap. */
   async watch(agentId: string, send: (m: AgentEntries) => void): Promise<boolean> {
     const cur = this.watches.get(agentId);
@@ -67,12 +74,13 @@ export class TranscriptWatchers {
       return true;
     }
     if (this.watches.size >= this.max) return false;
-    const w: Watch = { agentId, send, path: null, ino: 0, offset: 0, skipping: false, timer: undefined as never, busy: false, lastResolve: Date.now(), stopped: false };
+    const w: Watch = { agentId, send, path: null, ino: 0, offset: 0, skipping: false, timer: undefined as never, busy: false, lastResolve: Date.now(), stopped: false, started: false };
     this.watches.set(agentId, w);
     w.path = await this.o.resolve(agentId).catch(() => null);
     if (w.stopped) return true;
     await this.startAt(w, w.path);
     if (w.stopped) return true;
+    w.started = true;
     w.timer = setInterval(() => void this.tick(w), this.pollMs);
     w.timer.unref?.();
     return true;
