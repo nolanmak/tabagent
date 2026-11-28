@@ -6,7 +6,7 @@ import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
-import { agentsSupported, listAgents, onAgentsBridgeMessage, setAgentsSender } from "./bridgeAgents";
+import { agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, sendToAgent, setAgentsSender, setAgentStatusListener } from "./bridgeAgents";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
 import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
@@ -56,6 +56,8 @@ const bridge = createBridgeClient({
 });
 setFilesSender((m) => bridge.send(m));
 setAgentsSender((m) => bridge.send(m));
+// AD7: later delivery states go to the side panel feed, keyed by requestId.
+setAgentStatusListener((m) => broadcast(m));
 setAuthSender((m) => bridge.send(m));
 setCaptchaSender((m) => bridge.send(m));
 
@@ -379,6 +381,14 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         // AD1/AD16: the panel lists agents through the worker; the bridge answers only on this socket.
         if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return { supported: false, agents: [], sources: { claude: "unavailable", codex: "unavailable" } };
         return { supported: true, ...(await listAgents()) };
+      }
+      case "ui.agent_send": {
+        // AD14: only extension pages reach here (gate above). AD17: paused -> PAUSED, nothing is sent.
+        const req = agentSendRequest(msg, await isPaused());
+        if (!req.ok) return req.reply;
+        if (!agentsSupported(FEATURES, bridge.bridgeFeatures()))
+          return { type: "agent.sent", requestId: req.msg.requestId, route: "none", state: "failed", code: "NO_EXTENSION", detail: "The bridge does not support Send to agent; update @nolmak/tabagent" };
+        return sendToAgent(req.msg);
       }
       case "ui.answer":
         return { ok: answerPrompt(msg.promptId ?? msg.id, msg.answer) };
