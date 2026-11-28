@@ -48,7 +48,8 @@ async function send(fields: Record<string, unknown>, e: FakeExt = ext) {
   e.send({ type: "agent.send", requestId, prompt: "Please look", includeTab: false, ...fields });
   const sent = await e.next("agent.sent", (m) => m.requestId === requestId, 8000);
   expect(AgentSentSchema.safeParse(sent).success).toBe(true);
-  return sent;
+  const { __seen: _seen, ...wire } = sent;
+  return wire;
 }
 
 function auditEvents(): any[] {
@@ -96,6 +97,15 @@ describe("queue route (Codex, AD10)", () => {
     await send({ requestId: "r-poll", agentId: `codex:${T}` });
     queue.length = 0;
     expect(await ext.next("agent.status", (m) => m.requestId === "r-poll", 3000)).toMatchObject({ state: "delivered" });
+  });
+
+  it("reconnects to the app-server on the next poll when the watch connection drops", async () => {
+    await boot({ queuePollMs: 100 });
+    await send({ requestId: "r-drop", agentId: `codex:${T}` });
+    for (const c of codex.clients) c.terminate();
+    queue.length = 0;
+    expect(await ext.next("agent.status", (m) => m.requestId === "r-drop", 3000)).toMatchObject({ state: "delivered" });
+    expect(codex.calls("initialize").length).toBeGreaterThanOrEqual(3);
   });
 
   it("stops watching after the watch window and leaves it queued", async () => {

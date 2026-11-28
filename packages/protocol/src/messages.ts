@@ -1,6 +1,17 @@
 // Wire messages between bridge and extension (D4, D5, D11, D14, D20), as zod schemas.
 import { z } from "zod";
-import { AgentsListedSchema, AgentsListSchema, type AgentsList, type AgentsListed } from "./agents";
+import {
+  AgentSendSchema,
+  AgentSentSchema,
+  AgentsListedSchema,
+  AgentsListSchema,
+  AgentStatusSchema,
+  type AgentSend,
+  type AgentSent,
+  type AgentsList,
+  type AgentsListed,
+  type AgentStatusEvent,
+} from "./agents";
 import { ERROR_CODES } from "./errors";
 
 /** Bumped on any incompatible wire change. Extension and npm package must carry the same value (#23). */
@@ -162,8 +173,8 @@ export const FilesResolvedSchema = z.object({
 });
 export type FilesResolved = z.infer<typeof FilesResolvedSchema>;
 
-export const ExtToBridgeSchema = z.discriminatedUnion("type", [HelloSchema, PingSchema, EventSchema, ResultEnvelopeSchema, FilesResolveSchema, AgentsListSchema]);
-export const BridgeToExtSchema = z.discriminatedUnion("type", [WelcomeSchema, PongSchema, CommandSchema, SessionClosedSchema, BridgeErrorSchema, FilesResolvedSchema, AgentsListedSchema]);
+export const ExtToBridgeSchema = z.discriminatedUnion("type", [HelloSchema, PingSchema, EventSchema, ResultEnvelopeSchema, FilesResolveSchema, AgentsListSchema, AgentSendSchema]);
+export const BridgeToExtSchema = z.discriminatedUnion("type", [WelcomeSchema, PongSchema, CommandSchema, SessionClosedSchema, BridgeErrorSchema, FilesResolvedSchema, AgentsListedSchema, AgentSentSchema, AgentStatusSchema]);
 
 export type ToolErrorWire = z.infer<typeof ToolErrorSchema>;
 
@@ -183,7 +194,7 @@ export interface LegacyResult<R = unknown> {
   error?: ToolErrorWire;
 }
 
-export type ExtToBridge = Hello | LegacyHello | z.infer<typeof PingSchema> | EventMessage | ResultEnvelope | LegacyResult | FilesResolve | AgentsList;
+export type ExtToBridge = Hello | LegacyHello | z.infer<typeof PingSchema> | EventMessage | ResultEnvelope | LegacyResult | FilesResolve | AgentsList | AgentSend;
 export type BridgeToExt =
   | Welcome
   | z.infer<typeof PongSchema>
@@ -191,7 +202,9 @@ export type BridgeToExt =
   | z.infer<typeof SessionClosedSchema>
   | z.infer<typeof BridgeErrorSchema>
   | FilesResolved
-  | AgentsListed;
+  | AgentsListed
+  | AgentSent
+  | AgentStatusEvent;
 
 /** Result type kept for existing extension code: the envelope with an optional audit record. */
 export type Result<R = unknown> = Omit<ResultEnvelope<R>, "audit"> & { audit?: AuditRecord };

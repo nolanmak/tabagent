@@ -55,3 +55,78 @@ export const AgentsListedSchema = z.object({
   sources: AgentSourcesSchema,
 });
 export type AgentsListed = z.infer<typeof AgentsListedSchema>;
+
+// ---------------------------------------------------------------------------
+// Send (§6): agent.send -> agent.sent, then agent.status events
+// ---------------------------------------------------------------------------
+
+/** AD7: what the bridge can observe about one send. Never the agent's busy/idle status. */
+export const AGENT_DELIVERY_STATES = ["sent", "held", "delivered", "queued", "started", "expired", "failed"] as const;
+export type AgentDeliveryState = (typeof AGENT_DELIVERY_STATES)[number];
+
+/** Why a send failed. The worker produces PAUSED, NO_EXTENSION and TIMEOUT; the bridge the rest. */
+export const AGENT_SEND_CODES = [
+  "AGENT_GONE",
+  "NO_ROUTE",
+  "TOO_LARGE",
+  "PAUSED",
+  "NO_CWD",
+  "WORKSPACE_UNTRUSTED",
+  "SPAWN_FAILED",
+  "QUEUE_FAILED",
+  "BAD_REQUEST",
+  "NO_EXTENSION",
+  "TIMEOUT",
+] as const;
+export type AgentSendCode = (typeof AGENT_SEND_CODES)[number];
+
+/** AD13, in string length (UTF-16 code units). The panel pre-checks; the bridge rejects with TOO_LARGE. */
+export const AGENT_LIMITS = { prompt: 8_000, selection: 16_000, title: 500, url: 2_000 } as const;
+export type AgentLimitField = keyof typeof AGENT_LIMITS;
+
+/** First field over its AD13 limit, or null. Nothing is ever truncated. */
+export function agentSendOverLimit(f: Partial<Record<AgentLimitField, string | undefined>>): { field: AgentLimitField; limit: number; length: number } | null {
+  for (const field of Object.keys(AGENT_LIMITS) as AgentLimitField[]) {
+    const v = f[field];
+    if (typeof v === "string" && v.length > AGENT_LIMITS[field]) return { field, limit: AGENT_LIMITS[field], length: v.length };
+  }
+  return null;
+}
+
+/**
+ * Worker -> bridge (AD12): the panel's raw fields. The bridge composes the message and treats title, url
+ * and selection as untrusted page data. No length caps here, so an oversized send still gets a reply.
+ */
+export const AgentSendSchema = z.object({
+  type: z.literal("agent.send"),
+  requestId: z.string().min(1).max(200),
+  agentId: z.string().min(1),
+  prompt: z.string().min(1),
+  includeTab: z.boolean(),
+  /** Chrome tab id (the same id the `tabId` tool parameter takes). */
+  tabId: z.number().int().optional(),
+  title: z.string().optional(),
+  url: z.string().optional(),
+  selection: z.string().optional(),
+});
+export type AgentSend = z.infer<typeof AgentSendSchema>;
+
+/** Bridge -> worker, always sent, including on failure. `route` is the route used (AD6). */
+export const AgentSentSchema = z.object({
+  type: z.literal("agent.sent"),
+  requestId: z.string().min(1),
+  route: z.enum(AGENT_ROUTES),
+  state: z.enum(AGENT_DELIVERY_STATES),
+  code: z.enum(AGENT_SEND_CODES).optional(),
+  detail: z.string().optional(),
+});
+export type AgentSent = z.infer<typeof AgentSentSchema>;
+
+/** Bridge -> worker event: a later state for the same requestId (AD7). */
+export const AgentStatusSchema = z.object({
+  type: z.literal("agent.status"),
+  requestId: z.string().min(1),
+  state: z.enum(AGENT_DELIVERY_STATES),
+  detail: z.string().optional(),
+});
+export type AgentStatusEvent = z.infer<typeof AgentStatusSchema>;
