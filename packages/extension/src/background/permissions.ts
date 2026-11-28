@@ -122,17 +122,20 @@ export interface GateRequest {
   auth?: { accountId: string; accountMasked: string; provider: string; signup?: boolean };
 }
 
+/** How a request was let through without a prompt, when that is worth auditing (#131). */
+export type AllowedVia = "authAuto" | undefined;
+
 /** Resolve -> prompt -> apply answer, until allowed or denied. */
-export async function authorize(g: GateRequest): Promise<void> {
+export async function authorize(g: GateRequest): Promise<AllowedVia> {
   const meta = g.meta;
   for (let round = 0; round < 4; round++) {
     const st = await policyState();
     const signup = !!g.auth?.signup;
-    // #112 D1: a sign-up has no saved account to be "Always" for, so it never matches authAlways.
-    const d = resolve(st, { sessionId: meta.id, cap: (meta.cap as Level) ?? "full", sites: meta.sites ?? [], url: g.url, level: g.level, sensitive: g.sensitive, accountId: signup ? undefined : g.auth?.accountId });
-    if (d.decision === "allow") return;
+    // #112 D1: a sign-up has no saved account to be "Always" for, and authAuto never skips it either.
+    const d = resolve(st, { sessionId: meta.id, cap: (meta.cap as Level) ?? "full", sites: meta.sites ?? [], url: g.url, level: g.level, sensitive: g.sensitive, accountId: signup ? undefined : g.auth?.accountId, signup });
+    if (d.decision === "allow") return d.via;
     if (d.decision === "deny") throw err(d.code, d.message, d.hint);
-    if (d.kind === "sensitive" && !signup && held.has(`${meta.id}|${d.origin}|${d.category}`)) return;
+    if (d.kind === "sensitive" && !signup && held.has(`${meta.id}|${d.origin}|${d.category}`)) return undefined;
     if (d.kind === "site") {
       const { outcome } = prompts.request({ kind: "site", sessionId: meta.id, sessionLabel: meta.label, origin: d.origin, level: d.level, tool: g.tool, summary: g.summary, reasons: d.reason ? [d.reason] : [], tabId: g.tabId });
       const o = await outcome;
@@ -160,14 +163,14 @@ export async function authorize(g: GateRequest): Promise<void> {
     }
     const e = outcomeError(o, `this action (${CATEGORY_TEXT[cat].toLowerCase()})`);
     if (e) throw e;
-    return; // once / always: this action may proceed
+    return undefined; // once / always: this action may proceed
   }
   throw err("PERMISSION_DENIED", "Permission could not be settled");
 }
 
 /** Ensure the session may use `level` on `url`. May prompt the user. */
 export async function requireSite(meta: SessionMeta, url: string, level: Level, tool: string, summary: string): Promise<void> {
-  return authorize({ meta, url, level, tool, summary, reasons: [] });
+  await authorize({ meta, url, level, tool, summary, reasons: [] });
 }
 
 const CATS = new Set(["a", "b", "c", "d", "e", "f", "g", "p", "r"]);
@@ -182,10 +185,10 @@ export interface SensitiveOpts {
  * Sensitive gate (D18). New signature: (meta, url, category, tool, summary, reasons).
  * The spike's (meta, url, tool, summary, reasons, kind?) form is still accepted.
  */
-export function requireSensitive(meta: SessionMeta, url: string, category: SensitiveCategory, tool: string, summary: string, reasons: string[], opts?: SensitiveOpts): Promise<void>;
+export function requireSensitive(meta: SessionMeta, url: string, category: SensitiveCategory, tool: string, summary: string, reasons: string[], opts?: SensitiveOpts): Promise<AllowedVia>;
 /** @deprecated legacy spike signature */
-export function requireSensitive(meta: SessionMeta, url: string, tool: string, summary: string, reasons: string[], kind?: PromptKind): Promise<void>;
-export async function requireSensitive(meta: SessionMeta, url: string, a: string, b: string, c: string | string[], d?: string[] | PromptKind, opts?: SensitiveOpts): Promise<void> {
+export function requireSensitive(meta: SessionMeta, url: string, tool: string, summary: string, reasons: string[], kind?: PromptKind): Promise<AllowedVia>;
+export async function requireSensitive(meta: SessionMeta, url: string, a: string, b: string, c: string | string[], d?: string[] | PromptKind, opts?: SensitiveOpts): Promise<AllowedVia> {
   let category: SensitiveCategory;
   let tool: string;
   let summary: string;

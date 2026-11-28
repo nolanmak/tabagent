@@ -206,8 +206,9 @@ before the agent picks it up, the tab is ungrouped and left open. The grant is t
 site policy prompt, token scope and every gate above still apply on the agent's first action.
 
 Categories a–e can be pre-approved per origin; f always asks. Choosing `full` for a site in the side
-panel (adding it or changing its row) also turns on sign-in and pre-approves a–e for it in one step
-(#118); the user can untick any of them after, and lowering the level later leaves them as they are.
+panel (adding it or changing its row) also turns on sign-in, sign-in without asking (below) and
+pre-approves a–e for it in one step (#118, #131), so full means no further prompts on that site; the
+user can untick any of them after, and lowering the level later leaves them as they are.
 Sign-in is still never turned on for hosts on the banking/password-manager list, the password,
 account and mail hosts, or the denylist; the panel says why instead. Prompts are answered in the side
 panel (reached from the toolbar badge or a notification), never by buttons inside the page, which
@@ -232,6 +233,36 @@ restarted and when typing resumes (#140). The side panel shows the lock with an 
 for the user, typically after reloading TabAgent themselves. Agents can't reach it (panel-only
 `ui.endRestartLock`), and taint recorded after the restart still applies.
 
+### Sign in without asking (#131)
+
+Sign-in (category g: `auth.login`, `auth.code`, `auth.confirm_link`) asks before every sign-in or
+code by default, even on a site with sign-in allowed and policy `full`. There are two ways to skip
+the prompt, both set only by the user:
+
+- **Always grants** (per account): "Always for this account" on a prompt, or the side panel's
+  "codes always" toggle, which adds the texted and emailed code sources (`code-source:sms`,
+  `code-source:email`). The side panel's Sign-in column lists every Always grant for a site (account
+  ids masked) with a ✕ that revokes it.
+- **Sign in without asking** (`authAuto`, per site): every g request on that exact origin is allowed
+  with no prompt, for every saved account and every code source. It is off by default. The user turns
+  it on in the side panel (choosing `full` turns it on too), or approves a `policy.site_change` that
+  asks for it. It needs sign-in explicitly on (`auth: true`: the Google default and YOLO are not
+  enough), and turning sign-in off clears it. Each command it lets through is marked `authAuto: true`
+  in the audit log, and turning it on or off for a site is written to the audit log too.
+
+**The risk.** With `authAuto` on, an agent can sign in with any saved account for that site and type
+any texted, emailed or TOTP code that arrives, without the user seeing anything. Codes often confirm
+more than sign-ins: a bank, broker or payment site may text the same kind of code to approve a payment
+or a transfer, and an agent entering it without asking approves that. The side panel shows this
+warning when `authAuto` is turned on and next to every site that has it. It is never available on the
+password-manager hosts where TabAgent never signs in, on the never-reachable hosts below, or on
+denylisted hosts: the panel and `policy.site_change` refuse to set it there, settings drop it for the
+built-in lists, and the gate re-checks the host every time, so adding a site to the denylist later
+stops it at once. Banks are on the seeded denylist, so they cannot have it until the user removes the
+bank from the denylist (#100); after that a bank can have it like any other site, and that is where the
+payment warning matters most. A code consent that `authAuto` allowed is not cached, so turning it off also
+applies at once. Sign-ups (`auth.signup`) still ask every time. YOLO does not turn it on.
+
 ### Google sign-in (#79)
 
 TabAgent never signs in on password-manager hosts, whatever the settings. Google sign-in
@@ -250,8 +281,9 @@ Agents cannot write extension settings. Two `full`-level tools let a caller *req
 the extension applies it only after the user approves a visible prompt in the side panel:
 
 - `policy.denylist_change`: an exact add/remove list of host globs.
-- `policy.site_change`: one exact origin and the sign-in (`auth`), site policy and lite-mode values
-  to set. The prompt shows the origin, each change and the agent's reason.
+- `policy.site_change`: one exact origin and the sign-in (`auth`), sign-in without asking
+  (`authAuto`), site policy and lite-mode values to set. The prompt shows the origin, each change
+  (with the payment warning for `authAuto`) and the agent's reason.
 
 These prompts (category p) offer only "Allow once" and "Deny". They cannot be pre-approved, and YOLO,
 saved site permissions and `devAllowSensitive` do not skip them. A denied or timed-out prompt changes

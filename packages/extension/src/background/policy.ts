@@ -22,6 +22,11 @@ export interface SiteEntry {
   auth?: boolean;
   /** M6: account ids the user said "Always" to for sign-in on this origin. */
   authAlways?: string[];
+  /**
+   * #131: sign in without asking. Category g on this exact origin is allowed with no prompt. Only
+   * honoured with an explicit `auth: true`, never on AUTH_DENY_HOSTS, vault or denylisted hosts.
+   */
+  authAuto?: boolean;
 }
 
 /** Per-session answers ("Allow once" / "Deny"), keyed by origin. */
@@ -56,12 +61,14 @@ export interface PolicyRequest {
   sensitive?: SensitiveCategory;
   /** Category g: the account being signed in with. */
   accountId?: string;
+  /** Category g: a sign-up (#112). Asked every time; neither Always nor authAuto skips it. */
+  signup?: boolean;
 }
 
 export type DenyCode = "PERMISSION_DENIED" | "KILLED";
 
 export type Decision =
-  | { decision: "allow"; origin: string | null }
+  | { decision: "allow"; origin: string | null; via?: "authAuto" }
   | { decision: "deny"; code: DenyCode; message: string; hint?: string; origin: string | null }
   | { decision: "ask"; kind: "site"; origin: string; level: Level; reason?: string }
   | { decision: "ask"; kind: "sensitive"; origin: string; category: SensitiveCategory };
@@ -227,6 +234,21 @@ export function authEnabled(e: { auth?: boolean } | undefined, origin: string, y
 
 export const AUTH_DENY_HOSTS = ["*.1password.com", "*.lastpass.com", "*.bitwarden.com", "*.dashlane.com", "*.keepersecurity.com"];
 
+/** Sign-in can never be automated for this URL's host: AUTH_DENY_HOSTS, vault hosts or the user's denylist. */
+export function authHostBlocked(url: string, denylist: readonly string[]): boolean {
+  const h = hostOf(url);
+  return !h || AUTH_DENY_HOSTS.some((g) => hostMatches(g, h)) || isVaultDenied(url) || isDenylisted(url, [...denylist]);
+}
+
+/**
+ * #131: the site signs in without asking. Needs the flag and an explicit `auth: true` (not the
+ * default-on list, not YOLO), and the host is re-checked here, at use time, so a later denylist
+ * entry wins over a stored flag.
+ */
+export function authAutoAllowed(e: SiteEntry | undefined, url: string, denylist: readonly string[]): boolean {
+  return e?.auth === true && e.authAuto === true && !authHostBlocked(url, denylist);
+}
+
 function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | null): Decision {
   const cat = req.sensitive;
   if (!cat) return { decision: "allow", origin };
@@ -235,7 +257,9 @@ function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | 
     if (AUTH_DENY_HOSTS.some((g) => hostMatches(g, hostOf(req.url)))) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `TabAgent never signs in on ${hostOf(req.url)}` };
     const e = state.sites[origin];
     if (!authEnabled(e, origin, state.yolo)) return { decision: "deny", code: "PERMISSION_DENIED", origin, message: `Sign-in is not enabled for ${origin}`, hint: "The user can enable sign-in for this site in the TabAgent side panel." };
+    if (req.signup) return { decision: "ask", kind: "sensitive", origin, category: "g" };
     if (req.accountId && e?.authAlways?.includes(req.accountId)) return { decision: "allow", origin };
+    if (authAutoAllowed(e, req.url, state.denylist)) return { decision: "allow", origin, via: "authAuto" };
     return { decision: "ask", kind: "sensitive", origin, category: "g" };
   }
   const key = origin ?? (isBlank(req.url) ? "about:blank" : req.url);

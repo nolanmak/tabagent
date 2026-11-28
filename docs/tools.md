@@ -624,7 +624,7 @@ MCP name `policy_denylist_change` · level full · profiles full only · lite su
 
 ### policy.site_change
 
-Request a change to one exact origin's sign-in (auth), policy ("ask" clears it) or lite mode, e.g. after "Sign-in is not enabled". Always needs a visible approval; YOLO does not bypass it.
+Request a change to one exact origin's sign-in (auth), sign-in without asking (authAuto), policy ("ask" clears it) or lite mode, e.g. after "Sign-in is not enabled". Always asks, even in YOLO.
 
 MCP name `policy_site_change` · level full · profiles full only · lite supported · sensitive p · handled by extension
 

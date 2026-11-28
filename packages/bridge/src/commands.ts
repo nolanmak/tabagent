@@ -198,6 +198,7 @@ export function formatSettings(s: SettingsSnapshot): string[] {
     const parts = [o.padEnd(width), e.policy.padEnd(4), `sign-in ${onOff(e.auth)}`, `lite ${onOff(e.lite)}`];
     if (e.preapproved?.length) parts.push(`pre-approved ${e.preapproved.join(",")}`);
     if (e.alwaysAccounts) parts.push(`${e.alwaysAccounts} account${e.alwaysAccounts === 1 ? "" : "s"} always`);
+    if (e.authAuto) parts.push("signs in without asking");
     return `  ${parts.join("  ")}`;
   });
   return [

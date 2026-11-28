@@ -300,6 +300,21 @@ describe("validateParams", () => {
   });
 });
 
+describe("policy.site_change accepts authAuto (#131)", () => {
+  const t = () => getTool("policy.site_change")!;
+  it("takes authAuto alone or with other changes, and rejects unknown keys", () => {
+    expect(() => validateParams(t(), { origin: "https://a.example", changes: { authAuto: true }, reason: "r" })).not.toThrow();
+    expect(() => validateParams(t(), { origin: "https://a.example", changes: { auth: true, authAuto: false }, reason: "r" })).not.toThrow();
+    expect(() => validateParams(t(), { origin: "https://a.example", changes: { authAuto: "yes" }, reason: "r" })).toThrow();
+    expect(() => validateParams(t(), { origin: "https://a.example", changes: { authAlways: ["x"] }, reason: "r" })).toThrow();
+    expect(() => validateParams(t(), { origin: "https://a.example", changes: {}, reason: "r" })).toThrow();
+  });
+  it("its result reports authAuto", () => {
+    const shape = (t().result as any).shape.site.shape;
+    expect(Object.keys(shape)).toContain("authAuto");
+  });
+});
+
 describe("workflow.edit_draft params (#107)", () => {
   const tool = () => getTool("workflow.edit_draft")!;
   const id = "7b0f3c1e-2d4a-4c6b-9e8f-0a1b2c3d4e5f";

@@ -75,3 +75,28 @@ describe("risky settings are audited when toggled (review M1)", () => {
     expect(settingsAuditEvents({ ...d, yolo: true }, { ...d, yolo: true })).toEqual([]);
   });
 });
+
+describe("sign in without asking is stored only where it can apply (#131)", () => {
+  it("keeps authAuto with an explicit auth: true", () => {
+    expect(migrateSettings({ sites: { "https://shop.example": { auth: true, authAuto: true } } } as any).sites["https://shop.example"]).toEqual({ auth: true, authAuto: true });
+  });
+  it("drops authAuto without auth: true, or with a non-boolean value", () => {
+    expect(migrateSettings({ sites: { "https://shop.example": { policy: "act", authAuto: true } } } as any).sites["https://shop.example"]).toEqual({ policy: "act" });
+    expect(migrateSettings({ sites: { "https://shop.example": { auth: false, authAuto: true } } } as any).sites["https://shop.example"]).toEqual({ auth: false });
+    expect(migrateSettings({ sites: { "https://shop.example": { auth: true, authAuto: "yes" } } } as any).sites["https://shop.example"]).toEqual({ auth: true });
+  });
+  it("drops authAuto on hosts where sign-in is never automated", () => {
+    for (const o of ["https://my.1password.com", "https://vault.bitwarden.com", "https://mail.google.com"]) {
+      expect(migrateSettings({ sites: { [o]: { policy: "full", auth: true, authAuto: true } } } as any).sites[o].authAuto).toBeUndefined();
+    }
+    // Banks are only blocked by the editable denylist (#101), which the gate re-checks at use time.
+    expect(migrateSettings({ sites: { "https://app.mercury.com": { auth: true, authAuto: true } } } as any).sites["https://app.mercury.com"].authAuto).toBe(true);
+  });
+  it("audits turning it on or off per origin", () => {
+    const d = migrateSettings(undefined);
+    const on = { ...d, sites: { "https://shop.example": { auth: true, authAuto: true as const } } };
+    expect(settingsAuditEvents(d, on)).toEqual([{ event: "settings.changed", data: { authAuto: true, origin: "https://shop.example" } }]);
+    expect(settingsAuditEvents(on, d)).toEqual([{ event: "settings.changed", data: { authAuto: false, origin: "https://shop.example" } }]);
+    expect(settingsAuditEvents(on, on)).toEqual([]);
+  });
+});

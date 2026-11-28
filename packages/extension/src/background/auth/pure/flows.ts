@@ -65,7 +65,8 @@ export interface AuthEnv {
   siteCheck(url: string): Promise<void>;
   /** Category g gate (requireSensitive(meta, url, "g", …)). Throws PERMISSION_DENIED / PROMPT_TIMEOUT. */
   /** `signup`: a sign-up prompt (#112), asked every time; "Always" never skips or stores it. */
-  consent(url: string, who: { accountId: string; accountMasked: string; provider: string; signup?: boolean }, summary: string): Promise<void>;
+  /** Resolves "authAuto" when the site signs in without asking (#131); such a consent is never cached. */
+  consent(url: string, who: { accountId: string; accountMasked: string; provider: string; signup?: boolean }, summary: string): Promise<"authAuto" | undefined | void>;
   channel: Pick<AuthChannel, "accounts" | "secret" | "smsCode" | "createLogin">;
   email?: EmailReader;
   confirmMail?: ConfirmMailReader;
@@ -376,8 +377,9 @@ export async function authCode(
     try {
       if (!mem.approvedSources.has(key)) {
         const who = source === "totp" && totpAccount ? { accountId: totpAccount.id, accountMasked: totpAccount.accountMasked, provider: totpAccount.provider } : { accountId: `code-source:${source}`, accountMasked: maskAccount(""), provider: source };
-        await env.consent(url0, who, `Enter a ${source === "totp" ? "TOTP" : source} code on ${host}?`);
-        mem.approvedSources.add(key);
+        const via = await env.consent(url0, who, `Enter a ${source === "totp" ? "TOTP" : source} code on ${host}?`);
+        // #131: authAuto is re-checked on every code, so turning it off (or a denylist entry) applies at once.
+        if (via !== "authAuto") mem.approvedSources.add(key);
       }
       let code: string | null =
         source === "totp" ? await env.channel.secret(env.cmdId, totpAccount!.id, "totp") : source === "email" ? await env.email!.fetch({ since, from: p.from, timeout }) : await env.channel.smsCode(env.cmdId, since, timeout);
@@ -588,8 +590,8 @@ export async function authConfirmLink(env: AuthEnv, page: AuthPage, p: { from?: 
 
   const key = `${origin}|confirm_link`;
   if (!mem.approvedSources.has(key)) {
-    await env.consent(url0, { accountId: "confirm-link:email", accountMasked: maskAccount(""), provider: "email" }, `Open the confirmation email from ${host} in Gmail and follow its link?`);
-    mem.approvedSources.add(key);
+    const via = await env.consent(url0, { accountId: "confirm-link:email", accountMasked: maskAccount(""), provider: "email" }, `Open the confirmation email from ${host} in Gmail and follow its link?`);
+    if (via !== "authAuto") mem.approvedSources.add(key);
   }
 
   const handoff = (reason: "none" | "ambiguous"): ConfirmLinkResult => {

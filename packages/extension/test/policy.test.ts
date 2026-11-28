@@ -244,6 +244,66 @@ describe("auth category g (M6)", () => {
   });
 });
 
+describe("sign in without asking: authAuto (#131)", () => {
+  const auto = (extra = {}, over: Partial<PolicyState> = {}) => base({ sites: { [A]: { policy: "full", auth: true, authAuto: true, ...extra } }, ...over });
+  it.each(["code-source:sms", "code-source:email", "1password:item1", "confirm-link:email"])("allows g for %s on that origin with no prompt, and says authAuto did it", (accountId) => {
+    expect(resolve(auto(), req({ sensitive: "g", accountId }))).toEqual({ decision: "allow", origin: A, via: "authAuto" });
+  });
+  it("is off by default: the same request asks", () => {
+    expect(resolve(base({ sites: { [A]: { policy: "full", auth: true } } }), req({ sensitive: "g", accountId: "code-source:sms" }))).toMatchObject({ decision: "ask", category: "g" });
+    expect(resolve(auto({ authAuto: false }), req({ sensitive: "g", accountId: "code-source:sms" }))).toMatchObject({ decision: "ask", category: "g" });
+  });
+  it("covers that exact origin only", () => {
+    expect(resolve(auto(), req({ url: "https://b.a.example/login", sensitive: "g", accountId: "x" })).decision).not.toBe("allow");
+    expect(resolve(auto(), req({ url: "http://a.example/login", sensitive: "g", accountId: "x" })).decision).not.toBe("allow");
+  });
+  it("needs sign-in explicitly on: default-on, YOLO-on or off sign-in never auto-allows", () => {
+    const g = "https://accounts.google.com";
+    expect(resolve(base({ denylist: [], sites: { [g]: { policy: "act", authAuto: true } } }), req({ url: `${g}/signin`, sensitive: "g", accountId: "x" })).decision).toBe("ask");
+    expect(resolve(base({ yolo: true, sites: { [A]: { authAuto: true } } }), req({ sensitive: "g", accountId: "x" })).decision).toBe("ask");
+    expect(resolve(auto({ auth: false }), req({ sensitive: "g", accountId: "x" })).decision).toBe("deny");
+  });
+  it("YOLO alone never implies it (#116): sign-in still asks per account", () => {
+    expect(resolve(base({ yolo: true }), req({ sensitive: "g", accountId: "code-source:sms" })).decision).toBe("ask");
+    expect(resolve(base({ yolo: true, sites: { [A]: { auth: true } } }), req({ sensitive: "g", accountId: "code-source:sms" })).decision).toBe("ask");
+    expect(resolve(auto({}, { yolo: true }), req({ sensitive: "g", accountId: "code-source:sms" }))).toMatchObject({ decision: "allow", via: "authAuto" });
+  });
+  it("never applies to a sign-up (#112), which asks every time", () => {
+    expect(resolve(auto(), req({ sensitive: "g", signup: true }))).toMatchObject({ decision: "ask", category: "g" });
+  });
+  it("an Always grant for that account still allows, without claiming authAuto", () => {
+    expect(resolve(auto({ authAlways: ["code-source:sms"] }), req({ sensitive: "g", accountId: "code-source:sms" }))).toEqual({ decision: "allow", origin: A });
+  });
+  it.each([
+    ["https://www.chase.com", ["*.chase.com"], "denylist"],
+    ["https://app.mercury.com", ["*.mercury.com"], "denylist"],
+    ["https://my.1password.com", [], "never lets agents open"],
+    ["https://mail.google.com", [], "never lets agents open"],
+    ["https://shop.example.com", ["*.example.com"], "denylist"],
+  ])("a stored flag on blocked host %s never auto-allows", (o, denylist, why) => {
+    const st = base({ denylist, sites: { [o]: { policy: "full", auth: true, authAuto: true } } });
+    expect(resolve(st, req({ url: `${o}/login`, sensitive: "g", accountId: "code-source:sms" }))).toMatchObject({ decision: "deny", message: expect.stringContaining(why) });
+  });
+  it("password-manager hosts stay refused even when off the denylist (AUTH_DENY_HOSTS)", () => {
+    const o = "https://start.1password.com";
+    expect(resolve(base({ denylist: [], sites: { [o]: { policy: "full", auth: true, authAuto: true } } }), req({ url: `${o}/`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
+  });
+  it("a bank the user took off the denylist follows the same opt-in (#101)", () => {
+    const o = "https://app.mercury.com";
+    expect(resolve(base({ denylist: [], sites: { [o]: { policy: "full", auth: true } } }), req({ url: `${o}/`, sensitive: "g", accountId: "code-source:sms" })).decision).toBe("ask");
+    expect(resolve(base({ denylist: [], sites: { [o]: { policy: "full", auth: true, authAuto: true } } }), req({ url: `${o}/`, sensitive: "g", accountId: "code-source:sms" }))).toMatchObject({ decision: "allow", via: "authAuto" });
+  });
+  it("re-checks at use time: a later denylist entry wins over the stored flag", () => {
+    const st = auto();
+    expect(resolve(st, req({ sensitive: "g", accountId: "x" })).decision).toBe("allow");
+    expect(resolve({ ...st, denylist: ["a.example"] }, req({ sensitive: "g", accountId: "x" })).decision).toBe("deny");
+    expect(resolve({ ...st, paused: true }, req({ sensitive: "g", accountId: "x" })).decision).toBe("deny");
+  });
+  it("does not skip any other category's prompt", () => {
+    for (const c of ["a", "c", "f", "p"] as const) expect(resolve(auto(), req({ sensitive: c })).decision).toBe("ask");
+  });
+});
+
 describe("effectiveLevel (session.permissions)", () => {
   it("reports stored, once, denylist, token cap", () => {
     expect(effectiveLevel(base(), { sessionId: "s1", cap: "full", sites: [], url: `${A}/` })).toMatchObject({ level: "ask" });

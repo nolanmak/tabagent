@@ -231,6 +231,32 @@ test("auth.code totp from the fake op item", async ({ w }) => {
   }
 });
 
+test("#131 sign in without asking: auth.login runs with no prompt and the audit says authAuto; off, it asks again", async ({ w }) => {
+  await w.h.setPolicies({ [w.site]: "full", [w.evil]: "full" }, { paused: false, devAllowSensitive: false, sites: { [w.site]: { auth: true, authAuto: true }, [w.evil]: { auth: true } } });
+  w.srv.received.length = 0;
+  const c = await w.h.mcp({ profile: "core,auth" });
+  await w.h.ok(c, "nav.goto", { url: `${w.site}/login.html` });
+  const r = await call(w, c, "auth.login");
+  expect(r.isError, r.text).toBe(false);
+  expect(r.json).toMatchObject({ filled: true, source: "1password" });
+  expect(await w.h.pendingPrompts()).toHaveLength(0);
+  await expect
+    .poll(() => {
+      const p = join(w.h.home, "audit.jsonl");
+      return existsSync(p) ? readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).some((x) => x.tool === "auth.login" && x.outcome === "ok" && x.authAuto === true) : false;
+    })
+    .toBe(true);
+  noLeak(w, PASSWORD);
+
+  // Turned off: the same sign-in asks again.
+  await w.h.setPolicies({ [w.site]: "full", [w.evil]: "full" }, { paused: false, devAllowSensitive: false, sites: { [w.site]: { auth: true }, [w.evil]: { auth: true } } });
+  const c2 = await w.h.mcp({ profile: "core,auth" });
+  await w.h.ok(c2, "nav.goto", { url: `${w.site}/login.html` });
+  const { prompt, result } = await w.h.answerPrompt("deny", () => call(w, c2, "auth.login"));
+  expect(prompt.sensitive.category).toBe("g");
+  expect((result as any).isError).toBe(true);
+});
+
 test("auth.handoff: debugger detached and tab busy while waiting; user clicks the human check and Done; agent sees signed-in state", async ({ w }) => {
   await enable(w);
   const c = await w.h.mcp({ profile: "core,auth" });

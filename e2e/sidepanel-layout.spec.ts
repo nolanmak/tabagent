@@ -7,7 +7,9 @@ import { test, expect } from "./fixture";
 const LONG = "https://www.example-really-long-subdomain-name.co.uk/path/to/a/very/long/resource/with/no/breaks?query=abcdefghijklmnopqrstuvwxyz0123456789";
 
 test("side panel never scrolls horizontally with long content", async ({ h }) => {
-  await h.setPolicies({ "https://accounts.supercalifragilisticexpialidocious-example.com": "act" });
+  // #131: the Sign-in column with every control, Always grants and the payment warning showing.
+  const longSite = "https://accounts.supercalifragilisticexpialidocious-example.com";
+  await h.setPolicies({ [longSite]: "act" }, { sites: { [longSite]: { auth: true, authAuto: true, authAlways: ["1password:abcdefghijklmnopqrstuvwxyz0123456789", "code-source:sms", "code-source:email", "confirm-link:email"] } } });
   const panel = await h.openPanel();
   await panel.setViewportSize({ width: 320, height: 900 });
   await panel.waitForSelector("#sites tr", { state: "attached" });
@@ -59,6 +61,9 @@ test("side panel never scrolls horizontally with long content", async ({ h }) =>
     },
     { long: LONG, rows, feed, spawnLabel },
   );
+  await expect(panel.locator(`#sites tr[data-site="${longSite}"] .signin-warn`)).toBeVisible();
+  const withRows = await panel.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+  expect(withRows.scrollWidth).toBeLessThanOrEqual(withRows.clientWidth);
   // The Sites search toolbar (#117), with a long query, a count and the clear button showing.
   await panel.getByLabel("Search sites").fill(LONG);
   await expect(panel.locator("#siteCount")).toHaveText("0 of 1 site");

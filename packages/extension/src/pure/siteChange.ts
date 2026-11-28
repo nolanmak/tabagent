@@ -1,13 +1,15 @@
 /** Pure validation and application for user-approved per-site settings changes (#104). */
 import { TabAgentError } from "@tabagent/protocol";
 import { AUTH_DENY_HOSTS, authEnabled, hostMatches, isDenylisted, isHardDenied, isVaultDenied, type SiteEntry, type StoredPolicy } from "../background/policy";
+import { AUTH_AUTO_WARNING } from "./siteLevel";
 
 /** `policy: "ask"` means "no stored policy", which is how the side panel represents ask. */
 export type SitePolicyChoice = StoredPolicy | "ask";
-export type SiteChanges = { auth?: boolean; policy?: SitePolicyChoice; lite?: boolean };
-export type SiteField = "auth" | "policy" | "lite";
+/** `authAuto` (#131): sign in without asking. On also turns sign-in on; sign-in off clears it. */
+export type SiteChanges = { auth?: boolean; policy?: SitePolicyChoice; lite?: boolean; authAuto?: boolean };
+export type SiteField = "auth" | "policy" | "lite" | "authAuto";
 export type SiteChangeApplied = { field: SiteField; from: boolean | SitePolicyChoice; to: boolean | SitePolicyChoice };
-export type EffectiveSite = { policy: SitePolicyChoice; lite: boolean; auth: boolean };
+export type EffectiveSite = { policy: SitePolicyChoice; lite: boolean; auth: boolean; authAuto: boolean };
 export interface SiteChangeState {
   sites: Record<string, SiteEntry>;
   denylist: readonly string[];
@@ -15,7 +17,7 @@ export interface SiteChangeState {
   yolo?: boolean;
 }
 
-const FIELDS: SiteField[] = ["auth", "policy", "lite"];
+const FIELDS: SiteField[] = ["auth", "policy", "lite", "authAuto"];
 const ORIGIN_EXAMPLE = "Pass the exact origin, like https://app.example.com";
 
 /** Exact http(s) origin only: no wildcards, paths, queries, fragments or credentials. */
@@ -34,11 +36,12 @@ export function normalizeSiteOrigin(input: string): string {
 }
 
 export function effectiveSite(entry: SiteEntry | undefined, origin: string, yolo = false): EffectiveSite {
-  return { policy: entry?.policy ?? "ask", lite: !!entry?.lite, auth: authEnabled(entry, origin, yolo) };
+  return { policy: entry?.policy ?? "ask", lite: !!entry?.lite, auth: authEnabled(entry, origin, yolo), authAuto: entry?.auth === true && entry.authAuto === true };
 }
 
-function diff(before: EffectiveSite, changes: SiteChanges): SiteChangeApplied[] {
-  return FIELDS.filter((f) => changes[f] !== undefined && changes[f] !== before[f]).map((f) => ({ field: f, from: before[f], to: changes[f]! }));
+/** Every effective field that moved, including the implied ones (authAuto on turns sign-in on; sign-in off clears authAuto). */
+function diff(before: EffectiveSite, after: EffectiveSite): SiteChangeApplied[] {
+  return FIELDS.filter((f) => before[f] !== after[f]).map((f) => ({ field: f, from: before[f], to: after[f] }));
 }
 
 /**
@@ -47,7 +50,8 @@ function diff(before: EffectiveSite, changes: SiteChanges): SiteChangeApplied[] 
  */
 export function checkSiteChange(state: SiteChangeState, rawOrigin: string, changes: SiteChanges): { origin: string; applied: SiteChangeApplied[] } {
   const origin = normalizeSiteOrigin(rawOrigin);
-  if (!changes || !FIELDS.some((f) => changes[f] !== undefined)) throw new TabAgentError("BAD_REQUEST", "policy.site_change needs at least one of changes.auth, changes.policy or changes.lite");
+  if (!changes || !FIELDS.some((f) => changes[f] !== undefined)) throw new TabAgentError("BAD_REQUEST", "policy.site_change needs at least one of changes.auth, changes.policy, changes.lite or changes.authAuto");
+  if (changes.auth === false && changes.authAuto === true) throw new TabAgentError("BAD_REQUEST", "changes.authAuto needs sign-in on; it cannot be turned on together with changes.auth: false");
   const host = new URL(origin).hostname;
   if (isHardDenied(origin)) throw new TabAgentError("PERMISSION_DENIED", `TabAgent cannot act on ${host}, so its site settings cannot be changed`);
   if (isVaultDenied(origin)) throw new TabAgentError("PERMISSION_DENIED", `TabAgent never lets agents open ${host} (saved passwords, account or mail); its site settings cannot be changed`);
@@ -55,7 +59,7 @@ export function checkSiteChange(state: SiteChangeState, rawOrigin: string, chang
   if (isDenylisted(origin, [...state.denylist])) {
     throw new TabAgentError("PERMISSION_DENIED", `${host} is on the TabAgent denylist; its site settings cannot be changed while it is blocked`, "Request a policy.denylist_change that removes it first, then request this site change again.");
   }
-  const applied = diff(effectiveSite(state.sites[origin], origin, !!state.yolo), changes);
+  const { applied } = applySiteChange(state.sites, origin, changes, !!state.yolo);
   if (!applied.length) throw new TabAgentError("BAD_REQUEST", `Nothing to change: ${origin} already has these settings`, "Check session.permissions for the current site settings.");
   return { origin, applied };
 }
@@ -76,23 +80,32 @@ export function applySiteChange(sites: Record<string, SiteEntry>, origin: string
     if (changes.auth) entry.auth = true;
     else {
       // A default-on origin (or any origin under YOLO) needs an explicit false to stay off (#79, #110);
-      // "Always" accounts go with it.
+      // "Always" accounts and sign-in without asking go with it.
       if (authEnabled({}, origin, yolo)) entry.auth = false;
       else delete entry.auth;
       delete entry.authAlways;
+      delete entry.authAuto;
     }
+  }
+  if (changes.authAuto !== undefined) {
+    // #131: authAuto is only honoured with an explicit auth: true, so turning it on stores one.
+    if (changes.authAuto && changes.auth !== false) {
+      entry.auth = true;
+      entry.authAuto = true;
+    } else delete entry.authAuto;
   }
   const next = { ...sites };
   if (Object.keys(entry).length) next[origin] = entry;
   else delete next[origin];
-  return { sites: next, site: effectiveSite(entry, origin, yolo), applied: diff(before, changes) };
+  const site = effectiveSite(entry, origin, yolo);
+  return { sites: next, site, applied: diff(before, site) };
 }
 
 /** What the approval was shown against: this origin's entry, the denylist (which gates it) and YOLO (which changes effective sign-in). */
 export function siteChangeSnapshot(state: SiteChangeState, origin: string): string {
   const e = state.sites[origin] ?? {};
   const pre = e.preapproved ? Object.keys(e.preapproved).sort() : [];
-  const entry = { policy: e.policy ?? null, lite: !!e.lite, auth: e.auth ?? null, authAlways: [...(e.authAlways ?? [])].sort(), preapproved: pre };
+  const entry = { policy: e.policy ?? null, lite: !!e.lite, auth: e.auth ?? null, authAuto: !!e.authAuto, authAlways: [...(e.authAlways ?? [])].sort(), preapproved: pre };
   const denylist = state.denylist.map((g) => g.trim().toLowerCase()).filter(Boolean).sort();
   return JSON.stringify([origin, entry, denylist, !!state.yolo]);
 }
@@ -110,5 +123,6 @@ export function describeSiteChange(p: { origin?: unknown; changes?: SiteChanges;
   if (c.auth !== undefined) parts.push(`turn sign-in ${c.auth ? "on" : "off"}`);
   if (c.policy !== undefined) parts.push(c.policy === "ask" ? "set policy to ask (remove the saved policy)" : `set policy to ${c.policy}`);
   if (c.lite !== undefined) parts.push(`turn lite mode ${c.lite ? "on" : "off"}`);
+  if (c.authAuto !== undefined) parts.push(c.authAuto ? `turn sign-in without asking on (${AUTH_AUTO_WARNING})` : "turn sign-in without asking off");
   return `change site settings for ${origin}: ${parts.join(", ")}; reason: ${String(p.reason ?? "").slice(0, 160)}`;
 }

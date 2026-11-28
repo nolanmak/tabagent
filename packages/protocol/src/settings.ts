@@ -79,6 +79,8 @@ export const SETTINGS_SNAPSHOT = z.object({
       preapproved: z.array(z.string()).optional(),
       /** How many saved accounts the user said "Always" to; the ids are never returned. */
       alwaysAccounts: z.number().optional(),
+      /** #131: sign-in on this origin runs without asking (only when the gate would honour it). */
+      authAuto: z.literal(true).optional(),
     }),
   ),
   yolo: z.boolean(),

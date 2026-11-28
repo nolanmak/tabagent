@@ -88,10 +88,10 @@ export interface RouterDeps<S = unknown> {
   /** tabs attach target (no tabId = active tab of last-focused window). Throws TAB_BUSY if owned by someone else. */
   attachTarget(meta: SessionMetaLike, tabId: number | undefined): Promise<{ tabId: number; url: string; title: string }>;
   downloadUrl(id: number, sessionId: string): string | undefined;
-  authorize(req: AuthorizeRequest): Promise<void>;
+  authorize(req: AuthorizeRequest): Promise<unknown>;
   /** Mark a static sensitive approval as valid for the duration of this command. */
   holdApproval?(sessionId: string, origin: string, category: SensitiveCategory): () => void;
-  handler(name: string): ((ctx: { s: S; meta: SessionMetaLike; p: any; tool: any; tabId?: number; url?: string; cmdId: string; policySnapshot?: string }) => Promise<unknown>) | undefined;
+  handler(name: string): ((ctx: { s: S; meta: SessionMetaLike; p: any; tool: any; tabId?: number; url?: string; cmdId: string; policySnapshot?: string; auditNote: (n: AuditNote) => void }) => Promise<unknown>) | undefined;
   /**
    * DA1 (review H1): runs before authorize; throws to refuse a credential read on a tab
    * TabAgent typed a secret into. Nothing (YOLO, pre-approval) overrides it.
@@ -118,6 +118,11 @@ export interface RouterDeps<S = unknown> {
    */
   killAll?(meta: SessionMetaLike): Promise<{ status: "killed"; alreadyPaused: boolean }>;
   now?(): number;
+}
+
+/** Facts a handler adds to its command's audit record: a sign-in allowed by authAuto (#131). */
+export interface AuditNote {
+  authAuto?: true;
 }
 
 /** Error helper that works with any TabAgentError shape. */
@@ -216,6 +221,10 @@ export function createRouter<S>(deps: RouterDeps<S>) {
     let origin: string | null = null;
     let params: Record<string, unknown> = (cmd.params ?? {}) as Record<string, unknown>;
     let redact: RedactOpts = {};
+    const note: AuditNote = {};
+    const auditNote = (n: AuditNote) => {
+      if (n.authAuto) note.authAuto = true;
+    };
     const feedBase = () => ({ id: feedId, ts: started, sessionId: cmd.session.id, label: cmd.session.label, tool: toolName, action, origin });
     let release: (() => void) | undefined;
     let abortReject: ((e: RouterError) => void) | undefined;
@@ -233,7 +242,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         side = {};
         err = { ...WITHHELD };
       }
-      const audit = await buildAudit({ tool: toolName, action, origin, params, outcome: ok ? "ok" : outcomeFor(err?.code), errorCode: err?.code, result: clean, redact });
+      const audit = await buildAudit({ tool: toolName, action, origin, params, outcome: ok ? "ok" : outcomeFor(err?.code), errorCode: err?.code, result: clean, redact, ...note });
       deps.feed?.({ ...feedBase(), params: audit.params, status: ok ? "ok" : audit.outcome === "denied" ? "denied" : "error", errorCode: err?.code, ms: now() - started, resultSummary: audit.resultSummary });
       const env: Envelope = { type: "result", id: cmd.id, ok, ...(ok ? { result: clean } : { error: err }), ...side, audit };
       return env;
@@ -304,7 +313,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         deps.feed?.({ ...feedBase(), params: (await buildAudit({ tool: tool.name, action, origin, params, outcome: "ok", redact })).params, status: "running" });
         const h = deps.handler(tool.name);
         if (!h) throw new RouterError("UNSUPPORTED", `No handler for ${tool.name} in this extension version`);
-        const result = await h({ s: session, meta: cmd.session, p: params, tool, tabId, url, cmdId: cmd.id, policySnapshot });
+        const result = await h({ s: session, meta: cmd.session, p: params, tool, tabId, url, cmdId: cmd.id, policySnapshot, auditNote });
         await deps.recordWorkflowStep?.(captured, result);
         return result;
       };

@@ -3,6 +3,17 @@
 All notable changes to the `@nolmak/tabagent` npm package and the TabAgent extension. Both ship with
 the same version (see [docs/release.md](docs/release.md)).
 
+## Unreleased
+
+### Sign-in
+
+- A site can sign in without asking (`authAuto`): sign-ins and codes on that exact origin skip the
+  prompt, and the audit log marks each one. Choosing `full` in the side panel turns it on. It is
+  never available on password-manager, vault or denylisted hosts, and `policy.site_change` can
+  request it with a visible approval. The side panel's new Sign-in column shows and revokes Always
+  grants and has an "always allow texted/emailed codes" toggle
+  ([#131](https://github.com/nolanmak/tabagent/issues/131)).
+
 ## 0.2.0 (2026-11-27)
 
 `PROTOCOL_VERSION` is unchanged (1): every wire change since 0.1.0 is additive, so a 0.1.0 extension

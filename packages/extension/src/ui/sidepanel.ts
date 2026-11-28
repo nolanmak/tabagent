@@ -1,7 +1,7 @@
 // Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions, agents (#90),
 // activity feed (audit records only) and settings. A view over worker state.
 import { answerLabel, type Agent, type AgentSources, type PromptAnswer } from "@tabagent/protocol";
-import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
+import { authEnabled, type StoredPolicy } from "../background/policy";
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, shareTabLabel, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
 import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
@@ -9,7 +9,8 @@ import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sani
 import { formatRemaining } from "../pure/modeChange";
 import { filterSites } from "../pure/siteFilter";
 import { workflowStepDetail } from "../pure/workflow";
-import { applyLevel } from "../pure/siteLevel";
+import { alwaysLabel, authAutoActive, hasCodesAlways, revokeAlways, setAuthAuto, setCodesAlways, setSignIn } from "../pure/siteAuth";
+import { AUTH_AUTO_WARNING, applyLevel, authBlockedReason } from "../pure/siteLevel";
 import { promptView } from "../pure/promptView";
 import { feedReducer, promptReducer, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
@@ -449,6 +450,23 @@ function renderSettings() {
   $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
 }
 
+/** #131: the Sign-in column. Allowed, without asking, codes-always, then each Always grant with a ✕. */
+function signInCell(o: string, e: any): string {
+  const s = state.settings;
+  const blocked = authBlockedReason(o, s);
+  const off = blocked ? ` disabled title="${esc(blocked.replace(/^Sign-in was not turned on: /, ""))}"` : "";
+  const auto = authAutoActive(e, o, s);
+  const grants = (e.authAlways ?? []) as string[];
+  const list = grants.length
+    ? `<ul class="always">${grants.map((id) => `<li class="chip">${esc(alwaysLabel(id))}<button type="button" data-revoke-always="${esc(id)}" data-origin="${esc(o)}" aria-label="Remove Always for ${esc(alwaysLabel(id))}" title="Remove this Always grant">✕</button></li>`).join("")}</ul>`
+    : "";
+  return `<td class="signin">
+    <label class="chip" title="Let agents sign in here with your saved accounts (each sign-in asks unless allowed below)"><input type="checkbox" data-auth data-origin="${esc(o)}" ${authEnabled(e, o, !!s.yolo) ? "checked" : ""}/>allowed</label>
+    <label class="chip" title="Sign in and enter codes here without asking"><input type="checkbox" data-auth-auto data-origin="${esc(o)}" ${auto ? "checked" : ""}${off}/>without asking</label>
+    <label class="chip" title="Always allow texted and emailed codes here"><input type="checkbox" data-codes-always data-origin="${esc(o)}" ${hasCodesAlways(e) ? "checked" : ""}${off}/>codes always</label>
+    ${list}${auto ? `<div class="signin-warn small">${esc(AUTH_AUTO_WARNING)}</div>` : ""}</td>`;
+}
+
 function renderSites() {
   const { rows, total } = filterSites((state.settings.sites ?? {}) as Record<string, any>, siteQuery);
   const filtering = siteQuery.trim() !== "";
@@ -459,9 +477,9 @@ function renderSites() {
       .map(([o, e]) => {
         const pol = e.policy ?? "ask";
         const pre = CATS.map((c) => `<label class="chip"><input type="checkbox" data-pre="${c}" data-origin="${esc(o)}" ${e.preapproved?.[c] ? "checked" : ""}/>${CAT_LABEL[c]}</label>`).join("");
-        return `<tr data-site="${esc(o)}"><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}<label class="chip" title="Let agents sign in here with your saved accounts"><input type="checkbox" data-auth data-origin="${esc(o)}" ${authEnabled(e, o, !!state.settings?.yolo) ? "checked" : ""}/>sign-in</label>${(e.authAlways ?? []).length ? `<span class="muted small"> (${(e.authAlways ?? []).length} account${(e.authAlways ?? []).length === 1 ? "" : "s"} always)</span>` : ""}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
+        return `<tr data-site="${esc(o)}"><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}</td>${signInCell(o, e)}<td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
       })
-      .join("") || `<tr><td colspan="5" class="muted">${filtering && total ? "No sites match." : "No site settings yet."}</td></tr>`;
+      .join("") || `<tr><td colspan="6" class="muted">${filtering && total ? "No sites match." : "No site settings yet."}</td></tr>`;
 }
 
 function render() {
@@ -636,7 +654,7 @@ $("phoneLinkBtn").addEventListener("click", async () => {
   out.textContent = r?.ok && r.url ? `${r.url}\nOne-time link, valid until ${new Date(r.expiresAt).toLocaleTimeString()}. Open it on your phone; it works for one device only.` : `No phone link: ${r?.error?.message ?? "the bridge did not answer"}${r?.error?.hint ? ` (${r.error.hint})` : ""}`;
 });
 
-/** Why choosing full did not turn on sign-in (#118); cleared on the next level change. */
+/** Why choosing full did not turn on sign-in (#118), or the sign-in-without-asking warning (#131). */
 function showLevelNote(note: string | undefined) {
   const el = $("siteLevelNote");
   el.textContent = note ?? "";
@@ -648,21 +666,24 @@ $("sites").addEventListener("change", (e) => {
   if (!o) return;
   const all = sites();
   const entry = (all[o] ??= {});
+  const on = (el as HTMLInputElement).checked;
   if ("policy" in el.dataset) {
     const r = applyLevel(entry, el.value as StoredPolicy | "ask", o, state.settings);
     all[o] = r.entry;
-    showLevelNote(r.note);
+    showLevelNote(r.note ?? r.warning);
   } else if ("lite" in el.dataset) {
-    if ((el as HTMLInputElement).checked) entry.lite = true;
+    if (on) entry.lite = true;
     else delete entry.lite;
   } else if ("auth" in el.dataset) {
-    if ((el as HTMLInputElement).checked) entry.auth = true;
-    else {
-      // A default-on origin (Google) needs an explicit false to stay off.
-      if (state.settings?.yolo || AUTH_DEFAULT_ON_ORIGINS.includes(el.dataset.origin ?? "")) entry.auth = false;
-      else delete entry.auth;
-      delete entry.authAlways;
-    }
+    all[o] = setSignIn(entry, on, o, state.settings);
+  } else if ("authAuto" in el.dataset) {
+    const r = setAuthAuto(entry, on, o, state.settings);
+    all[o] = r.entry;
+    showLevelNote(r.note ?? r.warning);
+  } else if ("codesAlways" in el.dataset) {
+    const r = setCodesAlways(entry, on, o, state.settings);
+    all[o] = r.entry;
+    showLevelNote(r.note);
   } else if (el.dataset.pre) {
     entry.preapproved = { ...(entry.preapproved ?? {}) };
     if ((el as HTMLInputElement).checked) entry.preapproved[el.dataset.pre] = true;
@@ -672,6 +693,12 @@ $("sites").addEventListener("change", (e) => {
 });
 $("sites").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
+  if (b?.dataset.revokeAlways && b.dataset.origin) {
+    const all = sites();
+    all[b.dataset.origin] = revokeAlways(all[b.dataset.origin], b.dataset.revokeAlways);
+    patch({ sites: all });
+    return;
+  }
   if (!b?.dataset.del) return;
   const all = sites();
   delete all[b.dataset.del];
@@ -705,7 +732,7 @@ $("addSite").addEventListener("submit", (e) => {
   const all = sites();
   const r = applyLevel(all[origin], ($("newLevel") as HTMLSelectElement).value as StoredPolicy, origin, state.settings);
   all[origin] = r.entry;
-  showLevelNote(r.note);
+  showLevelNote(r.note ?? r.warning);
   patch({ sites: all });
   ($("newOrigin") as HTMLInputElement).value = "";
 });

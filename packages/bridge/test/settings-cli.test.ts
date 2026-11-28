@@ -7,6 +7,7 @@ const SNAP = {
   sites: {
     "https://app.example.com": { policy: "full", auth: true, lite: true, preapproved: ["a", "c"], alwaysAccounts: 2 },
     "https://read.example.com": { policy: "read", auth: false, lite: false },
+    "https://shop.example.com": { policy: "full", auth: true, lite: false, authAuto: true },
   },
   yolo: false,
   devAllowSensitive: true,
@@ -31,6 +32,7 @@ describe("tabagent settings show (#105)", () => {
     expect(text).toContain("Denylist (2): *.1password.com, accounts.google.com");
     expect(text).toMatch(/https:\/\/app\.example\.com\s+full\s+sign-in on\s+lite on\s+pre-approved a,c\s+2 accounts always/);
     expect(text).toMatch(/https:\/\/read\.example\.com\s+read\s+sign-in off/);
+    expect(text).toMatch(/https:\/\/shop\.example\.com\s+full\s+sign-in on\s+lite off\s+signs in without asking/);
     expect(text).toContain("YOLO: off");
     expect(text).toContain("Developer mode (devAllowSensitive): on");
     expect(text).toContain("On session end: collapse");

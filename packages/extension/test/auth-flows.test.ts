@@ -74,6 +74,8 @@ interface EnvOpts {
   enabled?: string[];
   deny?: boolean;
   onConsent?: () => void;
+  /** What the gate reports back: "authAuto" when the site signs in without asking (#131). */
+  consentVia?: "authAuto";
   email?: (o: any) => Promise<string>;
   sms?: () => Promise<string>;
   create?: (origin: string, username?: string) => Promise<any>;
@@ -97,6 +99,7 @@ function fakeEnv(o: EnvOpts = {}) {
       o.onConsent?.();
       if (o.deny) throw Object.assign(new Error("The user declined"), { code: "PERMISSION_DENIED" });
       storage.set(`authAlways:${new URL(url).origin}`, [who.accountId]);
+      return o.consentVia;
     },
     channel: {
       async accounts(_c, origin) {
@@ -435,6 +438,15 @@ describe("auth.code", () => {
     await authCode(e.env, codePage().page, { source: "email", submit: false }, mem);
     expect(e.calls.consent).toHaveLength(1);
     expect(e.calls.consent[0].who.accountId).toBe("code-source:email");
+  });
+
+  it("a code allowed by sign-in without asking is not remembered, so the gate re-checks every time (#131)", async () => {
+    const e = fakeEnv({ email: async () => "123456", consentVia: "authAuto" });
+    const mem = newMemory();
+    await authCode(e.env, codePage().page, { source: "email", submit: false }, mem);
+    await authCode(e.env, codePage().page, { source: "email", submit: false }, mem);
+    expect(e.calls.consent).toHaveLength(2);
+    expect(mem.approvedSources.size).toBe(0);
   });
 
   it("no-leak property: a marker code is absent from Result, audit, events, storage, snapshot and diff", async () => {
