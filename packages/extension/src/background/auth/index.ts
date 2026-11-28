@@ -283,6 +283,7 @@ function envFor(c: Ctx, tabId: number): AuthEnv {
     // DA1 (review H1): taint the tab before the first keystroke; refuse documents agent JS touched.
     filled: (kind, secret) => authTaint.filled(tabId, kind, secret),
     scriptDirty: () => authTaint.scriptDirty(tabId),
+    restartLockedUntil: () => authTaint.restartLockedUntil(),
     event,
     now: () => Date.now(),
   };
