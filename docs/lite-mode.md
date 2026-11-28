@@ -9,7 +9,7 @@ per origin in the extension settings and never switches on its own; `session.inf
 - **degraded**: works, with a documented difference (for example synthetic events with `isTrusted=false`).
 - **unsupported**: returns `UNSUPPORTED` without touching the page.
 
-Totals: 46 supported, 4 degraded, 14 unsupported.
+Totals: 47 supported, 4 degraded, 14 unsupported.
 
 | Tool | Lite mode | Notes |
 |---|---|---|
@@ -63,6 +63,7 @@ Totals: 46 supported, 4 degraded, 14 unsupported.
 | `workflow.schedule` | supported |  |
 | `workflow.unschedule` | supported |  |
 | `workflow.runs` | supported |  |
+| `workflow.edit_draft` | supported |  |
 | `workflow.review_repair` | supported |  |
 | `session.info` | supported |  |
 | `session.permissions` | supported |  |

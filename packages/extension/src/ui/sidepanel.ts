@@ -7,6 +7,7 @@ import { esc } from "../pure/html";
 import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
 import { filterSites } from "../pure/siteFilter";
+import { workflowStepDetail } from "../pure/workflow";
 import { applyLevel } from "../pure/siteLevel";
 import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
@@ -365,8 +366,7 @@ function renderWorkflows() {
   $("workflows").innerHTML = list
     .map((w) => {
       const steps = (w.steps ?? []).map((step: any, index: number) => {
-        const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
-        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? (step.locator ? `${step.key} in ${target}` : step.key) : step.kind === "check" ? `${target} → ${step.checked === false ? "off" : "on"}` : step.kind === "wait" ? `${step.waitFor ?? "?"}${step.waitValue ? ` ${step.waitValue}` : ""}` : step.kind === "scroll" ? `${step.locator ? `${target} ` : ""}by ${step.dx ?? 0},${step.dy ?? 0}` : step.kind === "download" ? (step.download?.mime ?? step.download?.extension ?? "artifact") : target;
+        const detail = workflowStepDetail(step);
         const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
         const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
         return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
