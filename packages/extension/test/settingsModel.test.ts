@@ -80,9 +80,11 @@ describe("sign in without asking is stored only where it can apply (#131)", () =
     expect(migrateSettings({ sites: { "https://shop.example": { auth: true, authAuto: "yes" } } } as any).sites["https://shop.example"]).toEqual({ auth: true });
   });
   it("drops authAuto on hosts where sign-in is never automated", () => {
-    for (const o of ["https://www.chase.com", "https://app.mercury.com", "https://vault.bitwarden.com", "https://mail.google.com"]) {
+    for (const o of ["https://my.1password.com", "https://vault.bitwarden.com", "https://mail.google.com"]) {
       expect(migrateSettings({ sites: { [o]: { policy: "full", auth: true, authAuto: true } } } as any).sites[o].authAuto).toBeUndefined();
     }
+    // Banks are only blocked by the editable denylist (#101), which the gate re-checks at use time.
+    expect(migrateSettings({ sites: { "https://app.mercury.com": { auth: true, authAuto: true } } } as any).sites["https://app.mercury.com"].authAuto).toBe(true);
   });
   it("audits turning it on or off per origin", () => {
     const d = migrateSettings(undefined);

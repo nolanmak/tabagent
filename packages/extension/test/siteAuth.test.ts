@@ -3,7 +3,8 @@ import { alwaysLabel, authAutoActive, CODE_SOURCE_IDS, hasCodesAlways, revokeAlw
 import { AUTH_AUTO_WARNING } from "../src/pure/siteLevel";
 
 const O = "https://shop.example";
-const ctx = { denylist: ["*.blocked.example"] };
+// Banks are on the seeded denylist; since #101 that is what blocks their sign-in, not AUTH_DENY_HOSTS.
+const ctx = { denylist: ["*.blocked.example", "*.chase.com", "*.mercury.com", "*.paypal.com"] };
 
 describe("Always grant labels (#131)", () => {
   it("names the code pseudo-accounts in words", () => {
@@ -53,8 +54,9 @@ describe("sign in without asking toggle (#131)", () => {
     expect(setAuthAuto({ auth: false }, true, "https://accounts.google.com", { denylist: [] }).entry).toEqual({ auth: true, authAuto: true });
   });
   it.each([
-    ["https://www.chase.com", "never signs in"],
-    ["https://app.mercury.com", "never signs in"],
+    ["https://www.chase.com", "denylist"],
+    ["https://app.mercury.com", "denylist"],
+    ["https://my.1password.com", "never lets agents open"],
     ["https://vault.bitwarden.com", "never lets agents open"],
     ["https://mail.google.com", "never lets agents open"],
     ["https://a.blocked.example", "denylist"],
@@ -63,6 +65,11 @@ describe("sign in without asking toggle (#131)", () => {
     expect(r.entry).toEqual({ policy: "full", auth: true });
     expect(r.note).toContain(why);
     expect(r.warning).toBeUndefined();
+  });
+  it("a bank the user took off the denylist can sign in without asking, with the warning (#101)", () => {
+    const r = setAuthAuto({ policy: "full", auth: true }, true, "https://app.mercury.com", { denylist: [] });
+    expect(r.entry.authAuto).toBe(true);
+    expect(r.warning).toBe(AUTH_AUTO_WARNING);
   });
   it("off removes only authAuto, and is allowed anywhere", () => {
     expect(setAuthAuto({ auth: true, authAuto: true, authAlways: ["a"] }, false, O, ctx)).toEqual({ entry: { auth: true, authAlways: ["a"] } });
@@ -87,7 +94,7 @@ describe("always allow texted/emailed codes toggle (#131)", () => {
   it("is refused on blocked hosts", () => {
     const r = setCodesAlways({ auth: true }, true, "https://www.paypal.com", ctx);
     expect(r.entry).toEqual({ auth: true });
-    expect(r.note).toContain("never signs in");
+    expect(r.note).toContain("denylist");
   });
   it("hasCodesAlways needs both", () => {
     expect(hasCodesAlways({ authAlways: ["code-source:sms"] })).toBe(false);

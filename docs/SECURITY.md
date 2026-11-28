@@ -173,10 +173,12 @@ any texted, emailed or TOTP code that arrives, without the user seeing anything.
 more than sign-ins: a bank, broker or payment site may text the same kind of code to approve a payment
 or a transfer, and an agent entering it without asking approves that. The side panel shows this
 warning when `authAuto` is turned on and next to every site that has it. It is never available on the
-banking and password-manager hosts where TabAgent never signs in, on the never-reachable hosts below,
-or on denylisted hosts: the panel and `policy.site_change` refuse to set it there, settings drop it
-for the built-in lists, and the gate re-checks the host every time, so adding a site to the denylist
-later stops it at once. A code consent that `authAuto` allowed is not cached, so turning it off also
+password-manager hosts where TabAgent never signs in, on the never-reachable hosts below, or on
+denylisted hosts: the panel and `policy.site_change` refuse to set it there, settings drop it for the
+built-in lists, and the gate re-checks the host every time, so adding a site to the denylist later
+stops it at once. Banks are on the seeded denylist, so they cannot have it until the user removes the
+bank from the denylist (#100); after that a bank can have it like any other site, and that is where the
+payment warning matters most. A code consent that `authAuto` allowed is not cached, so turning it off also
 applies at once. Sign-ups (`auth.signup`) still ask every time. YOLO does not turn it on.
 
 ### Google sign-in (#79)

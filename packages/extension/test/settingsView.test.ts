@@ -59,6 +59,22 @@ describe("settingsSnapshot (#105)", () => {
     });
   });
 
+  it("reports sign-in without asking (#131) only where the gate would honour it", () => {
+    const snap = settingsSnapshot({
+      ...DEFAULTS,
+      denylist: ["*.bank.example"],
+      sites: {
+        "https://shop.example": { auth: true, authAuto: true },
+        "https://x.bank.example": { auth: true, authAuto: true },
+        "https://flag-only.example": { authAuto: true },
+      },
+    });
+    expect(SETTINGS_SNAPSHOT.strict().safeParse(snap).success).toBe(true);
+    expect(snap.sites["https://shop.example"]).toEqual({ policy: "ask", auth: true, lite: false, authAuto: true });
+    expect(snap.sites["https://x.bank.example"]).not.toHaveProperty("authAuto");
+    expect(snap.sites["https://flag-only.example"]).not.toHaveProperty("authAuto");
+  });
+
   it("never carries the pairing secret, tokens or account details anywhere in the serialized result", () => {
     const json = JSON.stringify(settingsSnapshot(seeded()));
     for (const leak of [SECRET, TOKEN, ACCOUNT, EMAIL, "SHOULD-NEVER-LEAK", "123456"]) expect(json).not.toContain(leak);

@@ -275,14 +275,23 @@ describe("sign in without asking: authAuto (#131)", () => {
     expect(resolve(auto({ authAlways: ["code-source:sms"] }), req({ sensitive: "g", accountId: "code-source:sms" }))).toEqual({ decision: "allow", origin: A });
   });
   it.each([
-    ["https://www.chase.com", [], "never signs in"],
-    ["https://app.mercury.com", [], "never signs in"],
+    ["https://www.chase.com", ["*.chase.com"], "denylist"],
+    ["https://app.mercury.com", ["*.mercury.com"], "denylist"],
     ["https://my.1password.com", [], "never lets agents open"],
     ["https://mail.google.com", [], "never lets agents open"],
     ["https://shop.example.com", ["*.example.com"], "denylist"],
   ])("a stored flag on blocked host %s never auto-allows", (o, denylist, why) => {
     const st = base({ denylist, sites: { [o]: { policy: "full", auth: true, authAuto: true } } });
     expect(resolve(st, req({ url: `${o}/login`, sensitive: "g", accountId: "code-source:sms" }))).toMatchObject({ decision: "deny", message: expect.stringContaining(why) });
+  });
+  it("password-manager hosts stay refused even when off the denylist (AUTH_DENY_HOSTS)", () => {
+    const o = "https://start.1password.com";
+    expect(resolve(base({ denylist: [], sites: { [o]: { policy: "full", auth: true, authAuto: true } } }), req({ url: `${o}/`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
+  });
+  it("a bank the user took off the denylist follows the same opt-in (#101)", () => {
+    const o = "https://app.mercury.com";
+    expect(resolve(base({ denylist: [], sites: { [o]: { policy: "full", auth: true } } }), req({ url: `${o}/`, sensitive: "g", accountId: "code-source:sms" })).decision).toBe("ask");
+    expect(resolve(base({ denylist: [], sites: { [o]: { policy: "full", auth: true, authAuto: true } } }), req({ url: `${o}/`, sensitive: "g", accountId: "code-source:sms" }))).toMatchObject({ decision: "allow", via: "authAuto" });
   });
   it("re-checks at use time: a later denylist entry wins over the stored flag", () => {
     const st = auto();

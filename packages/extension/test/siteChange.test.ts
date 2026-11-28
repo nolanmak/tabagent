@@ -162,7 +162,7 @@ describe("sign in without asking through policy.site_change (#131)", () => {
     expect(code(() => checkSiteChange(state({ [o]: { auth: true, authAuto: true } }), o, { authAuto: true })).message).toMatch(/already/);
     expect(code(() => checkSiteChange(state({ [o]: { auth: true } }), o, { authAuto: false })).message).toMatch(/already/);
   });
-  it.each(["https://www.chase.com", "https://app.mercury.com", "https://mail.google.com", "https://blocked.example"])("is refused on blocked host %s", (origin) => {
+  it.each(["https://www.chase.com", "https://my.1password.com", "https://mail.google.com", "https://blocked.example"])("is refused on blocked host %s", (origin) => {
     expect(code(() => checkSiteChange(state(), origin, { authAuto: true })).code).toBe("PERMISSION_DENIED");
   });
   it("the snapshot changes when authAuto changes", () => {

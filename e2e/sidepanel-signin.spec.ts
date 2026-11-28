@@ -73,13 +73,13 @@ test("#131 full means full: sign-in without asking is on, with the warning; bloc
   await expect(row.locator(".signin-warn")).toContainText("payments or transfers");
   await expect(panel.locator("#siteLevelNote")).toContainText("payments or transfers");
 
-  await panel.fill("#newOrigin", "https://www.chase.com");
+  await panel.fill("#newOrigin", "https://my.1password.com");
   await panel.selectOption("#newLevel", "full");
   await panel.click("#addSite button[type=submit]");
-  await expect.poll(async () => (await settings(h)).sites["https://www.chase.com"]?.policy).toBe("full");
-  expect((await settings(h)).sites["https://www.chase.com"].authAuto).toBeUndefined();
-  const chase = panel.locator(`#sites tr[data-site="https://www.chase.com"]`);
-  await expect(chase.locator("input[data-auth-auto]")).toBeDisabled();
-  await expect(chase.locator("input[data-codes-always]")).toBeDisabled();
+  await expect.poll(async () => (await settings(h)).sites["https://my.1password.com"]?.policy).toBe("full");
+  expect((await settings(h)).sites["https://my.1password.com"].authAuto).toBeUndefined();
+  const vault = panel.locator(`#sites tr[data-site="https://my.1password.com"]`);
+  await expect(vault.locator("input[data-auth-auto]")).toBeDisabled();
+  await expect(vault.locator("input[data-codes-always]")).toBeDisabled();
   await panel.close();
 });

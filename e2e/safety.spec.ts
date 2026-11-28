@@ -162,7 +162,7 @@ test("#131 policy.site_change can turn on sign-in without asking, with the payme
   expect(on.summary).toContain("payments or transfers");
   expect((on.result as any).json).toMatchObject({ status: "applied", site: { auth: true, authAuto: true }, applied: [{ field: "authAuto", from: false, to: true }] });
   expect((await settings(h)).sites[h.A]).toMatchObject({ auth: true, authAuto: true });
-  const r = await h.call(c, "policy.site_change", { origin: "https://www.chase.com", changes: { authAuto: true }, reason: "x" });
+  const r = await h.call(c, "policy.site_change", { origin: "https://my.1password.com", changes: { authAuto: true }, reason: "x" });
   expect(r.isError).toBe(true);
   expect(r.text).toContain("PERMISSION_DENIED");
   expect(await h.pendingPrompts()).toHaveLength(0);
@@ -239,7 +239,7 @@ test("#105 settings.get and `tabagent settings show` return policy and preferenc
   expect(r.json).toMatchObject({ denylist: before.denylist, yolo: false, devAllowSensitive: false, onSessionEnd: before.onSessionEnd, beforeUnload: before.beforeUnload, showOverlay: before.showOverlay, forceLite: false });
   expect(r.json.sites[h.A]).toEqual({ policy: "full", auth: true, lite: true, alwaysAccounts: 1 });
   expect(r.json.sites[h.B]).toEqual({ policy: "full", auth: false, lite: false });
-  expect(r.json.authDenyHosts).toContain("*.chase.com");
+  expect(r.json.authDenyHosts).toContain("*.1password.com");
   expect(r.json.vaultDenyHosts).toContain("passwords.google.com");
   for (const leak of [bridgeSecret, extSecret, tok, "acct-e2e-NEVER-LEAK-1"]) expect(r.text).not.toContain(leak);
 
