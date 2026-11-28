@@ -27,6 +27,8 @@ describe("classifyNext", () => {
     ["Google interstitial with only non-login fields → handoff_required", { url: "https://accounts.google.com/signin/v2/recoveryoptions", fields: PLAIN(), webauthn: false, captcha: false }, "handoff_required"],
     ["Google code page → code_required", { url: "https://accounts.google.com/v3/signin/challenge/ipp", fields: OTP(), webauthn: false, captcha: false }, "code_required"],
     ["Google password step → unknown (call auth.login again)", { url: "https://accounts.google.com/v3/signin/challenge/pwd", fields: [f({ type: "password", name: "Passwd" })], webauthn: false, captcha: false }, "unknown"],
+    ["Sign up with Google: back on the new site's onboarding page → done (#114)", { url: "https://www.example-shop.com/welcome?new=1", fields: PLAIN(), webauthn: false, captcha: false }, "done"],
+    ["Sign up with Google: still on Google's consent screen (no form) → handoff_required unless the agent clicks Continue itself", { url: "https://accounts.google.com/signin/oauth/v2/consentsummary", fields: [], webauthn: false, captcha: false }, "handoff_required"],
     ["left Google for the third-party site → done", { url: "https://www.example-shop.com/account", fields: PLAIN(), webauthn: false, captcha: false }, "done"],
     ["next step of a two-step login (password page) → unknown", { url: "https://github.com/login/password", fields: [f({ type: "password" })], webauthn: false, captcha: false }, "unknown"],
   ];
