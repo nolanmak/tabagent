@@ -1,13 +1,16 @@
 // The chat page (#151, spec §7a): transcript entries, sends in flight and the agent's state as plain data
 // in, plain data or escaped HTML out. ui/chat.ts wires it to the DOM and the worker.
 import type { Agent, AgentDeliveryState, AgentEntry, AgentHistoryCode, AgentRoute } from "@tabagent/protocol";
-import { agentRowView, connectionState, groupAgents, vendorShown, remoteUrl, type AgentRowView, type ConnectionState } from "./agents";
+import { agentRowView, connectionState, remoteUrl, type AgentRowView, type ConnectionState } from "./agents";
 import { esc } from "./html";
 import { icon, toolIcon } from "./icons";
 import { renderMarkdown } from "./markdown";
+import { sessionItems, sessionLinkHtml } from "./sessionPicker";
 
 /** Entries kept in memory; older ones are dropped (and can be loaded again). */
 export const CHAT_MAX_ENTRIES = 5_000;
+/** Messages this page remembers sending, for ↑ to edit the last one (#159). */
+export const CHAT_SENT_MAX = 20;
 
 /** A message sent from this page, shown at once and removed when the transcript shows it (confirmed). */
 export interface PendingSend {
@@ -32,9 +35,13 @@ export interface ChatState {
   loadingOlder: boolean;
   /** Why history could not be loaded. */
   error?: { code?: AgentHistoryCode | string; detail: string };
+  /** #159: the transcript shows the current turn finished (see turnSettled), so "Working…" can go before the next status poll. */
+  turnDone: boolean;
+  /** #159: what this page sent, oldest first (only these can be recalled with ↑). */
+  sent: string[];
 }
 
-export const initialChat = (): ChatState => ({ entries: [], hasMore: false, pending: [], loading: true, loadingOlder: false });
+export const initialChat = (): ChatState => ({ entries: [], hasMore: false, pending: [], loading: true, loadingOlder: false, turnDone: false, sent: [] });
 
 export type ChatAction =
   | { type: "loading" }
@@ -82,7 +89,8 @@ export function chatReducer(s: ChatState, a: ChatAction): ChatState {
     case "history": {
       if (a.older) return { ...s, loadingOlder: false, entries: merge(s.entries, a.entries, "before"), hasMore: a.hasMore, before: a.before };
       // The newest page replaces what was shown (first load, or a reload after a reset).
-      return { ...s, loading: false, error: undefined, entries: merge([], a.entries, "after"), hasMore: a.hasMore, before: a.before, pending: confirm(s.pending, a.entries) };
+      const entries = merge([], a.entries, "after");
+      return { ...s, loading: false, error: undefined, entries, hasMore: a.hasMore, before: a.before, pending: confirm(s.pending, a.entries), turnDone: turnSettled(entries) };
     }
     case "historyError":
       if (a.older) return { ...s, loadingOlder: false };
@@ -90,11 +98,13 @@ export function chatReducer(s: ChatState, a: ChatAction): ChatState {
     case "entries": {
       const entries = merge(s.entries, a.entries, "after");
       const pending = confirm(s.pending, a.entries);
-      return entries === s.entries && pending === s.pending ? s : { ...s, entries, pending };
+      return entries === s.entries && pending === s.pending ? s : { ...s, entries, pending, turnDone: entries === s.entries ? s.turnDone : turnSettled(entries) };
     }
-    case "sending":
+    case "sending": {
       if (s.pending.some((p) => p.requestId === a.requestId)) return s;
-      return { ...s, pending: [...s.pending, { requestId: a.requestId, text: a.text, ts: a.ts, state: "sending", ...(a.spawn ? { spawn: true } : {}) }] };
+      const sent = [...s.sent, a.text].slice(-CHAT_SENT_MAX);
+      return { ...s, sent, turnDone: false, pending: [...s.pending, { requestId: a.requestId, text: a.text, ts: a.ts, state: "sending", ...(a.spawn ? { spawn: true } : {}) }] };
+    }
     case "sent":
     case "status": {
       const i = s.pending.findIndex((p) => p.requestId === a.msg.requestId);
@@ -114,6 +124,69 @@ export function chatReducer(s: ChatState, a: ChatAction): ChatState {
     case "dismiss":
       return { ...s, pending: s.pending.filter((p) => p.requestId !== a.requestId) };
   }
+}
+
+/**
+ * #159: the current turn is over: the last entry is assistant text and no tool call since the last user message
+ * is still waiting for its result. Then the busy indicator can clear without waiting for the next status poll.
+ */
+export function turnSettled(entries: AgentEntry[]): boolean {
+  const last = entries[entries.length - 1];
+  if (!last || last.role !== "assistant" || !last.text) return false;
+  const done = new Set<string>();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e.role === "user") break;
+    if (e.role !== "tool" || !e.tool?.id) continue;
+    // Walking backwards, a call's result is seen before the call.
+    if (e.tool.result) done.add(e.tool.id);
+    else if (!done.has(e.tool.id)) return false;
+  }
+  return true;
+}
+
+/** What the page shows: the agent's polled status, unless the transcript already shows the turn ended. */
+export function shownBusy(agentBusy: boolean, turnDone: boolean): boolean {
+  return agentBusy && !turnDone;
+}
+
+/** The newest message this page sent, for ↑ (#159). */
+export function lastSent(s: ChatState): string | null {
+  return s.sent[s.sent.length - 1] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// #159: ↑ in an empty composer brings back the last message sent from this page
+// ---------------------------------------------------------------------------
+
+export interface RecallState {
+  /** The composer holds a recalled message; sending it sends a new message. */
+  editing: boolean;
+}
+
+export const initialRecall: RecallState = { editing: false };
+
+export type RecallAction = { type: "key"; key: string; value: string; modified: boolean; composing: boolean; lastSent: string | null } | { type: "sent" } | { type: "input"; value: string };
+
+/** `value`: what the composer should now hold (unset: leave it). `handled`: the page should swallow the key. */
+export interface RecallResult {
+  state: RecallState;
+  value?: string;
+  handled: boolean;
+}
+
+export function recallReducer(s: RecallState, a: RecallAction): RecallResult {
+  if (a.type === "sent") return { state: initialRecall, handled: false };
+  if (a.type === "input") return { state: a.value === "" ? initialRecall : s, handled: false };
+  if (a.composing) return { state: s, handled: false };
+  if (a.key === "ArrowUp" && !a.modified && a.value === "" && a.lastSent) return { state: { editing: true }, value: a.lastSent, handled: true };
+  if (a.key === "Escape" && s.editing) return { state: initialRecall, value: "", handled: true };
+  return { state: s, handled: false };
+}
+
+/** Shown above the composer while a recalled message is being edited. */
+export function editBannerHtml(): string {
+  return `<span class="edit-icon" aria-hidden="true">${icon("pencil")}</span><span>Editing your last message</span><span class="edit-esc"><kbd>Esc</kbd> to cancel</span>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,10 +292,11 @@ export interface ChatHeaderView {
   remoteControlUrl: string | null;
 }
 
-export function chatHeaderView(a: Agent, now: number): ChatHeaderView {
+/** `turnDone` (#159): the transcript shows the turn ended, so a status poll that still says busy is stale. */
+export function chatHeaderView(a: Agent, now: number, o: { turnDone?: boolean } = {}): ChatHeaderView {
   const v = agentRowView(a, now);
-  const busy = a.status === "busy";
-  const statusText = busy ? "Working…" : a.status === "error" ? `Error${a.statusLabel ? `: ${a.statusLabel}` : ""}` : a.statusLabel && a.statusLabel !== "idle" ? a.statusLabel : "Idle";
+  const busy = shownBusy(a.status === "busy", !!o.turnDone);
+  const statusText = busy ? "Working…" : a.status === "error" ? `Error${a.statusLabel ? `: ${a.statusLabel}` : ""}` : a.statusLabel && a.statusLabel !== "idle" && a.status !== "busy" ? a.statusLabel : "Idle";
   return { title: v.title, folder: a.cwd, vendorLabel: v.vendorLabel, busy, statusText, connection: connectionState(a), remoteControlUrl: remoteUrl(a) };
 }
 
@@ -274,11 +348,5 @@ export function recentWebTabs<T extends { id?: number; url?: string; title?: str
  * Each row links to that session's chat page, so switching stays in this tab.
  */
 export function chatRailHtml(views: AgentRowView[], currentId: string): string {
-  const { main, other } = groupAgents(views);
-  const rows = [...main, ...other].map((v) => {
-    const cur = v.id === currentId;
-    const meta = [...(vendorShown(v) ? [v.vendorLabel] : []), v.connection.label, v.age].map(esc).join(" · ");
-    return `<li><a href="chat.html?agent=${encodeURIComponent(v.id)}" data-rail-agent="${esc(v.id)}"${cur ? ' aria-current="page"' : ""} title="${esc(v.cwd)}"><span class="status-dot tone-${v.connection.tone}${v.busy ? " busy-dot" : ""}" aria-hidden="true"></span><span class="rail-text"><span class="rail-title">${esc(v.title)}</span><span class="rail-meta">${meta}</span></span></a></li>`;
-  });
-  return rows.join("") || `<li class="rail-empty">No sessions running.</li>`;
+  return sessionItems(views, currentId).map((i) => `<li>${sessionLinkHtml(i, "data-rail-agent")}</li>`).join("") || `<li class="rail-empty">No sessions running.</li>`;
 }

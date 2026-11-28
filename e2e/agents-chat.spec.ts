@@ -295,6 +295,18 @@ test("#159: narrow chat page: a header picker lists the sessions (rail hidden) a
     await expect(chat.locator("#rail")).toBeVisible();
     await expect(chat.locator("#pickerBtn")).toBeHidden();
     await expect(chat.locator("#title")).toBeVisible();
+
+    // #159: keyboard focus on a rail link survives the 5 s re-render (the status of another session changes).
+    const railLink = chat.locator(`#railList [data-rail-agent="${idOne}"]`);
+    await railLink.focus();
+    const before = await chat.locator("#railList").innerHTML();
+    w.claude.agents([
+      claudeRecord(one.pid, one.startedAt, { cwd: w.claude.dir, sessionId: one.sid, name: "picker-one" }),
+      claudeRecord(two.pid, two.startedAt, { cwd: w.claude.dir, sessionId: two.sid, name: "picker-two", status: "busy" }),
+    ]);
+    await expect.poll(() => chat.locator("#railList").innerHTML(), { timeout: 15_000 }).not.toBe(before);
+    await expect(chat.locator(`#railList [data-rail-agent="${idTwo}"] .busy-dot`)).toHaveCount(1, { timeout: 15_000 });
+    await expect(railLink).toBeFocused();
   } finally {
     await chat.close();
   }
@@ -308,6 +320,10 @@ test("#159: Working… clears within ~1 s of the final reply, though the polled 
   w.claude.transcript(w.claude.dir, SID, [tx.title("Busy stub"), tx.user("Run the slow job")]);
   // The stub keeps reporting busy for the whole test: only the transcript can clear the indicator.
   w.claude.agents([claudeRecord(pid, startedAt, { cwd: w.claude.dir, sessionId: SID, name: "busy-stub", status: "busy" })]);
+  // The bridge caches the list for 5 s; wait until it lists the stub, so the page's history load finds it.
+  const panel = await w.h.openPanel();
+  await expect(panel.locator(`#agents [data-agent-id="${agentId}"]`)).toBeVisible({ timeout: 15_000 });
+  await panel.close();
   const chat = await w.h.ctx.newPage();
   try {
     await chat.goto(`${CHAT}?agent=${encodeURIComponent(agentId)}`);

@@ -1,6 +1,7 @@
 // Chat page (#151, spec §7a): one agent's conversation, live, with a composer pinned to the bottom.
 // History comes from ui.agent_history, live entries through the "agent-chat" port, the agent's state from
-// ui.agents_list every 5 s. All decisions and HTML live in ../pure/chat and ../pure/agents.
+// ui.agents_list every 5 s and right after live entries (#159). All decisions and HTML live in ../pure/chat,
+// ../pure/agents and ../pure/sessionPicker.
 import { agentSendOverLimit, type Agent, type AgentEntries, type AgentHistoryResult } from "@tabagent/protocol";
 import { AGENTS_REFRESH_MS, agentRowView, buildAgentSend, shareableTab } from "../pure/agents";
 import {
@@ -11,16 +12,22 @@ import {
   chatRailHtml,
   chatReducer,
   composerMode,
+  editBannerHtml,
   historyErrorText,
   initialChat,
+  initialRecall,
+  lastSent,
   notConnectedCardHtml,
   pendingHtml,
+  recallReducer,
   recentWebTabs,
   type ChatAction,
   type ChatItem,
   type ComposerMode,
 } from "../pure/chat";
+import { keepFocus } from "../pure/focusKeep";
 import { esc } from "../pure/html";
+import { closedPicker, pickerButtonHtml, pickerListHtml, pickerReducer, sessionPickerView, type PickerAction, type PickerView } from "../pure/sessionPicker";
 
 const $ = (id: string) => document.getElementById(id)!;
 const send = (m: unknown): Promise<any> => chrome.runtime.sendMessage(m);
@@ -38,6 +45,13 @@ let bridgeNote = "";
 let spawnChosen = false;
 let mode: ComposerMode = "loading";
 let sending = false;
+/** #159: ↑ edit mode for the composer. */
+let recall = initialRecall;
+/** #159: the narrow-window session picker. */
+let picker = closedPicker;
+let pickerView: PickerView | null = null;
+let lastPickerBtnHtml = "";
+let lastPickerListHtml = "";
 const openKeys = new Set<string>();
 const rendered = new Map<string, { el: Element; html: string; item: ChatItem }>();
 
@@ -116,7 +130,7 @@ function renderHeader() {
     $("typing").hidden = true;
     return;
   }
-  const h = chatHeaderView(agent, Date.now());
+  const h = chatHeaderView(agent, Date.now(), { turnDone: state.turnDone });
   $("title").textContent = h.title;
   document.title = `${h.title} · TabAgent`;
   $("folder").textContent = h.folder;
@@ -155,6 +169,8 @@ function renderComposer() {
   form.hidden = !showForm;
   opts.hidden = !showForm;
   $("composerHints").hidden = !showForm;
+  $("editBanner").hidden = !showForm || !recall.editing;
+  $("recallHint").hidden = !lastSent(state);
   $("spawnCancel").hidden = mode !== "spawn";
   const v = agent ? agentRowView(agent, Date.now()) : null;
   if (mode === "spawn" && v) {
@@ -182,9 +198,49 @@ function renderComposer() {
 function renderRail() {
   const html = agentsListed ? chatRailHtml(allAgents.map((a) => agentRowView(a, Date.now())), agentId) : agentsLoaded ? `<li class="rail-empty">Sessions unavailable.</li>` : "";
   if (html && html !== lastRailHtml) {
-    $("railList").innerHTML = html;
+    // #159: a re-render (age tick, status change) keeps keyboard focus on the same session.
+    keepFocus($("railList"), "data-rail-agent", () => ($("railList").innerHTML = html));
     lastRailHtml = html;
   }
+}
+
+/** #159: the header's session picker, shown instead of the rail below 860px (CSS decides which). */
+function renderPicker() {
+  const btn = $("pickerBtn") as HTMLButtonElement;
+  const list = $("pickerList");
+  btn.hidden = !agentsListed;
+  if (!agentsListed) {
+    list.hidden = true;
+    return;
+  }
+  pickerView = sessionPickerView(
+    allAgents.map((a) => agentRowView(a, Date.now())),
+    agentId,
+    $("title").textContent ?? "",
+  );
+  const bHtml = pickerButtonHtml(pickerView);
+  if (bHtml !== lastPickerBtnHtml) {
+    btn.innerHTML = bHtml;
+    lastPickerBtnHtml = bHtml;
+  }
+  btn.setAttribute("aria-label", `${pickerView.label}: switch session`);
+  btn.setAttribute("aria-expanded", String(picker.open));
+  const lHtml = pickerListHtml(pickerView);
+  if (lHtml !== lastPickerListHtml) {
+    keepFocus(list, "data-picker-agent", () => (list.innerHTML = lHtml));
+    lastPickerListHtml = lHtml;
+  }
+  list.hidden = !picker.open;
+}
+
+function pickerDo(a: PickerAction): boolean {
+  const count = pickerView?.items.length ?? 0;
+  const r = pickerReducer(picker, a, { count, current: pickerView?.currentIndex ?? -1 });
+  picker = r.state;
+  renderPicker();
+  if (r.focus === "button") $("pickerBtn").focus();
+  else if (r.focus === "item") $("pickerList").querySelectorAll<HTMLElement>("a[data-picker-agent]")[picker.active]?.focus();
+  return r.handled;
 }
 
 /** Re-render everything; keep the view pinned to the bottom when it was there, else offer the pill. */
@@ -193,6 +249,7 @@ function render(o: { stick?: boolean; newContent?: boolean } = {}) {
   const wasBottom = atBottom(sc);
   renderHeader();
   renderRail();
+  renderPicker();
   renderComposer();
   renderLog();
   renderPending();
@@ -261,6 +318,15 @@ async function refreshAgent() {
   render({ newContent: false });
 }
 
+let statusTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleStatusRefresh() {
+  if (statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    void refreshAgent();
+  }, 300);
+}
+
 // Live entries: a port the worker pushes this agent's appended transcript entries into.
 let port: chrome.runtime.Port | null = null;
 function connectPort() {
@@ -272,6 +338,8 @@ function connectPort() {
     if (!m.entries.length) return;
     dispatch({ type: "entries", entries: m.entries });
     render({ newContent: true });
+    // #159: status is polled; ask again now so the header catches up with what the transcript shows.
+    scheduleStatusRefresh();
   });
   port.onDisconnect.addListener(() => {
     // The service worker restarted: watch again, and reload in case entries were missed meanwhile.
@@ -324,6 +392,7 @@ async function submit() {
   const share = await sharedTab();
   const requestId = crypto.randomUUID();
   dispatch({ type: "sending", requestId, text: prompt, ts: Date.now(), ...(forceSpawn ? { spawn: true } : {}) });
+  recall = recallReducer(recall, { type: "sent" }).state;
   input().value = "";
   autosize();
   sending = true;
@@ -357,6 +426,20 @@ $("composer").addEventListener("submit", (e) => {
   void submit();
 });
 input().addEventListener("keydown", (e) => {
+  // #159: ↑ in an empty composer recalls the last message sent from this page; Esc cancels the edit.
+  const r = recallReducer(recall, { type: "key", key: e.key, value: input().value, modified: e.shiftKey || e.altKey || e.metaKey || e.ctrlKey, composing: e.isComposing, lastSent: lastSent(state) });
+  recall = r.state;
+  if (r.handled) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (r.value !== undefined) {
+      input().value = r.value;
+      autosize();
+      input().setSelectionRange(r.value.length, r.value.length);
+    }
+    renderComposer();
+    return;
+  }
   // Enter sends; Shift+Enter is a newline; never while an IME is composing.
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
@@ -364,6 +447,7 @@ input().addEventListener("keydown", (e) => {
   }
 });
 input().addEventListener("input", () => {
+  recall = recallReducer(recall, { type: "input", value: input().value }).state;
   autosize();
   renderComposer();
 });
@@ -424,6 +508,31 @@ $("railList").addEventListener("click", (e) => {
   if (!(e.target as HTMLElement).closest("a[aria-current='page']")) return;
   e.preventDefault();
   if (!$("composer").hidden) input().focus();
+});
+$("editBanner").innerHTML = editBannerHtml();
+// #159: the narrow-window session picker.
+$("pickerBtn").addEventListener("click", () => void pickerDo({ type: "toggle" }));
+$("pickerBtn").addEventListener("keydown", (e) => {
+  if (pickerDo({ type: "key", key: e.key, from: "button" })) e.preventDefault();
+});
+$("pickerList").addEventListener("keydown", (e) => {
+  if (pickerDo({ type: "key", key: e.key, from: "list" })) e.preventDefault();
+});
+$("pickerList").addEventListener("click", (e) => {
+  // The current session keeps you here (the draft stays); the others navigate.
+  if (!(e.target as HTMLElement).closest("a[aria-current='page']")) return;
+  e.preventDefault();
+  pickerDo({ type: "close" });
+  if (!$("composer").hidden) input().focus();
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!picker.open) return;
+  const t = e.target as Node;
+  if ($("pickerBtn").contains(t) || $("pickerList").contains(t)) return;
+  pickerDo({ type: "close" });
+});
+matchMedia("(min-width: 861px)").addEventListener("change", (e) => {
+  if (e.matches && picker.open) pickerDo({ type: "close" });
 });
 if (!/Mac|iPhone|iPad/.test(navigator.platform)) $("focusKey").textContent = "Ctrl+K";
 // #156: Cmd/Ctrl+K or / focuses the composer; Esc leaves it.

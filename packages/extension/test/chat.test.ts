@@ -336,6 +336,11 @@ describe("recallReducer", () => {
     expect(recallReducer({ editing: true }, { type: "sent" })).toEqual({ state: initialRecall, handled: false });
   });
 
+  it("clearing the composer by hand ends edit mode; typing keeps it", () => {
+    expect(recallReducer({ editing: true }, { type: "input", value: "" })).toEqual({ state: initialRecall, handled: false });
+    expect(recallReducer({ editing: true }, { type: "input", value: "Run the tests now" })).toEqual({ state: { editing: true }, handled: false });
+  });
+
   it("the edit banner says what is happening and how to cancel", () => {
     const html = editBannerHtml();
     expect(html).toContain("Editing your last message");
