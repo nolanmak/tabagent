@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { DEFAULTS, migrateSettings, SEEDED_DENYLIST, settingsAuditEvents } from "../src/background/settingsModel";
 
 describe("seeded denylist (#81 D2, D5)", () => {
+  it("keeps an explicit sign-in off (auth: false) so a default-on origin can be turned off", () => {
+    const s = migrateSettings({ sites: { "https://accounts.google.com": { policy: "act", auth: false } } } as any);
+    expect(s.sites["https://accounts.google.com"].auth).toBe(false);
+  });
   it("still seeds accounts.google.com so new installs start with Google blocked", () => {
     expect(SEEDED_DENYLIST).toContain("accounts.google.com");
   });
