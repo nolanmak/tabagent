@@ -101,6 +101,21 @@ export class AuthTaint {
     return this.now() < this.closedUntil;
   }
 
+  /** When the restart lock (failClosed) ends, or 0 if none is active. Shown to the user and in errors. */
+  restartLockedUntil(): number {
+    return this.blanket() ? this.closedUntil : 0;
+  }
+
+  /**
+   * The user ends the restart lock early from the side panel (for example after reloading TabAgent
+   * themselves). Per-tab taint and dirty documents recorded since the restart still apply.
+   */
+  endRestartLock() {
+    if (!this.blanket()) return;
+    this.closedUntil = 0;
+    this.changed();
+  }
+
   private end(p: Period): number {
     return p.navAt === undefined ? Infinity : Math.max(p.navAt, p.lastFill + this.ttl);
   }

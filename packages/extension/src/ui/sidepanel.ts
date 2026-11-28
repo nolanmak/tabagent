@@ -32,6 +32,9 @@ function renderStatus() {
   $("killBtn").hidden = !!state.settings.paused;
   $("resumeBtn").hidden = !state.settings.paused;
   $("killNote").textContent = state.settings.paused ? "All agents are stopped. Every command returns KILLED until you resume." : "Shortcut: Alt+Shift+K";
+  const until = Number(state.authRestartLockedUntil ?? 0);
+  $("restartLock").hidden = !(until > Date.now());
+  if (until > Date.now()) $("restartLockText").textContent = `TabAgent restarted during a sign-in, so agents can't type passwords or codes until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
 }
 
 function promptHtml(p: any) {
@@ -457,6 +460,7 @@ $("pairForm").addEventListener("submit", async (e) => {
 });
 $("killBtn").addEventListener("click", () => send({ type: "ui.kill" }).then(refresh));
 $("resumeBtn").addEventListener("click", () => send({ type: "ui.resume" }).then(refresh));
+$("endRestartLock").addEventListener("click", () => send({ type: "ui.endRestartLock" }).then(refresh));
 $("prompts").addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (!b?.dataset.id) return;

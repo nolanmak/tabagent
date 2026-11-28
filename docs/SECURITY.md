@@ -150,6 +150,12 @@ YOLO say. `network.get` never returns a request that started while the tab was t
 minutes, any result or error that contains a typed password or code is withheld. Auth also refuses
 to type into a page where agent JavaScript (`js.eval`, `nav.wait` fn) has run.
 
+If the extension reloads while a tab is tainted or dirty, the per-tab state is lost, so TabAgent fails
+closed: every tab counts as tainted and dirty for 10 minutes. Auth errors in that window say TabAgent
+restarted and when typing resumes (#140). The side panel shows the lock with an "End lock now" button
+for the user, typically after reloading TabAgent themselves. Agents can't reach it (panel-only
+`ui.endRestartLock`), and taint recorded after the restart still applies.
+
 ### Google sign-in (#79)
 
 TabAgent never signs in on password-manager hosts, whatever the settings. Google sign-in
