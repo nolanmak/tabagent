@@ -99,6 +99,8 @@ export const AuditRecordSchema = z.object({
   outcome: z.enum(["ok", "error", "denied"]),
   errorCode: z.enum(ERROR_CODES).optional(),
   resultSummary: z.object({ bytes: z.number().int().nonnegative(), sha256: z.string() }),
+  /** #131: a sign-in step was allowed without a prompt because the site signs in without asking. */
+  authAuto: z.literal(true).optional(),
 });
 export type AuditRecord = z.infer<typeof AuditRecordSchema>;
 

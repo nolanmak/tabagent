@@ -265,6 +265,8 @@ interface Ctx {
   tabId?: number;
   url?: string;
   cmdId: string;
+  /** Router hook: mark this command's audit record (#131 authAuto). */
+  auditNote?: (n: { authAuto?: true }) => void;
 }
 
 function envFor(c: Ctx, tabId: number): AuthEnv {
@@ -275,8 +277,11 @@ function envFor(c: Ctx, tabId: number): AuthEnv {
       const s = await getSettings();
       checkAuthSite({ sites: s.sites as any, denylist: s.denylist, authDenyHosts: AUTH_DENY_HOSTS, yolo: !!s.yolo }, url);
     },
-    consent: (url, who, summary) =>
-      requireSensitive(c.meta, url, "g", c.tool.name, summary, [who.signup ? "Bitwarden generates and saves a new password; the agent never sees it" : "Sign-in uses a saved credential; the agent never sees it"], { auth: who, tabId }),
+    async consent(url, who, summary) {
+      const via = await requireSensitive(c.meta, url, "g", c.tool.name, summary, [who.signup ? "Bitwarden generates and saves a new password; the agent never sees it" : "Sign-in uses a saved credential; the agent never sees it"], { auth: who, tabId });
+      if (via === "authAuto") c.auditNote?.({ authAuto: true });
+      return via;
+    },
     channel,
     email: emailReader(tabId),
     confirmMail: confirmReader(tabId),

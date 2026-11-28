@@ -140,7 +140,7 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
 - Bridge `config.json` (directory overridable with `TABAGENT_HOME`): port,
   secret, extensionIds, tokens, uploadDirs, maxReadBytes.
 - Extension `chrome.storage.local`: per-origin site entries (policy, lite mode,
-  pre-approvals, sign-in on/off and "always" accounts), denylist edits, session-end behaviour (default collapse and
+  pre-approvals, sign-in on/off, sign-in without asking and "always" accounts), denylist edits, session-end behaviour (default collapse and
   keep), `beforeunload` policy (default accept), on-page border (default on),
   `devAllowSensitive` (default off).
 
@@ -374,11 +374,25 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   (d) credential reads: `cookies.get`, `storage.get`, `network.get`;
   (e) local file transfer: `act.upload`, `downloads.read`; (f) `tabs attach`.
   Pre-approval is per origin per category a–e; f always asks. Choosing `full`
-  in the side panel also sets sign-in and all a–e pre-approvals for the origin
-  (sign-in skipped, with a reason shown, on auth-deny, vault or denylisted
-  hosts); other levels change only the policy (#118). Password and card
+  in the side panel also sets sign-in, sign-in without asking (`authAuto`) and
+  all a–e pre-approvals for the origin (sign-in skipped, with a reason shown, on
+  auth-deny, vault or denylisted hosts); other levels change only the policy
+  (#118, #131). Password and card
   values are masked as `••••` in snapshots, diffs, `form.describe`, the live
   feed and the audit record. Screenshots are not masked.
+- **Sign-in gate (category g, #131).** g never pre-approves. `resolve()` checks,
+  in order: auth-deny host (deny), sign-in enabled for the origin (else deny),
+  sign-up (always ask), an `authAlways` match for the account (allow), then
+  `authAuto` (allow with `via: "authAuto"`). `authAuto` is honoured only with an
+  explicit `auth: true` (not the Google default or YOLO) and only when the host
+  is not auth-deny, vault or denylisted, re-checked at use time. The auth
+  handler passes `via` to the router through `auditNote`, which adds
+  `authAuto: true` to the command's audit record, and `auth.code` /
+  `auth.confirm_link` do not cache a consent `authAuto` gave. Settings drop
+  `authAuto` without `auth: true` or on the built-in blocked lists. The side
+  panel's Sign-in column (`pure/siteAuth.ts`) holds: allowed, without asking
+  (with the payment/transfer warning), codes always (`code-source:sms` +
+  `code-source:email` in `authAlways`), and each Always grant (masked) with a ✕.
 - **Prompts (D19).** Chrome only opens the side panel on a user gesture, so a
   pending prompt sets the toolbar badge to `!`, raises a `chrome.notifications`
   notification and shows an informational banner in the agent's tab (no approve
@@ -386,7 +400,8 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   side panel. Prompts queue FIFO; identical pending requests share one prompt.
 - **Audit (D20).** The extension builds the record, because only it knows what
   is sensitive: `{tool, action, origin, params (redacted), outcome, errorCode?,
-  resultSummary:{bytes, sha256}}`. The bridge adds caller and timestamp and
+  resultSummary:{bytes, sha256}, authAuto?}` (`authAuto: true` when a sign-in
+  step skipped its prompt because the site signs in without asking, #131). The bridge adds caller and timestamp and
   appends it; it never logs raw params or results. Prompts, decisions, kill and
   resume arrive as `event` messages. `~/.tabagent/audit.jsonl` is 0600, rotates
   at 10 MB and keeps 5 files.
@@ -410,9 +425,12 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   and the extension applies it after a visible one-time approval in the side
   panel. `policy.denylist_change` takes an add/remove list of host globs.
   `policy.site_change` takes one exact http(s) origin (normalised; wildcards,
-  paths and credentials are rejected) and `changes: {auth?, policy?, lite?}`.
+  paths and credentials are rejected) and `changes: {auth?, policy?, lite?, authAuto?}`.
   `policy: "ask"` removes the stored policy, and `auth: false` also clears the
-  site's "always" accounts, the same as the side panel (under YOLO, where sign-in
+  site's "always" accounts and `authAuto`; `authAuto: true` also stores
+  `auth: true` (and is refused together with `auth: false`). `applied` lists
+  every effective field that moved, implied ones included. All of this is the
+  same as the side panel (under YOLO, where sign-in
   is on by default (#110), that stores an explicit `auth: false`). Before the prompt, the
   router asks the extension to check the request and snapshot the state it will
   be shown against. A site change on a hard-denied, never-reachable (vault),

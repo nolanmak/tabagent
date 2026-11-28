@@ -83,17 +83,17 @@
 <details class="card" id="settingsBox">
   <summary><h2>Settings</h2></summary>
   <h3>Sites</h3>
-  <p class="muted small">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site.</p>
+  <p class="muted small">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site. Sign-in allowed still asks before each sign-in or code, unless the site signs in without asking or has an Always grant.</p>
   <div class="row sitesearch">
     <span class="searchbox"><input id="siteSearch" type="search" placeholder="Search sites" aria-label="Search sites" autocomplete="off" spellcheck="false" /><button type="button" id="siteSearchClear" aria-label="Clear site search" title="Clear (Esc)" hidden>✕</button></span>
     <span id="siteCount" class="muted small" aria-live="polite"></span>
   </div>
-  <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th>Lite</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
+  <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th>Lite</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th title="Sign-in allowed, sign in without asking, always allow texted/emailed codes, and Always grants">Sign-in</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
   <form id="addSite" class="row">
     <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
     <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option></select>
     <button type="submit">Add</button>
-    <span class="muted small">full also turns on sign-in and pre-approvals</span>
+    <span class="muted small">full also turns on sign-in (without asking) and pre-approvals</span>
   </form>
   <p id="siteLevelNote" class="muted small" role="status" hidden></p>
   <h3>Denylist</h3>

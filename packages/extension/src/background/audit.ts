@@ -13,6 +13,8 @@ export interface AuditRecord {
   outcome: Outcome;
   errorCode?: string;
   resultSummary: { bytes: number; sha256: string };
+  /** #131: a sign-in step was allowed without a prompt because the site signs in without asking. */
+  authAuto?: true;
 }
 
 /** Param keys whose values are always masked. */
@@ -87,7 +89,7 @@ export async function summarizeResult(result: unknown): Promise<{ bytes: number;
   return { bytes: enc.encode(s).length, sha256: await sha256Hex(s) };
 }
 
-export async function buildAudit(a: { tool: string; action?: string; origin: string | null; params: unknown; outcome: Outcome; errorCode?: string; result?: unknown; redact?: RedactOpts }): Promise<AuditRecord> {
+export async function buildAudit(a: { tool: string; action?: string; origin: string | null; params: unknown; outcome: Outcome; errorCode?: string; result?: unknown; redact?: RedactOpts; authAuto?: true }): Promise<AuditRecord> {
   return {
     tool: a.tool,
     ...(a.action ? { action: a.action } : {}),
@@ -96,6 +98,7 @@ export async function buildAudit(a: { tool: string; action?: string; origin: str
     outcome: a.outcome,
     ...(a.errorCode ? { errorCode: a.errorCode } : {}),
     resultSummary: await summarizeResult(a.result),
+    ...(a.authAuto ? { authAuto: true as const } : {}),
   };
 }
 

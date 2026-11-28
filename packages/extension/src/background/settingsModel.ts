@@ -1,5 +1,5 @@
 // Pure settings model: defaults, validation and migration from the spike's shape.
-import type { PreapprovableCategory, SiteEntry, StoredPolicy } from "./policy";
+import { AUTH_DENY_HOSTS, hostMatches, hostOf, isVaultDenied, type PreapprovableCategory, type SiteEntry, type StoredPolicy } from "./policy";
 
 export type OnSessionEnd = "collapse" | "close" | "keep";
 export type BeforeUnload = "accept" | "dismiss" | "ask-agent";
@@ -55,7 +55,7 @@ export const DEFAULTS: StoredShape = {
 const POLICIES = new Set(["read", "act", "full", "deny"]);
 const CATS: PreapprovableCategory[] = ["a", "b", "c", "d", "e"];
 
-function cleanEntry(e: unknown): SiteEntry | null {
+function cleanEntry(e: unknown, origin: string): SiteEntry | null {
   if (!e || typeof e !== "object") return null;
   const x = e as Record<string, unknown>;
   const out: SiteEntry = {};
@@ -72,6 +72,8 @@ function cleanEntry(e: unknown): SiteEntry | null {
     const ids = x.authAlways.filter((v): v is string => typeof v === "string" && !!v);
     if (ids.length) out.authAlways = [...new Set(ids)];
   }
+  // #131: sign in without asking only with an explicit auth: true, and never where sign-in is never automated.
+  if (x.authAuto === true && out.auth === true && !AUTH_DENY_HOSTS.some((g) => hostMatches(g, hostOf(origin))) && !isVaultDenied(origin)) out.authAuto = true;
   return Object.keys(out).length ? out : null;
 }
 
@@ -83,7 +85,7 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
   const r = (raw ?? {}) as Record<string, any>;
   const sites: Record<string, SiteEntry> = {};
   for (const [o, e] of Object.entries((r.sites ?? {}) as Record<string, unknown>)) {
-    const c = cleanEntry(e);
+    const c = cleanEntry(e, o);
     if (c) sites[o] = c;
   }
   if (r.policies && typeof r.policies === "object") {
@@ -115,9 +117,17 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
 /** Settings whose change is written to the bridge audit log (review M1). */
 const AUDITED = ["devAllowSensitive", "yolo"] as const;
 
-/** Audit events for a settings change: one settings.changed with the new value of each risky toggle that moved. */
-export function settingsAuditEvents(before: Partial<StoredShape>, after: Partial<StoredShape>): { event: "settings.changed"; data: Record<string, boolean> }[] {
+/**
+ * Audit events for a settings change: one settings.changed with the new value of each risky toggle
+ * that moved, plus one per origin whose sign-in without asking (#131) was turned on or off.
+ */
+export function settingsAuditEvents(before: Partial<StoredShape>, after: Partial<StoredShape>): { event: "settings.changed"; data: Record<string, boolean | string> }[] {
   const data: Record<string, boolean> = {};
   for (const k of AUDITED) if (!!before[k] !== !!after[k]) data[k] = !!after[k];
-  return Object.keys(data).length ? [{ event: "settings.changed", data }] : [];
+  const out: { event: "settings.changed"; data: Record<string, boolean | string> }[] = Object.keys(data).length ? [{ event: "settings.changed", data }] : [];
+  const auto = (s: Partial<StoredShape>, o: string) => !!s.sites?.[o]?.authAuto;
+  for (const o of new Set([...Object.keys(before.sites ?? {}), ...Object.keys(after.sites ?? {})])) {
+    if (auto(before, o) !== auto(after, o)) out.push({ event: "settings.changed", data: { authAuto: auto(after, o), origin: o } });
+  }
+  return out;
 }

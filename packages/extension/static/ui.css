@@ -47,6 +47,11 @@ button { white-space:nowrap; overflow-wrap:normal; flex-shrink:0; }
 .tablewrap { overflow-x:auto; }
 .sites { width:100%; border-collapse:collapse; font-size:12px; } .sites th { text-align:left; color:var(--muted); font-weight:500; } .sites td { padding:3px 2px; border-top:1px solid var(--line); vertical-align:top; } .sites .origin { word-break:break-all; }
 .chip { display:inline-flex; gap:2px; align-items:center; margin-right:4px; white-space:nowrap; }
+/* Sign-in column (#131): controls stacked so the column stays narrow at 320px. */
+.sites .signin { min-width:0; } .sites .signin > .chip { display:flex; }
+.sites .always { list-style:none; margin:2px 0 0; padding:0; } .sites .always li { display:flex; justify-content:space-between; white-space:normal; word-break:break-all; color:var(--muted); }
+.sites .always button { padding:0 4px; margin-left:2px; }
+.signin-warn { color:var(--warn); margin-top:2px; }
 .g-grey{background:#9ca3af}.g-blue{background:#3b82f6}.g-red{background:#ef4444}.g-yellow{background:#eab308}.g-green{background:#22c55e}.g-pink{background:#ec4899}.g-purple{background:#a855f7}.g-cyan{background:#06b6d4}.g-orange{background:#f97316}
 /* Agents section (#90) */
 .agents li.agent { cursor:pointer; border-radius:6px; padding:6px 4px; }

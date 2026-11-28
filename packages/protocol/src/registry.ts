@@ -733,20 +733,20 @@ export const TOOLS = [
   def({
     name: "policy.site_change",
     group: "policy",
-    description: 'Request a change to one exact origin\'s sign-in (auth), policy ("ask" clears it) or lite mode, e.g. after "Sign-in is not enabled". Always needs a visible approval; YOLO does not bypass it.',
+    description: 'Request a change to one exact origin\'s sign-in (auth), sign-in without asking (authAuto), policy ("ask" clears it) or lite mode, e.g. after "Sign-in is not enabled". Always asks, even in YOLO.',
     params: z.object({
       origin: z.string().min(1).max(300),
       changes: z
-        .object({ auth: z.boolean().optional(), policy: z.enum(["ask", "read", "act", "full", "deny"]).optional(), lite: z.boolean().optional() })
+        .object({ auth: z.boolean().optional(), policy: z.enum(["ask", "read", "act", "full", "deny"]).optional(), lite: z.boolean().optional(), authAuto: z.boolean().optional() })
         .strict()
-        .refine((c) => c.auth !== undefined || c.policy !== undefined || c.lite !== undefined, { message: "changes needs at least one of auth, policy or lite" }),
+        .refine((c) => c.auth !== undefined || c.policy !== undefined || c.lite !== undefined || c.authAuto !== undefined, { message: "changes needs at least one of auth, policy, lite or authAuto" }),
       reason: z.string().min(1).max(500),
     }),
     result: loose({
       status: z.literal("applied"),
       origin: z.string(),
-      site: z.object({ policy: z.enum(["ask", "read", "act", "full", "deny"]), lite: z.boolean(), auth: z.boolean() }),
-      applied: z.array(z.object({ field: z.enum(["auth", "policy", "lite"]), from: z.union([z.boolean(), z.string()]), to: z.union([z.boolean(), z.string()]) })),
+      site: z.object({ policy: z.enum(["ask", "read", "act", "full", "deny"]), lite: z.boolean(), auth: z.boolean(), authAuto: z.boolean() }),
+      applied: z.array(z.object({ field: z.enum(["auth", "policy", "lite", "authAuto"]), from: z.union([z.boolean(), z.string()]), to: z.union([z.boolean(), z.string()]) })),
     }),
     level: "full",
     sensitive: "p",
