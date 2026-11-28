@@ -6,12 +6,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
+  AGENTS_FEATURE,
   authExtraTimeout,
   captchaExtraTimeout,
   defaultTimeout,
   FilesResolveSchema,
   getTool,
   HelloSchema,
+  INBOX_ACK_PATH,
+  INBOX_PATH,
+  InboxAckSchema,
   normalizeHello,
   PROTOCOL_VERSION,
   ResultEnvelopeSchema,
@@ -27,6 +31,8 @@ import {
   type OutputResponse,
   type SessionMeta,
 } from "@tabagent/protocol";
+import { AgentsBridge, type AgentsOpts, type Held } from "./agents";
+import { parseInboxHeaders, type InboxConn } from "./agents/inbox";
 import { AuditWriter } from "./audit";
 import { createAuth, type Auth } from "./auth";
 import { createCaptcha, type CaptchaBridge, type CaptchaOpts } from "./captcha";
@@ -85,7 +91,12 @@ export interface DaemonOpts {
   /** #61 remote handoff: tests bind the phone listener on loopback and capture the webhook. */
   handoffListen?: HandoffBridgeOpts["listen"];
   postWebhook?: HandoffBridgeOpts["postWebhook"];
+  /** Send to agent: stub `claude` binary, Codex socket path, timeouts (tests). */
+  agents?: AgentsOpts;
 }
+
+/** Optional capabilities the bridge advertises in welcome (AD16). */
+export const BRIDGE_FEATURES = [AGENTS_FEATURE];
 
 /**
  * Commands that only read, so re-running one is harmless. When a newer socket from the same extension
@@ -114,6 +125,9 @@ export function retrySafe(tool: string, params: Record<string, unknown>): boolea
   return RETRY_SAFE.has(tool) || (tool === "tabs" && params.action === "list");
 }
 
+/** SSE comment interval on inbox streams, so idle connections are not dropped by anything in between. */
+const INBOX_PING_MS = 15_000;
+
 /** How long a replaced socket gets to finish its close handshake before it is terminated. */
 const REPLACED_CLOSE_GRACE_MS = 1_000;
 
@@ -138,6 +152,7 @@ export class Daemon {
   readonly auth: Auth;
   readonly captcha: CaptchaBridge;
   readonly handoff: HandoffBridge;
+  readonly agents: AgentsBridge;
   readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
@@ -161,6 +176,12 @@ export class Daemon {
     this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
     this.captcha = createCaptcha({ log: this.log, now: this.now, ...opts.captcha, inFlight: (id) => this.pending.get(id), audit: this.audit });
     this.port = cfg.port;
+    this.agents = new AgentsBridge({
+      now: this.now,
+      audit: this.audit,
+      sendToExt: (m) => this.ext && this.sendTo(this.ext.ws, m),
+      ...opts.agents,
+    });
     this.handoff = new HandoffBridge({
       inFlight: (id) => this.pending.get(id),
       sendTo: (ws, m) => this.sendTo(ws as WebSocket, m as unknown as BridgeToExt),
@@ -230,13 +251,16 @@ export class Daemon {
   async stop() {
     for (const t of this.timers) clearInterval(t);
     await this.auth.stop();
+    this.agents.stop();
     this.captcha.abortAll();
     await this.handoff.stop();
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
     this.ext?.ws.terminate();
     for (const c of this.wss.clients) c.terminate();
-    await new Promise<void>((r) => (this.server ? this.server.close(() => r()) : r()));
+    const closed = new Promise<void>((r) => (this.server ? this.server.close(() => r()) : r()));
+    // Drop lingering sockets (a dropped inbox stream can leave one half-open) so close() does not wait on them.
     this.server?.closeAllConnections?.();
+    await closed;
   }
 
   // -------------------------------------------------------------------------
@@ -308,7 +332,7 @@ export class Daemon {
     const known = this.cfg.extensionIds.includes(extId);
     if (hello.secret && hello.secret === this.cfg.secret && known) {
       this.attachExt(ws, extId, hello.extensionVersion, hello.features);
-      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION });
+      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION, features: BRIDGE_FEATURES });
       return true;
     }
     if (hello.pairCode) {
@@ -326,7 +350,7 @@ export class Daemon {
       if (!known) this.cfg.extensionIds.push(extId);
       saveConfig(this.cfg);
       this.attachExt(ws, extId, hello.extensionVersion, hello.features);
-      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION, secret: this.cfg.secret });
+      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION, secret: this.cfg.secret, features: BRIDGE_FEATURES });
       this.log(`Paired with extension ${extId}`);
       return true;
     }
@@ -400,6 +424,8 @@ export class Daemon {
     if (this.auth.bridge.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     if (this.captcha.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     if (this.handoff.onExtMessage(msg, ws)) return;
+    // AD2/AD14: agents.* only on the current paired extension socket.
+    if (this.ext?.ws === ws && this.agents.onExtMessage(msg, (m) => this.sendTo(ws, m))) return;
     switch (msg?.type) {
       case "ping":
         this.sendTo(ws, { type: "pong" });
@@ -562,7 +588,8 @@ export class Daemon {
 
   gcRestSessions(now = this.now()) {
     for (const [k, s] of this.restSessions) {
-      if (!s.persistent && now - s.lastSeen > TIMEOUTS.restSessionIdle) {
+      // A session with a live inbox stream is in use even when it makes no calls (AD4).
+      if (!s.persistent && !this.agents.inbox.get(k) && now - s.lastSeen > TIMEOUTS.restSessionIdle) {
         this.restSessions.delete(k);
         this.endSession(s.meta.id);
       }
@@ -645,6 +672,7 @@ export class Daemon {
 
     if (path.startsWith("/v1/admin/")) return this.auth.onAdmin(req, res, who.kind === "secret", path, () => this.readBody(req));
     if (path === "/mcp") return this.onMcp(req, res, who, url);
+    if (path === INBOX_PATH && req.method === "GET") return this.onInbox(req, res, who, url);
 
     if (path === "/v1/tools" && req.method === "GET") {
       let list;
@@ -682,9 +710,17 @@ export class Daemon {
         return this.err(res, er.code, er.message);
       }
     }
+    if (path === INBOX_ACK_PATH && req.method === "POST") {
+      const a = InboxAckSchema.safeParse(body);
+      if (!a.success) return this.err(res, "BAD_REQUEST", "Expected {msgId}");
+      if (!this.agents.inbox.ack(this.restKey(req, who, url), a.data.msgId)) return this.err(res, "NOT_FOUND", "No unacked push with that msgId for this session");
+      return this.sendJson(res, 200, { ok: true });
+    }
     if (path === "/v1/session/end" && req.method === "POST") {
       const meta = this.restMeta(req, who, url, body?.session ?? body?.sessionId);
-      this.restSessions.delete(this.restKey(req, who, url, body?.session ?? body?.sessionId));
+      const key = this.restKey(req, who, url, body?.session ?? body?.sessionId);
+      this.restSessions.delete(key);
+      this.agents.onSessionEnd(key);
       this.endSession(meta.id);
       return this.sendJson(res, 200, { ok: true });
     }
@@ -697,9 +733,57 @@ export class Daemon {
       const params = legacy ? (body.params ?? (m[1] ? body : {})) : body;
       const meta = this.restMeta(req, who, url, legacy ? body.session : undefined);
       const out = await this.call(meta, String(toolName), params);
+      // AD8: held panel messages ride on the session's next successful result, outside the PAGE_DATA wrapping.
+      if (out.ok) this.attachHeld(res, this.restKey(req, who, url, legacy ? body.session : undefined), out);
       return this.sendJson(res, out.ok ? 200 : (STATUS[out.error!.code] ?? 200), out);
     }
     return this.err(res, "NOT_FOUND", `No route ${req.method} ${path}`);
+  }
+
+  /** AD8: attach held messages; `delivered` once the response is written, held again if it never is. */
+  private attachHeld(res: ServerResponse, key: string, out: OutputResponse) {
+    const held: Held[] = this.agents.takeHeld(key);
+    if (!held.length) return;
+    out.userMessages = held.map((h) => h.text);
+    let written = false;
+    res.once("finish", () => {
+      written = true;
+      this.agents.delivered(held);
+    });
+    res.once("close", () => {
+      if (!written) this.agents.restoreHeld(key, held);
+    });
+  }
+
+  /**
+   * AD4/AD5: `GET /v1/inbox`, the stdio proxy's registration stream. Opening it creates the bridge session
+   * eagerly (same restKey as the proxy's calls) and links the agent; closing it unlinks the agent at once.
+   */
+  private onInbox(req: IncomingMessage, res: ServerResponse, who: Principal, url: URL) {
+    const key = this.restKey(req, who, url);
+    const meta = this.restMeta(req, who, url);
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "close" });
+    let open = true;
+    const conn: InboxConn = {
+      write: (event, data) => {
+        if (open) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      },
+      close: () => {
+        if (!open) return;
+        open = false;
+        res.end();
+      },
+    };
+    const ping = setInterval(() => open && res.write(": ping\n\n"), INBOX_PING_MS);
+    ping.unref();
+    res.on("close", () => {
+      open = false;
+      clearInterval(ping);
+      this.agents.inbox.close(key, conn);
+    });
+    const info = { sessionId: meta.id, ...parseInboxHeaders(req.headers) };
+    this.agents.inbox.open(key, info, conn);
+    conn.write("ready", { sessionId: meta.id });
   }
 
   private restKey(req: IncomingMessage, who: Principal, url: URL, bodySession?: string) {

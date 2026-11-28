@@ -15,7 +15,7 @@ export const CATEGORY_TEXT: Record<SensitiveCategory, string> = {
   e: "Transfer a local file (upload or read a download)",
   f: "Take over a tab you opened",
   g: "Sign in to a site with one of your saved accounts",
-  p: "Change the TabAgent denylist",
+  p: "Change TabAgent policy (the denylist or a site's settings)",
   r: "Accept a proposed workflow repair",
 };
 
@@ -32,7 +32,7 @@ export interface PromptInfo {
   level?: Level;
   sensitive?: { category: SensitiveCategory; description: string };
   /** Category g: which account and provider (masked, never the secret). */
-  auth?: { accountId: string; accountMasked: string; provider: string };
+  auth?: { accountId: string; accountMasked: string; provider: string; signup?: boolean };
   tool: string;
   summary: string;
   reasons: string[];

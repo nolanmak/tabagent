@@ -27,6 +27,8 @@ describe("classifyNext", () => {
     ["Google interstitial with only non-login fields → handoff_required", { url: "https://accounts.google.com/signin/v2/recoveryoptions", fields: PLAIN(), webauthn: false, captcha: false }, "handoff_required"],
     ["Google code page → code_required", { url: "https://accounts.google.com/v3/signin/challenge/ipp", fields: OTP(), webauthn: false, captcha: false }, "code_required"],
     ["Google password step → unknown (call auth.login again)", { url: "https://accounts.google.com/v3/signin/challenge/pwd", fields: [f({ type: "password", name: "Passwd" })], webauthn: false, captcha: false }, "unknown"],
+    ["Sign up with Google: back on the new site's onboarding page → done (#114)", { url: "https://www.example-shop.com/welcome?new=1", fields: PLAIN(), webauthn: false, captcha: false }, "done"],
+    ["Sign up with Google: still on Google's consent screen (no form) → handoff_required unless the agent clicks Continue itself", { url: "https://accounts.google.com/signin/oauth/v2/consentsummary", fields: [], webauthn: false, captcha: false }, "handoff_required"],
     ["left Google for the third-party site → done", { url: "https://www.example-shop.com/account", fields: PLAIN(), webauthn: false, captcha: false }, "done"],
     ["next step of a two-step login (password page) → unknown", { url: "https://github.com/login/password", fields: [f({ type: "password" })], webauthn: false, captcha: false }, "unknown"],
   ];
@@ -47,6 +49,15 @@ describe("checkAuthSite (step 1, no prompt)", () => {
     expect(() => checkAuthSite(st(), "https://app.mercury.com/login")).toThrow(/not enabled/);
   });
   it("password-manager vault refused", () => expect(() => checkAuthSite(st({ "https://my.1password.com": { auth: true } }), "https://my.1password.com/")).toThrow(/never signs in/));
+  it("accounts.google.com has sign-in on by default once off the denylist", () => expect(checkAuthSite(st({}), "https://accounts.google.com/v3/signin/identifier")).toBe("https://accounts.google.com"));
+  it("an explicit sign-in off for Google is respected", () => expect(() => checkAuthSite(st({ "https://accounts.google.com": { auth: false } }), "https://accounts.google.com/")).toThrow(/not enabled/));
+  it("YOLO turns sign-in on for every site (#110)", () => expect(checkAuthSite({ ...st({}), yolo: true }, "https://shop.example.com/login")).toBe("https://shop.example.com"));
+  it("YOLO still respects an explicit sign-in off", () => expect(() => checkAuthSite({ ...st({ "https://shop.example.com": { auth: false } }), yolo: true }, "https://shop.example.com/login")).toThrow(/not enabled/));
+  it("YOLO never unlocks hard-blocked hosts or the denylist", () => {
+    expect(() => checkAuthSite({ ...st({}), yolo: true }, "https://my.1password.com/")).toThrow();
+    expect(() => checkAuthSite({ ...st({}, ["shop.example.com"]), yolo: true }, "https://shop.example.com/login")).toThrow(/denylist/);
+  });
+  it("default-on is Google only; other origins still need the toggle", () => expect(() => checkAuthSite(st({}), "https://accounts.example.com/")).toThrow(/not enabled/));
   it("accounts.google.com passes when enabled and not denylisted (#81)", () => expect(checkAuthSite(st({ "https://accounts.google.com": { auth: true } }), "https://accounts.google.com/v3/signin/identifier")).toBe("https://accounts.google.com"));
   it("accounts.google.com still refused while on the denylist", () => expect(() => checkAuthSite(st({ "https://accounts.google.com": { auth: true } }, ["accounts.google.com"]), "https://accounts.google.com/")).toThrow(/denylist/));
   it("every remaining hard sign-in host is still refused", () => {

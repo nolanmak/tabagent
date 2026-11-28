@@ -54,6 +54,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`downloads.wait`](#downloadswait) | `downloads_wait` | none | — | data | supported | extension |
 | [`downloads.read`](#downloadsread) | `downloads_read` | none | e | data | supported | both |
 | [`policy.denylist_change`](#policydenylist_change) | `policy_denylist_change` | full | p | full only | supported | extension |
+| [`policy.site_change`](#policysite_change) | `policy_site_change` | full | p | full only | supported | extension |
 | [`workflow.capture_start`](#workflowcapture_start) | `workflow_capture_start` | act | — | full only | supported | extension |
 | [`workflow.capture_stop`](#workflowcapture_stop) | `workflow_capture_stop` | act | — | full only | supported | extension |
 | [`workflow.list`](#workflowlist) | `workflow_list` | none | — | full only | supported | extension |
@@ -67,7 +68,9 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
 | [`auth.status`](#authstatus) | `auth_status` | read | — | auth | supported | both |
 | [`auth.login`](#authlogin) | `auth_login` | act | — | auth | unsupported | both |
+| [`auth.signup`](#authsignup) | `auth_signup` | act | — | auth | unsupported | both |
 | [`auth.code`](#authcode) | `auth_code` | act | — | auth | unsupported | both |
+| [`auth.confirm_link`](#authconfirm_link) | `auth_confirm_link` | act | — | auth | unsupported | extension |
 | [`auth.handoff`](#authhandoff) | `auth_handoff` | read | — | auth | supported | extension |
 | [`captcha.solve`](#captchasolve) | `captcha_solve` | act | — | auth | unsupported | both |
 
@@ -614,6 +617,18 @@ MCP name `policy_denylist_change` · level full · profiles full only · lite su
 | `changes` | object[] | yes |  |
 | `reason` | string | yes |  |
 
+### policy.site_change
+
+Request a change to one exact origin's sign-in (auth), policy ("ask" clears it) or lite mode, e.g. after "Sign-in is not enabled". Always needs a visible approval; YOLO does not bypass it.
+
+MCP name `policy_site_change` · level full · profiles full only · lite supported · sensitive p · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `origin` | string | yes |  |
+| `changes` | object | yes |  |
+| `reason` | string | yes |  |
+
 ## workflow
 
 ### workflow.capture_start
@@ -756,6 +771,19 @@ MCP name `auth_login` · level act · profiles auth · lite unsupported · handl
 | `account` | string |  | Account id from auth.status when several match |
 | `submit` | boolean |  | Default true |
 
+### auth.signup
+
+Create an account on this sign-up page: Bitwarden generates and saves a new password; fills email/username + password (asks you every time), optionally submits. Never returns the password.
+
+MCP name `auth_signup` · level act · profiles auth · lite unsupported · handled by both
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `email` | string |  | Default: the Bitwarden account email |
+| `username` | string |  | For forms with a username field |
+| `submit` | boolean |  | Default true |
+
 ### auth.code
 
 Fetch a one-time code (totp, email, sms; auto tries in that order) and type it into the code field. Never returns the code.
@@ -770,6 +798,18 @@ MCP name `auth_code` · level act · profiles auth · lite unsupported · handle
 | `from` | string |  | Sender domain filter for email codes |
 | `timeout` | integer |  | ms to wait for the code, default 60000 |
 | `submit` | boolean |  | Default true |
+
+### auth.confirm_link
+
+After a sign-up: find the site's confirmation email in Gmail (asks you) and open its one confirmation link in this tab. Never returns the email or link.
+
+MCP name `auth_confirm_link` · level act · profiles auth · lite unsupported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `from` | string |  | Sender domain; default: the site's domain |
+| `timeout` | integer |  | ms to wait for the email, default 60000 |
 
 ### auth.handoff
 

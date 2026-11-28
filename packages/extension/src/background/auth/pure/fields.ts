@@ -92,6 +92,47 @@ export function detectLogin(fields: readonly FieldDesc[]): LoginForm {
   return { ok: false, reason: "No login form found on this page" };
 }
 
+export type SignupForm = { ok: true; email?: number; username?: number; passwords: number[]; form: number } | { ok: false; reason: string };
+
+const EMAIL_HINT = /e-?mail/i;
+const NEW_USER_HINT = /user(name)?|login|handle|screen.?name|nick/i;
+
+/**
+ * #112: a sign-up form. In one form: one or two visible password fields, none marked current-password,
+ * and either two of them or one marked new-password; plus an email and/or username field before the
+ * first password field. Name, phone and other fields are left to the agent (form.fill). Change-password
+ * forms (a current-password field) and three-password forms are refused.
+ */
+export function detectSignup(fields: readonly FieldDesc[]): SignupForm {
+  const vis = fields.filter(usable);
+  const byForm = new Map<number, FieldDesc[]>();
+  for (const f of vis.filter(isPassword)) byForm.set(f.form, [...(byForm.get(f.form) ?? []), f]);
+  let why = "No sign-up form found on this page";
+  for (const [form, pws] of byForm) {
+    if (pws.some((f) => ac(f, "current-password"))) {
+      why = "The page has a sign-in or change-password form (current-password), not a sign-up form";
+      continue;
+    }
+    if (pws.length > 2) {
+      why = "The sign-up form has more than two password fields";
+      continue;
+    }
+    if (pws.length === 1 && !ac(pws[0], "new-password")) {
+      why = "The page has a sign-in form (one password field), not a sign-up form";
+      continue;
+    }
+    const before = vis.filter((f) => f.i < pws[0].i && isUserish(f) && (form === -1 || f.form === form));
+    const email = before.find((f) => f.type === "email" || ac(f, "email")) ?? before.find((f) => EMAIL_HINT.test(hay(f)) && !ac(f, "username"));
+    const username = before.find((f) => f !== email && ac(f, "username")) ?? before.find((f) => f !== email && f.type !== "email" && f.type !== "tel" && NEW_USER_HINT.test(hay(f)));
+    if (!email && !username) {
+      why = "The sign-up form has no email or username field before the password";
+      continue;
+    }
+    return { ok: true, ...(email ? { email: email.i } : {}), ...(username ? { username: username.i } : {}), passwords: pws.map((f) => f.i), form };
+  }
+  return { ok: false, reason: why };
+}
+
 export type CodeDest = { ok: true; split: false; field: number } | { ok: true; split: true; fields: number[] } | { ok: false; reason: string; count: number };
 
 function splitGroup(cands: FieldDesc[]): number[] | null {

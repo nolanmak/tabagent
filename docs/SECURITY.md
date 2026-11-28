@@ -129,7 +129,11 @@ by *effect*, so there is no side door through a different tool:
 | e | Local file transfer | `act.upload`, `downloads.read` |
 | f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved) |
 
-Categories a–e can be pre-approved per origin; f always asks. Prompts are answered in the side
+Categories a–e can be pre-approved per origin; f always asks. Choosing `full` for a site in the side
+panel (adding it or changing its row) also turns on sign-in and pre-approves a–e for it in one step
+(#118); the user can untick any of them after, and lowering the level later leaves them as they are.
+Sign-in is still never turned on for hosts on the banking/password-manager list, the password,
+account and mail hosts, or the denylist; the panel says why instead. Prompts are answered in the side
 panel (reached from the toolbar badge or a notification), never by buttons inside the page, which
 the agent could click (D19). A prompt that is not answered in 120s returns `PROMPT_TIMEOUT`, and a
 late answer never executes anything (D15). Until the full permission engine lands, these effects
@@ -149,13 +153,35 @@ to type into a page where agent JavaScript (`js.eval`, `nav.wait` fn) has run.
 ### Google sign-in (#79)
 
 TabAgent never signs in on password-manager hosts, whatever the settings. Google sign-in
-(`accounts.google.com`) and banking sign-in (#100, the banks on the seeded denylist) are different: it is off by default because the host is on the seeded denylist,
-and the user can turn it on by removing it from the denylist and enabling sign-in for
-that origin (for example `https://accounts.google.com`) in the side panel. Every `auth.login` there still asks for consent unless
+(`accounts.google.com`) and banking sign-in (#100, the banks on the seeded denylist) are different: they are
+off by default because the hosts are on the seeded denylist, and the user turns them on by removing the host
+from the denylist. Sign-in for `https://accounts.google.com` (and every origin under YOLO, #110) is then on by
+default; for a bank outside YOLO the user must also enable sign-in for that origin. Every `auth.login` there still asks for consent unless
 the user ticked "always" for that account. Google account, password and mail pages stay never reachable
 (below). Accepted risk: clicks on Google's account chooser or an OAuth consent screen ("Allow") need only
 the site policy, not the sign-in consent, so an agent with `act` on `accounts.google.com` can grant an app
 access without typing a secret.
+
+### Agent-requested policy changes (#67, #104)
+
+Agents cannot write extension settings. Two `full`-level tools let a caller *request* a change, and
+the extension applies it only after the user approves a visible prompt in the side panel:
+
+- `policy.denylist_change`: an exact add/remove list of host globs.
+- `policy.site_change`: one exact origin and the sign-in (`auth`), site policy and lite-mode values
+  to set. The prompt shows the origin, each change and the agent's reason.
+
+These prompts (category p) offer only "Allow once" and "Deny". They cannot be pre-approved, and YOLO,
+saved site permissions and `devAllowSensitive` do not skip them. A denied or timed-out prompt changes
+nothing. The state the prompt was shown against is snapshotted before it is displayed; if the
+denylist or that site's settings change before the user answers, the approval is refused and the
+agent has to ask again. Turning things off (`auth: false`, `policy: "deny"`) goes through the same
+prompt.
+
+A site change is refused before any prompt for: browser and Web Store pages, the never-reachable
+hosts below, the banking and password-manager hosts where TabAgent never signs in, and any host on the
+denylist (the agent is told to request a denylist change first). Removing a bank from the denylist
+never lets TabAgent sign in there.
 
 ### Never reachable
 

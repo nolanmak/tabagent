@@ -13,6 +13,7 @@
 import { z } from "zod";
 import {
   accountId,
+  httpsOrigin,
   itemOnDomain,
   LOCAL_ID_RE,
   maskAccount,
@@ -153,13 +154,14 @@ export class BitwardenProvider implements BridgeProvider {
     return new TabAgentError("NOT_FOUND", "Bitwarden is locked", BW_HINTS.locked);
   }
 
-  private bw(args: string[], withKey: boolean) {
+  private bw(args: string[], withKey: boolean, input?: string) {
     const key = withKey ? this.key : null;
     if (withKey && !key) return Promise.reject(this.lockedError());
     return this.queue.run(() =>
       this.runner.run(this.bin, [...args, "--nointeraction", "--response"], {
         timeoutMs: CLI_TIMEOUT_MS,
         env: { BITWARDENCLI_APPDATA_DIR: this.o.dataDir, ...(key ? { BW_SESSION: key } : {}) },
+        ...(input !== undefined ? { input } : {}),
       }),
     );
   }
@@ -198,6 +200,8 @@ export class BitwardenProvider implements BridgeProvider {
           this.o.event?.("bitwarden.restore_failed", {});
           return;
         }
+        // Bitwarden says the saved session is dead (another `bw lock` or `bw unlock` ran in this data dir).
+        this.o.event?.("bitwarden.restore_rejected", { state });
       }
     }
     await this.o.keyStore?.clear().catch(() => {});
@@ -354,6 +358,78 @@ export class BitwardenProvider implements BridgeProvider {
 
   get totpState(): TotpState {
     return this.totp;
+  }
+
+  /** #112: the logged-in account's email from `bw status` (the default sign-up username). */
+  async accountEmail(): Promise<string | null> {
+    await this.tick();
+    if (!this.key) throw this.lockedError();
+    const r = await this.bw(["status"], true);
+    const e = (envelope(r.stdout).data as { template?: { userEmail?: unknown } } | undefined)?.template?.userEmail;
+    return typeof e === "string" && e.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(e) ? e : null;
+  }
+
+  /**
+   * #112 auth.signup: `bw generate -ulns --length 24`, then `bw create item` with the encoded item on
+   * stdin (base64 JSON, what `bw encode` prints), so the password is never in any argv. The item is a
+   * login named after the host with the origin as its URI (match = domain). Only the new item's metadata
+   * is kept and returned; the password is fetched later with secret() like any other.
+   */
+  async createLogin(o: { origin: string; username?: string }): Promise<AuthAccount> {
+    const origin = httpsOrigin(o.origin);
+    if (!origin) throw new TabAgentError("PERMISSION_DENIED", "Accounts are only created for https sites (DA3)");
+    await this.tick();
+    if (!this.key) throw this.lockedError();
+    const username = o.username ?? (await this.accountEmail());
+    if (!username) throw new TabAgentError("BAD_REQUEST", "No email for the new account", "Pass email= to auth.signup.");
+    const gen = await this.bw(["generate", "-ulns", "--length", "24"], true);
+    const genEnv = await this.envelopeOrLocked(gen.stdout);
+    let password: string | null = (genEnv.data as { data?: unknown } | undefined)?.data as string | null;
+    if (!genEnv.success || typeof password !== "string" || password.length < 16) {
+      await this.checkSession();
+      throw new TabAgentError("INTERNAL", "The Bitwarden CLI could not generate a password");
+    }
+    let encoded: string | null = null;
+    try {
+      const item = {
+        organizationId: null,
+        collectionIds: null,
+        folderId: null,
+        type: 1,
+        name: new URL(origin).host,
+        notes: null,
+        favorite: false,
+        fields: [],
+        login: { uris: [{ match: 0, uri: origin }], username, password, totp: null },
+        secureNote: null,
+        card: null,
+        identity: null,
+        reprompt: 0,
+      };
+      encoded = Buffer.from(JSON.stringify(item), "utf8").toString("base64");
+      const r = await this.bw(["create", "item"], true, encoded);
+      const env = await this.envelopeOrLocked(r.stdout);
+      const m = env.success ? projectItem(env.data) : null;
+      if (!m) {
+        await this.checkSession();
+        throw new TabAgentError("INTERNAL", "The Bitwarden CLI could not create the login");
+      }
+      this.cache.set(m.id, m);
+      this.lastFetch = this.now();
+      return { id: accountId(this.name, m.id), provider: this.name, accountMasked: m.accountMasked, hasTotp: m.hasTotp, passkeyOnly: m.passkeyOnly, reprompt: m.reprompt, uris: m.uris };
+    } finally {
+      password = null;
+      encoded = null;
+    }
+  }
+
+  private async envelopeOrLocked(stdout: string): Promise<Envelope> {
+    try {
+      return envelope(stdout);
+    } catch (e) {
+      await this.checkSession();
+      throw e;
+    }
   }
 
   async secret(localId: string, field: SecretRequestField): Promise<string> {

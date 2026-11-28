@@ -17,6 +17,14 @@ export interface BridgeProvider {
   find(origin: string): Promise<AuthAccount[]>;
   /** The value for one field of one item (`localId` is the part after `provider:`). */
   secret(localId: string, field: SecretRequestField): Promise<string>;
+  /**
+   * #112 auth.signup: create a login item for `origin` with a password the provider generates. Returns
+   * the new account (opaque id, masked name); the password stays in the vault until a `secret()` fetch.
+   * Only Bitwarden implements it; the bridge answers UNSUPPORTED for the others.
+   */
+  createLogin?(o: { origin: string; username?: string }): Promise<AuthAccount>;
+  /** #112: the provider account's own email (the default sign-up username), or null. */
+  accountEmail?(): Promise<string | null>;
   /** Kill switch / daemon exit: drop any held session (Bitwarden runs `bw lock`). */
   drop?(reason: string): Promise<void>;
   /** auth.login classified `next: "unknown"` with the form still present: the password may have changed. */

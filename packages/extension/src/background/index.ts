@@ -1,11 +1,12 @@
 // TabAgent service worker: wires the bridge client, the command router, the
 // permission gate, the kill switch, the badge and the UI API together.
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
-import { getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { AGENTS_FEATURE, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
 import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
+import { agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, sendToAgent, setAgentsSender, setAgentStatusListener } from "./bridgeAgents";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
 import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
@@ -16,6 +17,7 @@ import { extraHandlers, fireKilled } from "./handlerRegistry";
 import { broadcast, feedAll, feedPush } from "./feed";
 import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
 import type { PromptInfo } from "./prompts";
+import { policyPrecheck } from "./handlers/policy";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
@@ -25,7 +27,7 @@ import { handlers } from "./tools";
 import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
-const FEATURES = ["files.resolve"];
+const FEATURES = ["files.resolve", AGENTS_FEATURE];
 
 // ---------------------------------------------------------------------------
 // Bridge connection (D4, D5, D11)
@@ -54,6 +56,9 @@ const bridge = createBridgeClient({
   clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 });
 setFilesSender((m) => bridge.send(m));
+setAgentsSender((m) => bridge.send(m));
+// AD7: later delivery states go to the side panel feed, keyed by requestId.
+setAgentStatusListener((m) => broadcast(m));
 setAuthSender((m) => bridge.send(m));
 setCaptchaSender((m) => bridge.send(m));
 
@@ -62,6 +67,7 @@ function sendEvent(event: string, data: Record<string, unknown> = {}) {
 }
 
 function onBridgeMessage(msg: any) {
+  if (onAgentsBridgeMessage(msg)) return;
   switch (msg?.type) {
     case "command":
       router.handle(msg).then((env) => bridge.send(env));
@@ -73,6 +79,7 @@ function onBridgeMessage(msg: any) {
       onFilesResolved(msg);
       break;
     case "auth.accounts.result":
+    case "auth.signup.result":
     case "secret":
       onAuthBridgeMessage(msg);
       break;
@@ -142,7 +149,7 @@ export const router = createRouter<Session>({
   onInflight: () => refreshBadge(),
   captureWorkflowStep: captureAgentStep,
   recordWorkflowStep: recordAgent,
-  policySnapshot: async () => (await getSettings()).denylist.map((glob) => glob.trim().toLowerCase()).filter(Boolean).sort().join("\u0000"),
+  policySnapshot: policyPrecheck,
 });
 
 // ---------------------------------------------------------------------------
@@ -337,7 +344,7 @@ function stoppedTabs() {
 async function uiState() {
   const s = await getSettings();
   const workflowTabs = (await chrome.tabs.query({})).filter((tab) => tab.id != null && /^https?:/i.test(tab.pendingUrl || tab.url || "")).map((tab) => ({ id: tab.id!, title: tab.title || tab.url || `Tab ${tab.id}`, url: tab.pendingUrl || tab.url || "" }));
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), version: VERSION, extensionId: chrome.runtime.id };
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -372,6 +379,19 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await endSession(msg.id);
         sendEvent("session.ended", { sessionId: msg.id });
         return { ok: true };
+      case "ui.agents_list": {
+        // AD1/AD16: the panel lists agents through the worker; the bridge answers only on this socket.
+        if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return { supported: false, agents: [], sources: { claude: "unavailable", codex: "unavailable" } };
+        return { supported: true, ...(await listAgents()) };
+      }
+      case "ui.agent_send": {
+        // AD14: only extension pages reach here (gate above). AD17: paused -> PAUSED, nothing is sent.
+        const req = agentSendRequest(msg, await isPaused());
+        if (!req.ok) return req.reply;
+        if (!agentsSupported(FEATURES, bridge.bridgeFeatures()))
+          return { type: "agent.sent", requestId: req.msg.requestId, route: "none", state: "failed", code: "NO_EXTENSION", detail: "The bridge does not support Send to agent; update @nolmak/tabagent" };
+        return sendToAgent(req.msg);
+      }
       case "ui.answer":
         return { ok: answerPrompt(msg.promptId ?? msg.id, msg.answer) };
       case "ui.prompt.get":
@@ -455,6 +475,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   resume,
   status: () => bridge.status(),
   features: FEATURES,
+  bridgeFeatures: () => bridge.bridgeFeatures(),
   pendingPrompts,
   answerPrompt,
   listSessions,

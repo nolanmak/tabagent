@@ -93,7 +93,9 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
   - **Unpaired:** a valid pair code (one-time, 30-minute TTL, invalidated after
     5 wrong attempts; `tabagent pair` mints a new one) is accepted; the bridge
     records the extension ID in `config.json.extensionIds` and replies
-    `welcome {protocolVersion, bridgeVersion, secret}`.
+    `welcome {protocolVersion, bridgeVersion, secret, features?}`. Both hello and
+    welcome may list optional `features` (`files.resolve`, `agents`); a side
+    uses a feature only when the other advertises it.
   - **Paired:** hello must carry the secret and come from a recorded extension ID.
   - One extension connection: a reconnect from the same ID replaces the old
     socket, which is closed at once (terminated if it has not closed within
@@ -138,7 +140,7 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
 - Bridge `config.json` (directory overridable with `TABAGENT_HOME`): port,
   secret, extensionIds, tokens, uploadDirs, maxReadBytes.
 - Extension `chrome.storage.local`: per-origin site entries (policy, lite mode,
-  pre-approvals), denylist edits, session-end behaviour (default collapse and
+  pre-approvals, sign-in on/off and "always" accounts), denylist edits, session-end behaviour (default collapse and
   keep), `beforeunload` policy (default accept), on-page border (default on),
   `devAllowSensitive` (default off).
 
@@ -371,7 +373,10 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   the accessible name; (c) arbitrary JS: `js.eval`, `nav.wait` with `fn`;
   (d) credential reads: `cookies.get`, `storage.get`, `network.get`;
   (e) local file transfer: `act.upload`, `downloads.read`; (f) `tabs attach`.
-  Pre-approval is per origin per category a–e; f always asks. Password and card
+  Pre-approval is per origin per category a–e; f always asks. Choosing `full`
+  in the side panel also sets sign-in and all a–e pre-approvals for the origin
+  (sign-in skipped, with a reason shown, on auth-deny, vault or denylisted
+  hosts); other levels change only the policy (#118). Password and card
   values are masked as `••••` in snapshots, diffs, `form.describe`, the live
   feed and the audit record. Screenshots are not masked.
 - **Prompts (D19).** Chrome only opens the side panel on a user gesture, so a
@@ -400,6 +405,24 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   user-editable list (password managers, banking, Google sign-in) are refused.
   Password-manager hosts are also hard-blocked for the auth tools; Google and
   banking sign-in are not (the user can unlock them, #79, #100).
+- **Agent-requested policy changes (category p, #67, #104).** MCP never writes
+  extension settings. A `full`-level caller can only *request* an exact change,
+  and the extension applies it after a visible one-time approval in the side
+  panel. `policy.denylist_change` takes an add/remove list of host globs.
+  `policy.site_change` takes one exact http(s) origin (normalised; wildcards,
+  paths and credentials are rejected) and `changes: {auth?, policy?, lite?}`.
+  `policy: "ask"` removes the stored policy, and `auth: false` also clears the
+  site's "always" accounts, the same as the side panel (under YOLO, where sign-in
+  is on by default (#110), that stores an explicit `auth: false`). Before the prompt, the
+  router asks the extension to check the request and snapshot the state it will
+  be shown against. A site change on a hard-denied, never-reachable (vault),
+  password-manager (auth-blocked) or denylisted host is refused there
+  without a prompt; the denylisted case hints to request a denylist change
+  first. After approval the handler re-reads settings and refuses with
+  `BAD_REQUEST` if the snapshot no longer matches (a stale approval). Category
+  p has no "Always" button, cannot be pre-approved, and is not skipped by YOLO
+  or `devAllowSensitive`. Turning things off goes through the same prompt, so
+  there is one code path.
 - **Visibility (D40).** Badge states: off, connected, acting, needs approval,
   paused. A coloured tab group per session; an on-page border (default on) and
   target highlights. Overlay elements carry `data-tabagent-overlay`, have
