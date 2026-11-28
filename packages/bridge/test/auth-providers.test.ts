@@ -254,7 +254,7 @@ describe("Bitwarden provider (bw, #37)", () => {
 // ---------------------------------------------------------------------------
 describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)", () => {
   const KEY = "K".repeat(12) + randomBytes(12).toString("base64url");
-  function memBw() {
+  function memBw(limits: { idleLockMs?: number; maxUnlockMs?: number } = {}) {
     const calls: { args: string[]; env: Record<string, string | undefined> }[] = [];
     let gate: Promise<void> | null = null;
     const items = [bwItem({ id: "item-000001", uris: [{ uri: "https://github.com" }], totp: "seed" })];
@@ -276,7 +276,7 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
     };
     let now = 0;
     const events: string[] = [];
-    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, now: () => now, event: (e, d) => events.push(`${e}:${(d as { reason?: string }).reason ?? ""}`) });
+    const p = new BitwardenProvider({ ...limits, bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, now: () => now, event: (e, d) => events.push(`${e}:${(d as { reason?: string }).reason ?? ""}`) });
     return {
       p,
       calls,
@@ -317,6 +317,16 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
     expect(m.p.unlocked).toBe(true);
     m.advance(2 * MIN);
     await m.p.tick();
+    expect(m.p.unlocked).toBe(false);
+  });
+
+  it("with both limits off (Infinity) it stays unlocked for a month of idling", async () => {
+    const m = memBw({ idleLockMs: Infinity, maxUnlockMs: Infinity });
+    await m.p.setSession(KEY);
+    m.advance(30 * 24 * 60 * MIN);
+    await m.p.tick();
+    expect(m.p.unlocked).toBe(true);
+    await m.p.drop("lock");
     expect(m.p.unlocked).toBe(false);
   });
 
@@ -405,5 +415,73 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
     await m.p.setSession(KEY);
     await m.p.secret("item-000001", "password");
     for (const c of m.calls) expect(c.args.join(" ")).not.toContain(KEY);
+  });
+});
+
+describe("Bitwarden rememberUnlock (Keychain)", () => {
+  const KEY2 = "R".repeat(12) + randomBytes(12).toString("base64url");
+  function setup(remember: boolean, saved: string | null = null) {
+    let stored = saved;
+    const ops: string[] = [];
+    const keyStore = {
+      load: async () => stored,
+      save: async (k: string) => { stored = k; ops.push("save"); },
+      clear: async () => { stored = null; ops.push("clear"); },
+    };
+    const calls: string[] = [];
+    const runner: Runner = {
+      async run(_bin, args, o) {
+        const a = args.filter((x) => !x.startsWith("--n") && x !== "--response");
+        calls.push(a[0]);
+        const has = o?.env?.BW_SESSION === KEY2;
+        const r = (x: { stdout: string }) => ({ code: 0, stdout: x.stdout, stderr: "" });
+        if (a[0] === "status") return r(ok({ object: "template", template: { status: has ? "unlocked" : "locked" } }));
+        if (a[0] === "lock") return r(ok({}));
+        if (a.join(" ") === "list items" && has) return r(ok({ object: "list", data: [] }));
+        return { code: 1, stdout: bad().stdout, stderr: "" };
+      },
+    };
+    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, remember: () => remember, keyStore });
+    return { p, ops, calls, stored: () => stored };
+  }
+
+  it("saves on unlock and restores on the next start without locking", async () => {
+    const a = setup(true);
+    await a.p.setSession(KEY2);
+    expect(a.stored()).toBe(KEY2);
+    await a.p.drop("daemon-exit");
+    expect(a.stored()).toBe(KEY2);
+    expect(a.calls).not.toContain("lock");
+    const b = setup(true, KEY2);
+    await b.p.startup({});
+    expect(b.p.unlocked).toBe(true);
+    expect(b.calls).not.toContain("lock");
+  });
+
+  it("an explicit lock or the kill switch deletes the saved key", async () => {
+    for (const reason of ["lock", "kill", "idle"]) {
+      const a = setup(true);
+      await a.p.setSession(KEY2);
+      await a.p.drop(reason);
+      expect(a.stored()).toBeNull();
+      expect(a.calls).toContain("lock");
+    }
+  });
+
+  it("off: never saves, and startup clears any old key and locks", async () => {
+    const a = setup(false, KEY2);
+    await a.p.startup({});
+    expect(a.p.unlocked).toBe(false);
+    expect(a.stored()).toBeNull();
+    expect(a.calls).toContain("lock");
+    await a.p.setSession(KEY2);
+    expect(a.ops).not.toContain("save");
+  });
+
+  it("a saved key the vault no longer accepts is discarded", async () => {
+    const a = setup(true, "X".repeat(20));
+    await a.p.startup({});
+    expect(a.p.unlocked).toBe(false);
+    expect(a.stored()).toBeNull();
   });
 });

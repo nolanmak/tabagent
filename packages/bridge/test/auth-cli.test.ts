@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { BitwardenProvider } from "../src/auth/bitwarden";
 import { authConfigCommand, bitwardenCommand, doctorCommand, resolveBin, SMS_EXPLAIN } from "../src/auth/cli";
-import { readAuthConfig } from "../src/auth/config";
+import { lockMs, readAuthConfig } from "../src/auth/config";
 import { OnePasswordProvider } from "../src/auth/onepassword";
 import { SmsSource } from "../src/auth/sms";
 import { bwScenario, fakeCliDir, opScenario, type FakeCliDir } from "./auth-fakes";
@@ -36,6 +36,22 @@ describe("config auth.sms", () => {
     expect(r.code).toBe(1);
     expect(r.out).toEqual(SMS_EXPLAIN);
     expect(readAuthConfig(cfgPath).sms).toBe(false);
+  });
+  it("rememberUnlock is off by default and toggles on|off", () => {
+    expect(readAuthConfig(cfgPath).bitwarden.rememberUnlock).toBeUndefined();
+    expect(authConfigCommand(["auth.bitwarden.rememberUnlock", "on"], cfgPath).code).toBe(0);
+    expect(readAuthConfig(cfgPath).bitwarden.rememberUnlock).toBe(true);
+    expect(authConfigCommand(["auth.bitwarden.rememberUnlock", "maybe"], cfgPath).code).not.toBe(0);
+  });
+  it("bitwarden locks accept never/0 to turn a timer off", () => {
+    expect(authConfigCommand(["auth.bitwarden.idleLockMinutes", "never"], cfgPath).code).toBe(0);
+    authConfigCommand(["auth.bitwarden.maxUnlockHours", "0"], cfgPath);
+    expect(readAuthConfig(cfgPath).bitwarden).toEqual({ idleLockMinutes: 0, maxUnlockHours: 0 });
+    expect(lockMs(0, 60_000)).toBe(Infinity);
+    expect(lockMs(30, 60_000)).toBe(1_800_000);
+    authConfigCommand(["auth.bitwarden.idleLockMinutes", "2"], cfgPath);
+    expect(readAuthConfig(cfgPath).bitwarden.idleLockMinutes).toBe(5);
+    expect(authConfigCommand(["auth.bitwarden.idleLockMinutes", "soon"], cfgPath).code).not.toBe(0);
   });
   it("defaults: sms off, 1password only, bitwarden locks clamp to their ranges", () => {
     expect(readAuthConfig(cfgPath)).toEqual({ providers: ["1password"], sms: false, bitwarden: { idleLockMinutes: 30, maxUnlockHours: 8 } });
