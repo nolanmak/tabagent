@@ -7,6 +7,7 @@ import { disposeDrivers } from "./driver";
 import { broadcast } from "./feed";
 import { clearGrants, prompts } from "./permissions";
 import { getSettings } from "./settings";
+import { focusRefusal, sessionView, type SessionView } from "../pure/sessionsView";
 
 type GroupColor = "grey" | "blue" | "red" | "yellow" | "green" | "pink" | "purple" | "cyan" | "orange";
 
@@ -82,7 +83,57 @@ export function onSessionsChanged(fn: () => void) {
 async function persist() {
   await chrome.storage.session.set({ sessions: [...sessions.values()], nextIndex }).catch(() => {});
   onChange?.();
-  broadcast({ type: "sessions", sessions: listSessions() });
+  broadcastSessions();
+}
+
+/** listSessions() plus each session's tabs with titles (#133), for the side panel. */
+export async function sessionsView(): Promise<SessionView[]> {
+  const list = listSessions();
+  const titles: Record<number, string | undefined> = {};
+  await Promise.all(
+    list.flatMap((s) => s.tabIds).map(async (id) => {
+      titles[id] = await chrome.tabs.get(id).then(
+        (t) => t.title || t.pendingUrl || t.url,
+        () => undefined,
+      );
+    }),
+  );
+  return list.map((s) => sessionView(s, titles));
+}
+
+let broadcastSeq = 0;
+/** Titles are read asynchronously; only the newest view is sent so a slow read never overwrites a fresher one. */
+function broadcastSessions() {
+  const seq = ++broadcastSeq;
+  void sessionsView().then(
+    (sessions) => {
+      if (seq === broadcastSeq) broadcast({ type: "sessions", sessions });
+    },
+    () => {},
+  );
+}
+
+/**
+ * ui.focusTab (#133): the user asked to see a session's tab. Only tabs a session owns; a tab that
+ * has since closed leaves its session (which refreshes the panel) and reports "Tab closed".
+ */
+export async function focusSessionTab(tabId: unknown) {
+  await restoreSessions();
+  const refused = focusRefusal(tabId, (id) => owner.get(id));
+  if (refused) throw new Error(refused);
+  const id = tabId as number;
+  const tab = await chrome.tabs.get(id).catch(() => undefined);
+  if (!tab) {
+    await removeTab(id);
+    throw new Error("Tab closed");
+  }
+  await chrome.tabs.update(id, { active: true });
+  await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  if (tab.groupId != null && tab.groupId >= 0) {
+    const g = await chrome.tabGroups.get(tab.groupId).catch(() => undefined);
+    if (g?.collapsed) await chrome.tabGroups.update(g.id, { collapsed: false }).catch(() => {});
+  }
+  return { ok: true, tabId: id };
 }
 
 export function listSessions() {
@@ -412,4 +463,6 @@ chrome.webNavigation?.onCreatedNavigationTarget?.addListener((d) => {
 
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.groupId !== undefined) onGroupChanged(tabId, info.groupId).catch(() => {});
+  // the panel lists session tabs by title (#133)
+  if (info.title !== undefined && owner.has(tabId)) broadcastSessions();
 });
