@@ -309,3 +309,93 @@ describe("piggyback route (AD6, AD7, AD8)", () => {
     ]);
   });
 });
+
+describe("channel route (AD6, AD7, AD9: P3)", () => {
+  const chan = (session = "100-aaaaaa") => proxyHeaders(session, { "x-tabagent-channels": "1" });
+  const ack = (msgId: string, session = "100-aaaaaa") => rest(base, "/v1/inbox/ack", d.cfg.secret, { msgId }, { "x-tabagent-session": session });
+  const pushes = (s: Inbox) => s.events.filter((e) => e.event === "message").map((e) => e.data);
+
+  it("a linked Claude agent whose proxy reported channels=1 is listed with delivery channel", async () => {
+    await boot();
+    await openInbox(d.cfg.secret, chan());
+    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: true, delivery: "channel" });
+  });
+  it("pushes {msgId, kind: channel, content} on the stream; sent only after the proxy acks (never delivered)", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "c1", agentId: AGENT, prompt: "Reply with CHANNEL-OK", includeTab: false });
+    await until(() => pushes(s).length === 1);
+    const [p] = pushes(s);
+    expect(p).toEqual({ msgId: expect.any(String), kind: "channel", content: `${H}\nReply with CHANNEL-OK` });
+    // Not yet acked: no reply.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ext.msgs.some((m) => m.type === "agent.sent" && m.requestId === "c1")).toBe(false);
+    expect((await ack(p.msgId)).body).toEqual({ ok: true });
+    const sent = await ext.next("agent.sent", (m) => m.requestId === "c1");
+    const { __seen: _s, ...wire } = sent;
+    expect(wire).toEqual({ type: "agent.sent", requestId: "c1", route: "channel", state: "sent" });
+    // Nothing is held for piggyback, so the next tool result carries no copy.
+    expect((await tool()).body.userMessages).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ext.msgs.some((m) => m.type === "agent.status" && m.requestId === "c1")).toBe(false);
+  });
+  it("no ack within the timeout -> failed CHANNEL_TIMEOUT", async () => {
+    await boot({ channelAckTimeoutMs: 150 });
+    const s = await openInbox(d.cfg.secret, chan());
+    const sent = await send({ requestId: "c2" });
+    expect(sent).toMatchObject({ route: "channel", state: "failed", code: "CHANNEL_TIMEOUT" });
+    expect(sent.detail).toMatch(/did not confirm/);
+    // A late ack is refused.
+    expect((await ack(pushes(s)[0].msgId)).status).toBe(404);
+  });
+  it("the stream closes before the ack -> failed AGENT_GONE", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "c3", agentId: AGENT, prompt: "x", includeTab: false });
+    await until(() => pushes(s).length === 1);
+    s.close();
+    const sent = await ext.next("agent.sent", (m) => m.requestId === "c3");
+    expect(sent).toMatchObject({ route: "channel", state: "failed", code: "AGENT_GONE", detail: "The agent's TabAgent connection closed" });
+  });
+  it("channels=0 falls back to piggyback (held)", async () => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    expect(await send({ requestId: "c4" })).toMatchObject({ route: "piggyback", state: "held" });
+  });
+  it("audits the channel send with route channel and state sent", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "c5", agentId: AGENT, prompt: "x", includeTab: false });
+    await until(() => pushes(s).length === 1);
+    await ack(pushes(s)[0].msgId);
+    await ext.next("agent.sent", (m) => m.requestId === "c5");
+    const { readFileSync } = await import("node:fs");
+    await until(() => readFileSync(d.audit.path, "utf8").includes('"c5"'));
+    const ev = readFileSync(d.audit.path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.event === "agent.send" && r.data?.requestId === "c5")
+      .map((r) => [r.data.route, r.data.state]);
+    expect(ev).toEqual([["channel", "sent"]]);
+  });
+});
+
+describe("POST /v1/inbox/event (AD9: ignored channel permission requests are audited)", () => {
+  const event = (body: unknown, token = d.cfg.secret) => rest(base, "/v1/inbox/event", token, body, { "x-tabagent-mcp": "1", "x-tabagent-session": "100-aaaaaa" });
+  it("audits channel.permission_ignored with the method and the session; nothing else is accepted", async () => {
+    await boot();
+    expect((await event({ event: "channel.permission_ignored", method: "notifications/claude/channel/permission_request" })).body).toEqual({ ok: true });
+    expect((await event({ event: "something.else", method: "x" })).status).toBe(400);
+    expect((await event({ event: "channel.permission_ignored", method: "x".repeat(201) })).status).toBe(400);
+    expect((await event({ event: "channel.permission_ignored", method: "x" }, "nope")).status).toBe(401);
+    const { readFileSync } = await import("node:fs");
+    const ev = readFileSync(d.audit.path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.event === "agent.channel_permission_ignored");
+    expect(ev).toHaveLength(1);
+    expect(ev[0].data).toEqual({ method: "notifications/claude/channel/permission_request", session: "mcp:local:100-aaaaaa" });
+  });
+});
