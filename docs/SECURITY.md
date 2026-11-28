@@ -95,6 +95,70 @@ passkeys, payment entry) from your phone over Tailscale. It is off by default. W
   and `handoff.webhook` events record the origin and the first 8 hex digits of the handoff id. They
   never record the token, the cookie or the link.
 
+### Answering prompts outside the side panel (opt-in, #108)
+
+By default a permission prompt can be answered only in the side panel (or the prompt window), which an
+agent cannot drive. The side-panel setting **Answer prompts outside this panel** adds two more ways:
+`tabagent approve` with Touch ID or your login password (macOS), and a one-time phone page on your
+tailnet. The rule is that **the bridge never relays an answer without proof that you are there.** There
+is no flag, environment variable, config key or token that skips it.
+
+- **Off by default, panel-only.** Only the side panel can turn it on or off. `settings.change` refuses it
+  and no tool or REST route sets it. Each change is written to the audit log. While it is off, the
+  extension tells the bridge nothing about prompts and refuses every `prompt.answer`.
+- **One decision point.** With it on, the extension mirrors its pending prompts to the bridge with the
+  exact strings the panel shows. The extension stays the only place that decides: the bridge sends
+  `prompt.answer`, and the extension applies it through the same queue as a panel click. The first
+  answer wins. A second answer from any channel gets "already answered" and changes nothing. An answer
+  at or after the 120 s expiry never executes, even if the timeout has not fired yet. An answer the
+  prompt does not offer (for example "Always" on a policy change) is refused. The `decision` audit
+  event records the channel: `panel`, `cli-presence` or `phone`.
+- **`tabagent approve` (macOS).** The bridge runs the presence check itself, not the CLI. For each
+  answer it issues a single-use challenge bound to that prompt id and answer, valid for 90 s, with a
+  fresh random 256-bit key. A small Swift helper, compiled once with `swiftc` into `~/.tabagent/bin`,
+  evaluates LocalAuthentication's `deviceOwnerAuthentication` policy (Touch ID, or the login password)
+  with a reason that names the answer and the prompt title. Only on success does it return an HMAC of
+  the challenge under that key. The key exists only in bridge memory and on the helper's stdin pipe.
+  The bridge accepts the MAC once and then relays the answer. The CLI sends only `{promptId, answer}`,
+  and the bridge ignores anything else in the request. Only one check runs at a time, and a cancelled
+  check blocks new ones for 10 s, so an agent cannot stack dialogs. On Linux and Windows,
+  `tabagent approve` refuses and points to the side panel or the phone page. These routes accept only
+  the bridge secret, not per-client tokens.
+- **Phone page.** It needs `handoff.remote on` and uses the remote handoff listener and its rules: the
+  tailnet address only, the exact `Host`, a one-time link (128-bit id, 256-bit token, hashed), a token
+  claimed once for an `HttpOnly; SameSite=Strict` cookie scoped to `/approve/<id>`, and the
+  `x-tabagent-handoff: 1` header. The bridge hands out a link only after a presence check
+  (`tabagent approve --phone`) or a click on **Phone link for approvals** in the side panel. It is
+  **never posted to the handoff webhook**, because an agent can point the webhook at itself with
+  `tabagent config`. A link lasts 60 minutes by default (1 to 120). It ends when you press End link,
+  on the kill switch, when outside approvals are turned off, when the bridge stops, or when it expires.
+  It survives an extension reconnect, but nothing can be answered while the extension is away. The
+  listener is open only while a handoff or an approval link is live. The page fetches prompts as JSON
+  and renders them with `textContent`, so prompt text cannot become markup.
+- **Audit.** `approval.presence` (purpose and outcome), `approval.answer` (channel, prompt, answer,
+  outcome) and `approval.phone.link` / `.claim` / `.end` / `.revoke`, which record the first 8 hex
+  digits of the link id. None of them records a key, a MAC, a token, a cookie or a link.
+
+**What this protects against.** An agent that uses TabAgent's own interfaces cannot answer a prompt.
+That covers MCP tools, the REST API with a token or the bridge secret, and the CLI, including running
+`tabagent approve` and `tabagent config` itself. Calling the approve route only shows a Touch ID or
+password dialog that names the prompt and the answer, and only you can satisfy it. Getting a phone link
+needs the same dialog or a click in the side panel.
+
+**What it does not protect against.** The value of the proof comes from the LocalAuthentication
+evaluation needing a person. It does not come from a secret that an agent running as you cannot read.
+The key and MAC only bind a successful evaluation to one challenge inside the bridge.
+
+- *A local process that tampers with TabAgent* (D3). Such a process can replace the compiled helper or
+  the bridge's installed files. It can stop the bridge and serve its own on the port, and the extension
+  would then accept `prompt.answer` from it. It can also connect to the extension socket with the
+  secret from `config.json` and ask for a phone link. Any of these can answer prompts. Without this
+  setting, the same process cannot answer prompts through TabAgent, which is why the setting is off by
+  default. Turn it on only if you accept that risk for your agents.
+- *A dialog you did not start.* If an agent runs `tabagent approve 1 always`, the dialog still shows
+  what is being approved. Read it before you touch the sensor.
+- *A leaked phone link.* Anyone on your tailnet with an unclaimed link can answer prompts until it ends.
+
 ## Untrusted page content: wrapping is a label, not a guarantee (D21)
 
 Pages can contain text written to manipulate an AI agent ("ignore previous instructions…").
@@ -127,7 +191,19 @@ by *effect*, so there is no side door through a different tool:
 | c | Arbitrary JavaScript | `js.eval`, `nav.wait` with `for: fn` (both need `full` on the site) |
 | d | Credential reads | `cookies.get`, `storage.get`, `network.get` (`network.list` never returns header values) |
 | e | Local file transfer | `act.upload`, `downloads.read` |
-| f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved) |
+| f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved; see "Send to agent" below for the one user-initiated exception) |
+
+**Send to agent shares a tab without the f prompt.** When *you* send a message from the side panel
+with "Share this tab" ticked, to a linked Claude Code agent whose TabAgent tools can drive tabs (the
+label then reads "Share this tab (agent can use it)"), that click is the attach consent: the tab
+moves into the agent's tab group with no further prompt. Only the side panel can start a send: there
+is no REST, CLI or page route, and the worker has a single
+caller for the grant. The tab is not shared when another agent owns it or it is handed to you
+(`TAB_BUSY`), when it is a private sign-in tab or outside a token's allowed sites
+(`PERMISSION_DENIED`), when it is closed (`NOT_FOUND`) or while TabAgent is paused; the agent then
+gets only the title and link, and the panel shows "tab not shared: <code>". If the message expires
+before the agent picks it up, the tab is ungrouped and left open. The grant is the attach only: the
+site policy prompt, token scope and every gate above still apply on the agent's first action.
 
 Categories a–e can be pre-approved per origin; f always asks. Choosing `full` for a site in the side
 panel (adding it or changing its row) also turns on sign-in, sign-in without asking (below) and
@@ -150,6 +226,12 @@ it is tainted, every c and d tool is refused on it, whatever the site policy, pr
 YOLO say. `network.get` never returns a request that started while the tab was tainted. For 10
 minutes, any result or error that contains a typed password or code is withheld. Auth also refuses
 to type into a page where agent JavaScript (`js.eval`, `nav.wait` fn) has run.
+
+If the extension reloads while a tab is tainted or dirty, the per-tab state is lost, so TabAgent fails
+closed: every tab counts as tainted and dirty for 10 minutes. Auth errors in that window say TabAgent
+restarted and when typing resumes (#140). The side panel shows the lock with an "End lock now" button
+for the user, typically after reloading TabAgent themselves. Agents can't reach it (panel-only
+`ui.endRestartLock`), and taint recorded after the restart still applies.
 
 ### Sign in without asking (#131)
 
@@ -215,6 +297,30 @@ hosts below, the banking and password-manager hosts where TabAgent never signs i
 denylist (the agent is told to request a denylist change first). Removing a bank from the denylist
 never lets TabAgent sign in there.
 
+### YOLO and developer mode (#109)
+
+`policy.mode_change {yolo?, devAllowSensitive?, durationMin?, reason}` (also `full`-level) is the
+only way an agent can touch YOLO or `devAllowSensitive`:
+
+- **Turning either off** applies at once with no prompt, since it only narrows what agents may do.
+  It is in the audit log with the agent's reason, like every call.
+- **Turning either on** is a category p prompt like the tools above: "Allow once" or "Deny" only, not
+  skipped by YOLO, `devAllowSensitive` or saved permissions, and snapshotted so a change to either mode
+  (or YOLO's expiry) while the prompt is open refuses the approval. Whether a prompt is needed depends
+  only on the request (any `true`), never on the current state. The prompt lists each change, the
+  duration (or "no time limit"), the reason, and what the mode allows: YOLO means every site without
+  asking, sign-in on every site and no sensitive-action confirmations; developer mode means no
+  confirmations for form submits with secrets, risky clicks, JavaScript, credential reads and file
+  transfers. A request that turns one mode on and the other off is one approval; a denial applies
+  neither.
+- **`durationMin`** (1 to 1440, only with `yolo: true`) stores an expiry timestamp. A `chrome.alarms`
+  alarm switches YOLO off at that time, and every settings read also treats an expired YOLO as off, so
+  the limit holds across service-worker and browser restarts even if the alarm is late. The expiry is
+  audited (`yolo.expired`) and the side panel shows the time left. Without `durationMin` YOLO stays on
+  until the user turns it off, as from the panel; turning YOLO off by any route clears the expiry.
+
+A request that changes nothing is refused with `BAD_REQUEST`.
+
 ### Settings agents can read and change (#105, #106)
 
 `settings.get` lets any caller read the denylist, each saved site's policy, sign-in and lite mode,
@@ -225,8 +331,8 @@ field from an allowlist: it never returns the pairing secret, bridge tokens or s
 `settings.change` sets only preferences that do not widen what an agent can do: `showOverlay`,
 `beforeUnload`, `onSessionEnd`, `forceLite` and `liteSites`. It needs no approval but an `act`-capable
 token, and each call is in the audit log. Anything else is refused with a pointer: YOLO and
-`devAllowSensitive` stay panel-only (#109), and the denylist and sites go through the approval-gated
-policy tools above.
+`devAllowSensitive` go through `policy.mode_change` (#109), and the denylist and sites through the
+other approval-gated policy tools above.
 
 ### Never reachable
 

@@ -3,8 +3,8 @@
 import type { Agent, AgentStatus } from "@tabagent/protocol";
 import { chooseRoute } from "./route";
 
-/** An agent before linking and routing are known. */
-export type AgentBase = Omit<Agent, "linked" | "canDriveTab" | "delivery">;
+/** An agent before linking and routing are known. `sessionId` (Claude) finds the transcript title; never on the wire. */
+export type AgentBase = Omit<Agent, "linked" | "canDriveTab" | "delivery"> & { sessionId?: string };
 
 export type ParsedAgentId = { vendor: "claude"; pid: number; startedAt: number } | { vendor: "codex"; threadId: string };
 
@@ -67,6 +67,7 @@ export function parseClaudeAgents(stdout: string): AgentBase[] {
       startedAt,
       pid,
       ...claudeStatus(rec),
+      ...(typeof rec.sessionId === "string" && rec.sessionId ? { sessionId: rec.sessionId } : {}),
     });
   }
   return out;
@@ -97,6 +98,7 @@ export function codexThreadToAgent(thread: unknown): AgentBase | null {
     id: codexAgentId(t.id),
     vendor: "codex",
     name: typeof t.name === "string" && t.name ? t.name : null,
+    ...(typeof t.name === "string" && t.name ? { title: t.name } : {}),
     cwd: typeof t.cwd === "string" ? t.cwd : "",
     // createdAt is Unix seconds.
     startedAt: typeof t.createdAt === "number" ? t.createdAt * 1000 : 0,
@@ -115,8 +117,11 @@ export type LinkOf = (a: AgentBase) => AgentLink | null;
 
 /** An agent with its link (null: not linked) and the route the bridge would pick now (AD6). */
 export function toAgent(a: AgentBase, link: AgentLink | null = null): Agent {
+  const { sessionId: _sessionId, ...rest } = a;
   const linked = !!link;
-  return { ...a, linked, canDriveTab: linked && link.canDriveTab, delivery: chooseRoute({ vendor: a.vendor, status: a.status, linked, channels: link?.channels }) };
+  // #137: the title falls back to the vendor name.
+  const title = rest.title ?? rest.name ?? undefined;
+  return { ...rest, ...(title ? { title } : {}), linked, canDriveTab: linked && link.canDriveTab, delivery: chooseRoute({ vendor: a.vendor, status: a.status, linked, channels: link?.channels }) };
 }
 
 /** Merge per-source lists: unique ids, newest first (stable for ties). `linkOf` marks linked agents. */

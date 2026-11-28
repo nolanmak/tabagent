@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   AGENTS_FEATURE,
+  APPROVALS_FEATURE,
   authExtraTimeout,
   captchaExtraTimeout,
   defaultTimeout,
@@ -14,8 +15,10 @@ import {
   getTool,
   HelloSchema,
   INBOX_ACK_PATH,
+  INBOX_EVENT_PATH,
   INBOX_PATH,
   InboxAckSchema,
+  InboxEventSchema,
   normalizeHello,
   PROTOCOL_VERSION,
   ResultEnvelopeSchema,
@@ -32,6 +35,8 @@ import {
   type SessionMeta,
 } from "@tabagent/protocol";
 import { AgentsBridge, type AgentsOpts, type Held } from "./agents";
+import { ApprovalsBridge, approveStatus } from "./approvals";
+import { defaultPresenceProvider, type PresenceProvider } from "./approvals/presence";
 import { parseInboxHeaders, type InboxConn } from "./agents/inbox";
 import { AuditWriter } from "./audit";
 import { createAuth, type Auth } from "./auth";
@@ -93,10 +98,15 @@ export interface DaemonOpts {
   postWebhook?: HandoffBridgeOpts["postWebhook"];
   /** Send to agent: stub `claude` binary, Codex socket path, timeouts (tests). */
   agents?: AgentsOpts;
+  /**
+   * #108: presence provider for `tabagent approve`. Tests only: production always uses
+   * defaultPresenceProvider() (platform-chosen). No CLI flag, env var or config key reaches this.
+   */
+  presence?: PresenceProvider;
 }
 
 /** Optional capabilities the bridge advertises in welcome (AD16). */
-export const BRIDGE_FEATURES = [AGENTS_FEATURE];
+export const BRIDGE_FEATURES = [AGENTS_FEATURE, APPROVALS_FEATURE];
 
 /**
  * Commands that only read, so re-running one is harmless. When a newer socket from the same extension
@@ -155,6 +165,7 @@ export class Daemon {
   readonly captcha: CaptchaBridge;
   readonly handoff: HandoffBridge;
   readonly agents: AgentsBridge;
+  readonly approvals: ApprovalsBridge;
   readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
@@ -194,6 +205,19 @@ export class Daemon {
       listen: opts.handoffListen,
       postWebhook: opts.postWebhook,
     });
+    this.approvals = new ApprovalsBridge({
+      presence: opts.presence ?? defaultPresenceProvider(),
+      sendToExt: (m) => {
+        if (!this.ext || !this.extensionConnected) return false;
+        this.sendTo(this.ext.ws, m as BridgeToExt);
+        return true;
+      },
+      audit: { event: (e, d) => this.audit.event(e, d, { caller: "bridge" }) },
+      remote: { ensure: () => this.handoff.ensureRemote(), release: () => this.handoff.releaseRemote() },
+      log: this.log,
+      now: this.now,
+    });
+    this.handoff.attachApprovals(this.approvals);
   }
 
   get extensionConnected() {
@@ -255,6 +279,7 @@ export class Daemon {
     await this.auth.stop();
     this.agents.stop();
     this.captcha.abortAll();
+    this.approvals.stop();
     await this.handoff.stop();
     for (const { transport } of this.mcpSessions.values()) await transport.close().catch(() => {});
     this.ext?.ws.terminate();
@@ -300,6 +325,7 @@ export class Daemon {
       if (this.ext?.ws === ws) {
         this.ext = null;
         this.log("Extension disconnected");
+        this.approvals.onExtGone();
       }
       this.failPending(ws, "The TabAgent extension disconnected");
       this.handoff.onSocketClosed(ws);
@@ -419,6 +445,7 @@ export class Daemon {
     this.ext = null;
     this.failPending(e.ws, "The TabAgent extension stopped responding (no ping for 45s)");
     this.handoff.onSocketClosed(e.ws);
+    this.approvals.onExtGone();
     e.ws.terminate();
   }
 
@@ -426,6 +453,8 @@ export class Daemon {
     if (this.auth.bridge.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     if (this.captcha.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     if (this.handoff.onExtMessage(msg, ws)) return;
+    // #108: prompt mirror and answers only from the current paired extension socket.
+    if (this.approvals.onExtMessage(msg, this.ext?.ws === ws, (m) => this.sendTo(ws, m as BridgeToExt))) return;
     // AD2/AD14: agents.* only on the current paired extension socket.
     if (this.ext?.ws === ws && this.agents.onExtMessage(msg, (m) => this.sendTo(ws, m))) return;
     switch (msg?.type) {
@@ -712,10 +741,33 @@ export class Daemon {
         return this.err(res, er.code, er.message);
       }
     }
+    // #108: approvals outside the side panel. Local owner only; every answer needs presence (approvals/index.ts).
+    if (path === "/v1/approvals" || path.startsWith("/v1/approvals/")) {
+      if (who.kind !== "secret") return this.err(res, "UNAUTHORIZED", "Only the local owner can see or answer prompts", 403);
+      if (path === "/v1/approvals" && req.method === "GET") return this.sendJson(res, 200, { ok: true, ...this.approvals.view() });
+      if (path === "/v1/approvals/answer" && req.method === "POST") {
+        // Only promptId and answer are read: nothing in the request can stand in for presence.
+        const r = await this.approvals.answerWithPresence(body?.promptId, body?.answer);
+        return this.sendJson(res, approveStatus(r), r);
+      }
+      if (path === "/v1/approvals/phone" && req.method === "POST") {
+        const r = await this.approvals.phoneLinkWithPresence(body?.ttlMin);
+        return this.sendJson(res, r.ok ? 200 : approveStatus({ ok: false, outcome: r.outcome ?? "bad_request" }), r);
+      }
+      return this.err(res, "NOT_FOUND", `No route ${req.method} ${path}`);
+    }
     if (path === INBOX_ACK_PATH && req.method === "POST") {
       const a = InboxAckSchema.safeParse(body);
       if (!a.success) return this.err(res, "BAD_REQUEST", "Expected {msgId}");
       if (!this.agents.inbox.ack(this.restKey(req, who, url), a.data.msgId)) return this.err(res, "NOT_FOUND", "No unacked push with that msgId for this session");
+      return this.sendJson(res, 200, { ok: true });
+    }
+    if (path === INBOX_EVENT_PATH && req.method === "POST") {
+      // AD9: the proxy ignored a channel permission-relay method. Audit only; nothing is relayed.
+      const e = InboxEventSchema.safeParse(body);
+      if (!e.success) return this.err(res, "BAD_REQUEST", 'Expected {event: "channel.permission_ignored", method}');
+      const meta = this.restMeta(req, who, url);
+      this.audit.event("agent.channel_permission_ignored", { method: e.data.method, session: meta.id }, { caller: meta.label, session: meta.id });
       return this.sendJson(res, 200, { ok: true });
     }
     if (path === "/v1/session/end" && req.method === "POST") {
@@ -783,7 +835,7 @@ export class Daemon {
       clearInterval(ping);
       this.agents.inbox.close(key, conn);
     });
-    const info = { sessionId: meta.id, ...parseInboxHeaders(req.headers) };
+    const info = { sessionId: meta.id, meta, ...parseInboxHeaders(req.headers) };
     this.agents.inbox.open(key, info, conn);
     conn.write("ready", { sessionId: meta.id });
   }

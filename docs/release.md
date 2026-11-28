@@ -44,6 +44,29 @@ builds, checks versions, runs the tests, zips the Web Store build
 and runs `npm publish --dry-run`. Re-run with `dry_run` off to publish. Publishing needs the
 `NPM_TOKEN` secret on the `release` environment.
 
+### Publishing by hand (security key)
+
+The npm account uses a security key for 2FA, so a local publish goes through a browser
+confirmation. From a clean checkout of the release commit on `main`:
+
+```bash
+git checkout main && git pull
+npm ci
+npm run check-versions -- --tag vX.Y.Z
+npm run build && npm run test:release
+npm publish -w @nolmak/tabagent --access public --dry-run   # check the file list
+npm publish -w @nolmak/tabagent --access public --auth-type=web
+```
+
+The last command prints an `https://www.npmjs.com/auth/cli/...` URL: open it and tap the key. In a
+non-interactive shell, wrap it so npm still sees a terminal:
+`script -q /tmp/npm-publish.log npm publish -w @nolmak/tabagent --access public --auth-type=web`.
+The tarball can 404 for a few minutes after `+ @nolmak/tabagent@X.Y.Z` while npm stages it.
+
+Running agent sessions keep the `tabagent mcp` they started with. After publishing, restart them; if
+`npx` keeps serving a cached older copy, run `npx -y @nolmak/tabagent@latest setup claude` (and
+`setup codex`) so the MCP entry uses `@latest`, or clear `~/.npm/_npx`. Restart a running `tabagent serve` from the old version too.
+
 ## 5. Web Store
 
 - [ ] Download the zip artifact from the workflow run

@@ -84,7 +84,7 @@ export function authConfigCommand(rest: string[], path?: string): Out {
       }),
       path,
     );
-    if (value === "off") clearKeychainSync();
+    if (value === "off") clearKeychainSync({ dataDir: bitwardenDataDir() });
     return ok(
       value === "on"
         ? [

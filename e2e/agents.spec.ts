@@ -20,9 +20,12 @@ const test = base.extend<{}, { w: W }>({
       const codex = await new FakeCodex().listen();
       const oldPath = process.env.PATH;
       const oldSock = process.env.TABAGENT_CODEX_SOCKET;
+      const oldProjects = process.env.TABAGENT_CLAUDE_PROJECTS_DIR;
       // Inherited by the bridge process the harness spawns.
       process.env.PATH = `${claude.dir}:${oldPath}`;
       process.env.TABAGENT_CODEX_SOCKET = codex.socket;
+      // #137: session titles come from the stub's transcripts, never the real ~/.claude.
+      process.env.TABAGENT_CLAUDE_PROJECTS_DIR = claude.projectsDir;
       const h = new Harness();
       try {
         await h.start();
@@ -30,6 +33,8 @@ const test = base.extend<{}, { w: W }>({
         process.env.PATH = oldPath;
         if (oldSock === undefined) delete process.env.TABAGENT_CODEX_SOCKET;
         else process.env.TABAGENT_CODEX_SOCKET = oldSock;
+        if (oldProjects === undefined) delete process.env.TABAGENT_CLAUDE_PROJECTS_DIR;
+        else process.env.TABAGENT_CLAUDE_PROJECTS_DIR = oldProjects;
       }
       // A message sender for ui(). It reports itself hidden so its own Agents section never polls the
       // bridge, which would fill the bridge's 5 s list cache before a test sets its stub agents.
@@ -51,7 +56,8 @@ function ui(w: W, msg: Record<string, unknown>): Promise<any> {
 }
 
 test("ui.agents_list lists stub Claude and fake Codex agents; both sides advertise the agents feature", async ({ w }) => {
-  w.claude.agents([claudeRecord(4242, 1795639119768, { cwd: w.claude.dir })]);
+  w.claude.agents([claudeRecord(4242, 1795639119768, { cwd: w.claude.dir, sessionId: "sid-4242", name: "stub-22" })]);
+  w.claude.transcript(w.claude.dir, "sid-4242", [{ type: "user", message: { content: "x" } }, { type: "ai-title", aiTitle: "Pending user input check", sessionId: "sid-4242" }]);
   w.codex.threads([codexThread("019a0000-0000-7000-8000-000000000001", { type: "idle" }, { name: "Codex thread" })]);
   const state = await ui(w, { type: "ui.state" });
   expect(state.agentsSupported).toBe(true);
@@ -66,7 +72,9 @@ test("ui.agents_list lists stub Claude and fake Codex agents; both sides adverti
     .toEqual({ claude: "ok", codex: "ok" });
   expect(r.supported).toBe(true);
   const ids = r.agents.map((a: any) => `${a.id} ${a.delivery}`).sort();
-  expect(ids).toEqual(["claude:4242:1795639119768 spawn", "codex:019a0000-0000-7000-8000-000000000001 queue"]);
+  // #137: an unlinked Claude session is not messageable (none); its title comes from its transcript.
+  expect(ids).toEqual(["claude:4242:1795639119768 none", "codex:019a0000-0000-7000-8000-000000000001 queue"]);
+  expect(r.agents.find((a: any) => a.vendor === "claude")).toMatchObject({ name: "stub-22", title: "Pending user input check" });
   // Never `--all` (§5).
   expect([...new Set(w.claude.calls())]).toEqual(["agents --json"]);
 });
@@ -104,10 +112,14 @@ test("ui.agent_send to a fake Codex thread: queued, then agent.status delivered"
   await expect.poll(() => statuses(w), { timeout: 5000 }).toEqual([{ type: "agent.status", requestId: "e2e-q", state: "delivered" }]);
 });
 
-test("ui.agent_send to a stub Claude agent: started via claude --bg; untrusted workspace fails cleanly", async ({ w }) => {
+test("ui.agent_send to an unlinked stub Claude agent: plain send never spawns; forceSpawn starts claude --bg; untrusted workspace fails cleanly", async ({ w }) => {
   w.claude.agents([claudeRecord(4243, 1795639119999, { cwd: w.claude.dir })]);
   w.claude.set("bg.out", "backgrounded · 0badc0de\nclaude attach 0badc0de\n");
-  const ok = await ui(w, { type: "ui.agent_send", requestId: "e2e-s", agentId: "claude:4243:1795639119999", prompt: "Write tests", includeTab: false });
+  // #137: no explicit "Start a new session" -> no spawn.
+  const plain = await ui(w, { type: "ui.agent_send", requestId: "e2e-n", agentId: "claude:4243:1795639119999", prompt: "Hello", includeTab: false });
+  expect(plain).toMatchObject({ requestId: "e2e-n", route: "none", state: "failed", code: "NO_ROUTE" });
+  expect(w.claude.read("bg.text")).toBeNull();
+  const ok = await ui(w, { type: "ui.agent_send", requestId: "e2e-s", agentId: "claude:4243:1795639119999", prompt: "Write tests", includeTab: false, forceSpawn: true });
   expect(ok).toMatchObject({ requestId: "e2e-s", route: "spawn", state: "started" });
   expect(ok.detail).toContain("claude attach 0badc0de");
   expect(w.claude.read("bg.text")).toBe("[TabAgent: message from the user via the side panel]\nWrite tests");
@@ -115,7 +127,7 @@ test("ui.agent_send to a stub Claude agent: started via claude --bg; untrusted w
   w.claude.set("bg.out", null);
   w.claude.set("bg.err", "Workspace not trusted. Run `claude` in /x once and accept the trust prompt, then retry.\n");
   w.claude.set("bg.exit", 1);
-  const bad = await ui(w, { type: "ui.agent_send", requestId: "e2e-u", agentId: "claude:4243:1795639119999", prompt: "Again", includeTab: false });
+  const bad = await ui(w, { type: "ui.agent_send", requestId: "e2e-u", agentId: "claude:4243:1795639119999", prompt: "Again", includeTab: false, forceSpawn: true });
   expect(bad).toMatchObject({ requestId: "e2e-u", route: "spawn", state: "failed", code: "WORKSPACE_UNTRUSTED" });
 
   const gone = await ui(w, { type: "ui.agent_send", requestId: "e2e-g", agentId: "claude:4243:1", prompt: "x", includeTab: false });
@@ -135,13 +147,20 @@ test("the kill switch blocks sends with PAUSED, and nothing reaches the agent (A
 });
 
 // P1c (#90): the side panel's Agents section, composer and feed, driven through the real panel UI.
-test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Claude (started + attach hint), blocks over-limit", async ({ w }) => {
+test("panel: lists stub agents, sends to Codex (queued -> delivered), Claude needs the explicit Start a new session button (started + attach hint), blocks over-limit", async ({ w }) => {
   const T = "019a0000-0000-7000-8000-0000000000c1";
   const queue: string[] = [];
   w.claude.set("bg.err", null);
   w.claude.set("bg.exit", null);
   w.claude.set("bg.out", "backgrounded · 0badc0de\n");
-  w.claude.agents([claudeRecord(4250, 1795639120000, { cwd: w.claude.dir, name: "spawn-target" })]);
+  w.claude.set("bg.text", null);
+  // #137: one titled session (its transcript has an ai-title) and two untitled ones that collapse.
+  w.claude.transcript(w.claude.dir, "sid-4250", [{ type: "ai-title", aiTitle: "Readable stub title", sessionId: "sid-4250" }]);
+  w.claude.agents([
+    claudeRecord(4250, 1795639120000, { cwd: w.claude.dir, name: "spawn-target", sessionId: "sid-4250" }),
+    claudeRecord(4251, 1795639120001, { cwd: w.claude.dir, name: "untitled-a1", sessionId: "sid-4251" }),
+    claudeRecord(4252, 1795639120002, { cwd: w.claude.dir, name: "untitled-b2", sessionId: "sid-4252" }),
+  ]);
   w.codex.threads([codexThread(T, { type: "idle" }, { name: "Codex helper" })]);
   w.codex.on("thread/queue/add", ({ clientUserMessageId }) => {
     queue.push(`sub-${clientUserMessageId}`);
@@ -159,9 +178,14 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Cla
     await expect(codexRow).toContainText("Codex helper", { timeout: 15_000 });
     await expect(claudeRow).toBeVisible({ timeout: 15_000 });
     await expect(codexRow).toContainText("queued (Codex)");
-    await expect(claudeRow).toContainText("spawn-target");
-    await expect(claudeRow).toContainText("starts a new session");
+    await expect(claudeRow).toContainText("Readable stub title");
+    await expect(claudeRow).not.toContainText("spawn-target");
+    await expect(claudeRow).toContainText("Not connected — can't message this session");
+    await expect(claudeRow.getByRole("link", { name: "Connect it: run tabagent setup claude, then restart this session" })).toHaveAttribute("href", /send-to-agent\.md#connect-a-session/);
     await expect(claudeRow).toContainText("pid 4250");
+    // The untitled, not-connected sessions are collapsed under a disclosure.
+    await expect(p.locator("#agents details summary")).toHaveText("2 other sessions");
+    await expect(p.locator('#agents [data-agent-id="claude:4251:1795639120001"]')).toBeHidden();
     await expect(p.locator("#agentSelection")).toBeDisabled();
 
     // Codex: queued, then delivered once the submission leaves the queue.
@@ -178,14 +202,25 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Cla
     w.codex.notify("thread/queue/changed", { threadId: T });
     await expect(codexLine.locator(".agent-state")).toHaveText("delivered", { timeout: 15_000 });
 
-    // Claude spawn target: Start new session, started with the attach hint.
+    // #137: an unlinked Claude session: Send is disabled and plain Send cannot spawn; the separate
+    // "Start a new session in <folder>" button does, and the feed says where it runs and how to attach.
+    const folder = w.claude.dir.split("/").pop()!;
     await claudeRow.click();
     await p.fill("#agentPrompt", "Write tests");
-    await expect(p.locator("#agentSend")).toHaveText("Start new session");
-    await p.click("#agentSend");
-    const claudeLine = p.locator("#agentFeed li").filter({ hasText: "spawn-target" });
+    await expect(p.locator("#agentSend")).toHaveText("Send");
+    await expect(p.locator("#agentSend")).toBeDisabled();
+    await expect(p.locator("#agentComposerNote")).toContainText("not connected to TabAgent");
+    await p.locator("#agentSend").click({ force: true });
+    await p.waitForTimeout(300);
+    expect(w.claude.read("bg.text")).toBeNull();
+    const spawnBtn = p.locator("#agentSpawn");
+    await expect(spawnBtn).toBeVisible();
+    await expect(spawnBtn).toHaveText(`Start a new session in ${folder}`);
+    await spawnBtn.click();
+    const claudeLine = p.locator("#agentFeed li").filter({ hasText: `New session in ${folder}` });
     await expect(claudeLine.locator(".agent-state")).toHaveText("started", { timeout: 15_000 });
     await expect(claudeLine).toContainText("claude attach 0badc0de");
+    await expect(claudeLine).toContainText(w.claude.dir);
     expect(w.claude.read("bg.text")).toBe("[TabAgent: message from the user via the side panel]\nWrite tests");
 
     // Over the AD13 prompt limit: blocked in the panel, nothing reaches the bridge.

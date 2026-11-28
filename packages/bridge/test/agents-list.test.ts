@@ -35,7 +35,7 @@ describe("agents.list over the extension socket", () => {
     ({ d } = await startDaemon({ agents: { claudeBin: claude.bin, codexSocket: codex.socket } }));
     const e = new FakeExt(d.port);
     const w = await e.hello({ pairCode: d.pairCode, features: ["files.resolve", "agents"] });
-    expect(w).toMatchObject({ type: "welcome", protocolVersion: PROTOCOL_VERSION, features: ["agents"] });
+    expect(w).toMatchObject({ type: "welcome", protocolVersion: PROTOCOL_VERSION, features: expect.arrayContaining(["agents"]) });
     ext = e;
   });
 
@@ -50,11 +50,30 @@ describe("agents.list over the extension socket", () => {
     const byId = Object.fromEntries(r.agents.map((a: any) => [a.id, a]));
     expect(Object.keys(byId).sort()).toEqual(["claude:10:1000", "claude:11:2000", "codex:t-busy", "codex:t-idle"]);
     expect(byId["codex:t-busy"]).toMatchObject({ status: "busy", statusLabel: "waitingOnApproval", delivery: "queue", linked: false, canDriveTab: false });
-    expect(byId["claude:11:2000"]).toMatchObject({ status: "busy", delivery: "spawn", pid: 11 });
+    expect(byId["claude:11:2000"]).toMatchObject({ status: "busy", delivery: "none", pid: 11 });
     // Never --all; handshake is initialize + initialized; the daemon is never started by us.
     expect(claude.calls()).toEqual(["agents --json"]);
     expect(codex.initializedSeen).toBe(1);
     expect(codex.calls("initialize")[0].params.clientInfo.name).toBe("tabagent");
+  });
+
+  it("#137: a Claude session's title comes from its transcript (custom over ai), else its name", async () => {
+    const projects = claude.projectsDir;
+    claude.transcript("/work/a", "sid-a", [{ type: "user", message: { content: "hi" } }, { type: "ai-title", aiTitle: "Pending user input check", sessionId: "sid-a" }]);
+    claude.transcript("/work/b", "sid-b", [{ type: "ai-title", aiTitle: "Auto" }, { type: "custom-title", customTitle: "My rename" }]);
+    claude.agents([
+      claudeRecord(10, 1000, { cwd: "/work/a", sessionId: "sid-a", name: "a-22" }),
+      claudeRecord(11, 2000, { cwd: "/work/b", sessionId: "sid-b", name: "b-1f" }),
+      claudeRecord(12, 3000, { cwd: "/work/c", sessionId: "sid-c", name: "c-0a" }),
+    ]);
+    ({ d } = await startDaemon({ agents: { claudeBin: claude.bin, codexSocket: join(codex.dir, "missing.sock"), claudeProjectsDir: projects } }));
+    ext = await pairedExt(d, undefined, ["agents"]);
+    const r = await list(ext);
+    expect(AgentsListedSchema.safeParse(r).success).toBe(true);
+    expect(Object.fromEntries(r.agents.map((a: any) => [a.id, a.title]))).toEqual({ "claude:10:1000": "Pending user input check", "claude:11:2000": "My rename", "claude:12:3000": "c-0a" });
+    for (const a of r.agents) expect(a).not.toHaveProperty("sessionId");
+    // A send re-resolves with the title too.
+    expect((await d.agents.discovery.resolve("claude:11:2000"))?.title).toBe("My rename");
   });
 
   it("a missing claude binary and a missing codex socket give unavailable sources, never a failed call", async () => {

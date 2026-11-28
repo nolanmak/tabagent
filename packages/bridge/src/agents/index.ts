@@ -1,7 +1,7 @@
 // Send to agent, bridge side (docs/specs/agent-inbox.md). Handles the extension's agents.* / agent.*
 // messages. Only the paired /ext socket reaches this (the daemon checks); there is no REST route (AD2).
-import { agentSendOverLimit, AgentSendSchema, AgentsListSchema, type Agent, type AgentRoute, type AgentSend, type AgentSent, type BridgeToExt } from "@tabagent/protocol";
-import { agentSendAudit } from "./audit";
+import { AgentGrantedSchema, agentSendOverLimit, AgentSendSchema, CHANNEL_ACK_TIMEOUT_MS, AgentsListSchema, type Agent, type AgentGranted, type AgentRoute, type AgentSend, type AgentSent, type BridgeToExt } from "@tabagent/protocol";
+import { agentSendAudit, type GrantAudit } from "./audit";
 import { composeAgentMessage } from "./compose";
 import { parseAgentId, type AgentBase, type AgentLink } from "./discovery";
 import { AgentDiscovery, type DiscoveryOpts } from "./discovery-service";
@@ -23,21 +23,46 @@ export interface AgentsOpts extends DiscoveryOpts {
   /** AD8 piggyback TTL; default $TABAGENT_HOLD_TTL_MS, else 30 min (e2e shortens it). */
   holdTtlMs?: number;
   holdMax?: number;
+  /** AD9: how long to wait for the proxy to ack a channel push (default 5 s). */
+  channelAckTimeoutMs?: number;
+  /** AD11/§6: how long the bridge waits for agent.granted; default 5 s. */
+  grantTimeoutMs?: number;
+}
+
+/** §6 step 4: the bridge waits this long for agent.granted, then sends with the no-tab template. */
+export const GRANT_TIMEOUT_MS = 5_000;
+/** A grant answered after its timeout is still released if it attached the tab; remember it this long. */
+const LATE_GRANT_MS = 60_000;
+
+/** The outcome of one tab grant (AD11). `added`: the grant put the tab in the session, so expiry releases it. */
+export interface GrantResult {
+  audit: GrantAudit;
+  added: boolean;
 }
 
 /** One piggybacked message waiting for its session's next successful tool result (AD8). */
 export interface Held extends HeldMessage {
   req: AgentSend;
   agent: Agent;
-  /** The inbox key (restKey) and bridge session it is held for. P2b releases the granted tab on expiry. */
+  /** The inbox key (restKey) and bridge session it is held for. */
   key: string;
   sessionId: string;
+  /** The tab grant this message carried; an expired message releases a tab it added (AD11). */
+  grant?: GrantResult | null;
 }
 
 type Send = (m: BridgeToExt) => void;
 type Reply = Omit<AgentSent, "type" | "requestId">;
+/** A reply plus the grant result, which goes to the audit only (AD15). */
+type Outcome = Reply & { grant?: GrantAudit };
 
 const WHO = { caller: "side panel" };
+
+/** Why a send has no route (NO_ROUTE). The panel shows the same words before Send. */
+function noRouteDetail(a: Agent): string {
+  if (a.vendor === "claude" && !a.linked) return "This session is not connected to TabAgent, so it cannot be messaged. Start a new session instead, or connect this one (run `tabagent setup claude`, then restart the session).";
+  return a.status === "error" ? `This agent cannot take messages (${a.statusLabel ?? "error"})` : "No way to deliver to this agent";
+}
 
 const envTtl = () => {
   const n = Number(process.env.TABAGENT_HOLD_TTL_MS);
@@ -51,6 +76,10 @@ export class AgentsBridge {
   /** AD8: messages held per linked session. */
   readonly held: HoldQueue<Held>;
   private watchers = new Set<QueueWatcher>();
+  /** agent.grant requests waiting for agent.granted, by requestId (AD11). */
+  private grants = new Map<string, (r: AgentGranted | null) => void>();
+  /** Grants that timed out: a late ok that added the tab is released at once. */
+  private lateGrants = new Map<string, { sessionId: string; tabId: number; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(private o: AgentsOpts = {}) {
     this.inbox = new InboxRegistry({ now: o.now, onClosed: (key) => this.held.drop(key, "The agent's TabAgent connection closed") });
@@ -92,7 +121,13 @@ export class AgentsBridge {
   /** A later state for a held message: agent.status to the current extension socket, plus audit (AD7, AD15). */
   private report(m: Held, state: "delivered" | "expired", detail?: string) {
     this.o.sendToExt?.({ type: "agent.status", requestId: m.requestId, state, ...(detail ? { detail } : {}) });
-    this.o.audit?.event("agent.send", agentSendAudit(m.req, m.agent, { route: "piggyback", state }), WHO);
+    this.o.audit?.event("agent.send", agentSendAudit(m.req, m.agent, { route: "piggyback", state }, m.grant?.audit), WHO);
+    // AD11: an expired message releases the tab its grant attached (ungrouped by the worker, never closed).
+    if (state === "expired" && m.grant) this.release(m.grant);
+  }
+
+  private release(g: GrantResult, send: Send | undefined = this.o.sendToExt) {
+    if (g.audit.ok && g.added) send?.({ type: "agent.release", sessionId: g.audit.sessionId, tabId: g.audit.tabId });
   }
 
   /** Returns true when the message was an agents.* / agent.* message (handled or dropped). */
@@ -106,12 +141,32 @@ export class AgentsBridge {
       void this.onSend(msg, send);
       return true;
     }
+    if (type === "agent.granted") {
+      this.onGranted(msg, send);
+      return true;
+    }
     return false;
+  }
+
+  private onGranted(msg: unknown, send: Send) {
+    const r = AgentGrantedSchema.safeParse(msg);
+    if (!r.success) return;
+    const waiting = this.grants.get(r.data.requestId);
+    if (waiting) return waiting(r.data);
+    const late = this.lateGrants.get(r.data.requestId);
+    if (!late) return;
+    clearTimeout(late.timer);
+    this.lateGrants.delete(r.data.requestId);
+    // The message already went out with the no-tab template, so the agent was never told about this tab.
+    this.release({ audit: { sessionId: late.sessionId, tabId: late.tabId, ok: r.data.ok }, added: r.data.ok && r.data.added === true }, send);
   }
 
   /** Stop every queue watcher (daemon shutdown). */
   stop() {
     for (const w of [...this.watchers]) w.stop();
+    for (const done of [...this.grants.values()]) done(null);
+    for (const l of this.lateGrants.values()) clearTimeout(l.timer);
+    this.lateGrants.clear();
     this.held.stop();
     this.inbox.closeAll();
   }
@@ -137,36 +192,52 @@ export class AgentsBridge {
     }
     const req = parsed.data;
     let agent: Agent | null = null;
-    let out: Reply;
+    let out: Outcome;
     try {
       agent = await this.discovery.resolve(req.agentId);
-      out = await this.deliver(req, agent);
+      out = await this.deliver(req, agent, send);
     } catch (e) {
       out = { route: "none", state: "failed", code: "AGENT_GONE", detail: (e as Error).message };
     }
     this.finish(send, req, agent, out);
   }
 
-  private async deliver(req: AgentSend, agent: Agent | null): Promise<Reply> {
+  private async deliver(req: AgentSend, agent: Agent | null, send: Send): Promise<Outcome> {
     // 1. Fresh re-resolution (AD3).
     if (!agent) return { route: "none", state: "failed", code: "AGENT_GONE", detail: "That agent is no longer running" };
-    // 2. Route (AD6), from the fresh link. The channel route is P3 (#93), so it is never enabled here.
+    // 2. Route (AD6), from the fresh link.
     const stream = this.streamFor(agent);
     const route: AgentRoute = chooseRoute({ vendor: agent.vendor, status: agent.status, linked: agent.linked && !!stream, channels: stream?.channels }, { forceSpawn: req.forceSpawn });
-    if (route !== "queue" && route !== "spawn" && route !== "piggyback") return { route: "none", state: "failed", code: "NO_ROUTE", detail: agent.status === "error" ? `This agent cannot take messages (${agent.statusLabel ?? "error"})` : "No way to deliver to this agent" };
+    // #137: without forceSpawn this never spawns, so an unlinked Claude session fails here rather than
+    // silently getting a new background session in its place.
+    if (route === "none") return { route: "none", state: "failed", code: "NO_ROUTE", detail: noRouteDetail(agent) };
     // 3. Limits (AD13). The kill switch (AD17) is enforced by the worker, which knows the paused state.
     const over = agentSendOverLimit(req);
     if (over) return { route, state: "failed", code: "TOO_LARGE", detail: `The ${over.field} is ${over.length} characters; the limit is ${over.limit}` };
-    // 4. Tab grant (AD11) is P2b (#97): it fills this in for canDriveTab targets; until then no grant.
-    const grant = await this.tabGrant(req, agent, route);
-    // 5. Compose (AD12).
-    const text = composeAgentMessage(req, { grant });
+    const full = { route, state: "failed", code: "QUEUE_FULL", detail: `This agent already has ${this.held.max} messages waiting for its next browser action` } as const;
+    // A full hold queue fails before any tab is granted.
+    if (route === "piggyback" && this.held.count(stream!.key) >= this.held.max) return full;
+    // 4. Tab grant (AD11): canDriveTab targets only; the message waits for agent.granted (or the timeout).
+    const grant = await this.tabGrant(req, route, stream, send);
+    const tabNote = grant && !grant.audit.ok ? { detail: `tab not shared: ${grant.audit.code}` } : {};
+    // 5. Compose (AD12): the with-tab template only when the grant succeeded.
+    const text = composeAgentMessage(req, { grant: grant?.audit.ok ? { tabId: grant.audit.tabId } : null });
     // 6. Deliver.
+    if (route === "channel") {
+      const r = await this.pushChannel(stream!, text);
+      // The agent never got this message, so it was never told about the tab: give the tab back.
+      if (r.state === "failed" && grant) this.release(grant, send);
+      return { ...r, ...(r.state === "sent" ? tabNote : {}), grant: grant?.audit };
+    }
     if (route === "piggyback") {
       const s = stream!;
-      const held: Held = { requestId: req.requestId, text, req, agent, key: s.key, sessionId: s.sessionId };
-      if (this.held.hold(s.key, held) === "full") return { route, state: "failed", code: "QUEUE_FULL", detail: `This agent already has ${this.held.max} messages waiting for its next browser action` };
-      return { route, state: "held" };
+      const held: Held = { requestId: req.requestId, text, req, agent, key: s.key, sessionId: s.sessionId, grant };
+      if (this.held.hold(s.key, held) === "full") {
+        // Another send filled the queue while this one waited for its grant.
+        if (grant) this.release(grant, send);
+        return { ...full, grant: grant?.audit };
+      }
+      return { route, state: "held", ...tabNote, grant: grant?.audit };
     }
     if (route === "spawn") {
       // §6: choosing a new session drops anything still held for this agent.
@@ -198,15 +269,51 @@ export class AgentsBridge {
   }
 
   /**
-   * AD11 hook for P2b (#97): for a canDriveTab target with includeTab, send agent.grant and wait for
-   * agent.granted, returning `{tabId}` on success. P2a never grants, so linked agents get the no-tab template.
+   * AD7/AD9: push `{kind: "channel", content}` on the agent's inbox stream; `sent` once the proxy acks that it
+   * wrote notifications/claude/channel. Unconfirmed: Claude may still drop it, so never `delivered`.
    */
-  private async tabGrant(_req: AgentSend, _agent: Agent, _route: AgentRoute): Promise<{ tabId: number } | null> {
-    return null;
+  private async pushChannel(s: InboxStream, text: string): Promise<Reply> {
+    const timeoutMs = this.o.channelAckTimeoutMs ?? CHANNEL_ACK_TIMEOUT_MS;
+    const r = await this.inbox.pushAndWait(s.key, { kind: "channel", content: text }, timeoutMs);
+    if (r === "acked") return { route: "channel", state: "sent" };
+    if (r === "timeout") return { route: "channel", state: "failed", code: "CHANNEL_TIMEOUT", detail: `The agent's TabAgent connection did not confirm the message within ${Math.round(timeoutMs / 100) / 10} s` };
+    return { route: "channel", state: "failed", code: "AGENT_GONE", detail: "The agent's TabAgent connection closed" };
   }
 
-  private finish(send: Send, req: { requestId: string; agentId: string }, agent: Agent | null, out: Reply) {
-    send({ type: "agent.sent", requestId: req.requestId, ...out });
-    this.o.audit?.event("agent.send", agentSendAudit(req, agent, out), WHO);
+  /**
+   * AD11, §6 step 4. For a send with a tab to a linked agent whose profile can drive tabs (canDriveTab), on
+   * a route that reaches that agent's own session: send agent.grant {requestId, meta, tabId} and wait up to
+   * the grant timeout for agent.granted. null means no grant was asked for (the no-tab template, no note).
+   */
+  private async tabGrant(req: AgentSend, route: AgentRoute, stream: InboxStream | undefined, send: Send): Promise<GrantResult | null> {
+    if (!req.includeTab || req.tabId == null || !stream?.meta || (route !== "piggyback" && route !== "channel") || !profileCanDriveTab(stream.profile)) return null;
+    const { requestId } = req;
+    const tabId = req.tabId;
+    const sessionId = stream.meta.id;
+    const reply = await new Promise<AgentGranted | null>((resolve) => {
+      const timer = setTimeout(() => done(null), this.o.grantTimeoutMs ?? GRANT_TIMEOUT_MS);
+      timer.unref?.();
+      const done = (r: AgentGranted | null) => {
+        clearTimeout(timer);
+        if (this.grants.get(requestId) === done) this.grants.delete(requestId);
+        resolve(r);
+      };
+      this.grants.set(requestId, done);
+      send({ type: "agent.grant", requestId, meta: stream.meta!, tabId });
+    });
+    if (!reply) {
+      const timer = setTimeout(() => this.lateGrants.delete(requestId), LATE_GRANT_MS);
+      timer.unref?.();
+      this.lateGrants.set(requestId, { sessionId, tabId, timer });
+      return { audit: { sessionId, tabId, ok: false, code: "TIMEOUT" }, added: false };
+    }
+    if (!reply.ok) return { audit: { sessionId, tabId, ok: false, code: reply.code ?? "FAILED" }, added: false };
+    return { audit: { sessionId, tabId, ok: true }, added: reply.added === true };
+  }
+
+  private finish(send: Send, req: { requestId: string; agentId: string }, agent: Agent | null, out: Outcome) {
+    const { grant, ...wire } = out;
+    send({ type: "agent.sent", requestId: req.requestId, ...wire });
+    this.o.audit?.event("agent.send", agentSendAudit(req, agent, wire, grant), WHO);
   }
 }

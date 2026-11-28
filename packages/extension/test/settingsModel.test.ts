@@ -55,6 +55,12 @@ describe("yolo setting", () => {
     expect(migrateSettings({ yolo: "yes" }).yolo).toBe(false);
     expect(migrateSettings({ yolo: true }).yolo).toBe(true);
   });
+  it("keeps a YOLO expiry only while YOLO is on (#109)", () => {
+    expect(migrateSettings(undefined).yoloExpiresAt).toBeNull();
+    expect(migrateSettings({ yolo: true, yoloExpiresAt: 1_700_000_000_000 }).yoloExpiresAt).toBe(1_700_000_000_000);
+    expect(migrateSettings({ yolo: false, yoloExpiresAt: 1_700_000_000_000 }).yoloExpiresAt).toBeNull();
+    for (const bad of ["soon", -1, 0, Number.NaN, Number.POSITIVE_INFINITY, null]) expect(migrateSettings({ yolo: true, yoloExpiresAt: bad }).yoloExpiresAt, String(bad)).toBeNull();
+  });
 });
 
 describe("risky settings are audited when toggled (review M1)", () => {

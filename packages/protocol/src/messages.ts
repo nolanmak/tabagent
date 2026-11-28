@@ -175,8 +175,44 @@ export const FilesResolvedSchema = z.object({
 });
 export type FilesResolved = z.infer<typeof FilesResolvedSchema>;
 
-export const ExtToBridgeSchema = z.discriminatedUnion("type", [HelloSchema, PingSchema, EventSchema, ResultEnvelopeSchema, FilesResolveSchema, AgentsListSchema, AgentSendSchema]);
-export const BridgeToExtSchema = z.discriminatedUnion("type", [WelcomeSchema, PongSchema, CommandSchema, SessionClosedSchema, BridgeErrorSchema, FilesResolvedSchema, AgentsListedSchema, AgentSentSchema, AgentStatusSchema]);
+// ---------------------------------------------------------------------------
+// Send to agent tab grant (docs/specs/agent-inbox.md AD11). Here rather than in agents.ts because it
+// carries a SessionMeta.
+// ---------------------------------------------------------------------------
+
+/** Why the worker refused a grant; TIMEOUT is the bridge's own (no agent.granted in time). */
+export const AGENT_GRANT_CODES = ["TAB_BUSY", "PERMISSION_DENIED", "NOT_FOUND", "PAUSED", "TIMEOUT", "FAILED"] as const;
+export type AgentGrantCode = (typeof AGENT_GRANT_CODES)[number];
+
+/** Bridge -> worker: attach `tabId` to the linked agent's session. A user-initiated Send is the attach consent. */
+export const AgentGrantSchema = z.object({
+  type: z.literal("agent.grant"),
+  requestId: z.string().min(1).max(200),
+  meta: SessionMetaSchema,
+  tabId: z.number().int(),
+});
+export type AgentGrant = z.infer<typeof AgentGrantSchema>;
+
+/** Worker -> bridge. `added`: this grant put the tab in the session (false when it was already there). */
+export const AgentGrantedSchema = z.object({
+  type: z.literal("agent.granted"),
+  requestId: z.string().min(1).max(200),
+  ok: z.boolean(),
+  added: z.boolean().optional(),
+  code: z.enum(AGENT_GRANT_CODES).optional(),
+});
+export type AgentGranted = z.infer<typeof AgentGrantedSchema>;
+
+/** Bridge -> worker: a granted send expired, so ungroup the attached tab (never close it). */
+export const AgentReleaseSchema = z.object({
+  type: z.literal("agent.release"),
+  sessionId: z.string().min(1),
+  tabId: z.number().int(),
+});
+export type AgentRelease = z.infer<typeof AgentReleaseSchema>;
+
+export const ExtToBridgeSchema = z.discriminatedUnion("type", [HelloSchema, PingSchema, EventSchema, ResultEnvelopeSchema, FilesResolveSchema, AgentsListSchema, AgentSendSchema, AgentGrantedSchema]);
+export const BridgeToExtSchema = z.discriminatedUnion("type", [WelcomeSchema, PongSchema, CommandSchema, SessionClosedSchema, BridgeErrorSchema, FilesResolvedSchema, AgentsListedSchema, AgentSentSchema, AgentStatusSchema, AgentGrantSchema, AgentReleaseSchema]);
 
 export type ToolErrorWire = z.infer<typeof ToolErrorSchema>;
 
@@ -196,8 +232,10 @@ export interface LegacyResult<R = unknown> {
   error?: ToolErrorWire;
 }
 
-export type ExtToBridge = Hello | LegacyHello | z.infer<typeof PingSchema> | EventMessage | ResultEnvelope | LegacyResult | FilesResolve | AgentsList | AgentSend;
+export type ExtToBridge = Hello | LegacyHello | z.infer<typeof PingSchema> | EventMessage | ResultEnvelope | LegacyResult | FilesResolve | AgentsList | AgentSend | AgentGranted;
 export type BridgeToExt =
+  | AgentGrant
+  | AgentRelease
   | Welcome
   | z.infer<typeof PongSchema>
   | Command

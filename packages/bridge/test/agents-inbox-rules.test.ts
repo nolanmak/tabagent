@@ -142,6 +142,55 @@ describe("inbox stream registry (AD5)", () => {
     r.open("k", info(), conn());
     expect(r.ack("k", "m")).toBe(false);
   });
+  it("pushAndWait resolves acked when the same key acks (AD7 channel: sent after the ack)", async () => {
+    const r = new InboxRegistry({ newId: () => "m1" });
+    const c = conn();
+    r.open("k", info(), c);
+    const p = r.pushAndWait("k", { kind: "channel", content: "hi" }, 1000);
+    expect(c.writes).toEqual([{ event: "message", data: { msgId: "m1", kind: "channel", content: "hi" } }]);
+    expect(r.ack("other", "m1")).toBe(false);
+    expect(r.ack("k", "m1")).toBe(true);
+    expect(await p).toBe("acked");
+  });
+  it("pushAndWait: no live stream -> no_stream at once, nothing written", async () => {
+    const r = new InboxRegistry();
+    expect(await r.pushAndWait("nobody", { content: "x" }, 1000)).toBe("no_stream");
+  });
+  it("pushAndWait: no ack in time -> timeout, and a late ack is refused", async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new InboxRegistry({ newId: () => "m1" });
+      r.open("k", info(), conn());
+      const p = r.pushAndWait("k", {}, 5000);
+      vi.advanceTimersByTime(4999);
+      let done = false;
+      void p.then(() => (done = true));
+      await Promise.resolve();
+      expect(done).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(await p).toBe("timeout");
+      expect(r.ack("k", "m1")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("pushAndWait: the stream closes or is replaced before the ack -> closed", async () => {
+    let n = 0;
+    const r = new InboxRegistry({ newId: () => `m${++n}` });
+    const a = conn();
+    r.open("k", info(), a);
+    const p1 = r.pushAndWait("k", {}, 5000);
+    r.close("k", a);
+    expect(await p1).toBe("closed");
+    r.open("k", info(), conn());
+    const p2 = r.pushAndWait("k", {}, 5000);
+    r.open("k", info(), conn());
+    expect(await p2).toBe("closed");
+    expect(r.ack("k", "m2")).toBe(false);
+    const p3 = r.pushAndWait("k", {}, 5000);
+    r.closeAll();
+    expect(await p3).toBe("closed");
+  });
   it("closeAll closes every stream", () => {
     const r = new InboxRegistry();
     const a = conn();
@@ -179,13 +228,13 @@ describe("linking in discovery (AD4)", () => {
     expect(a).toMatchObject({ linked: true, canDriveTab: true, delivery: "piggyback" });
     expect(AgentSchema.safeParse(a).success).toBe(true);
     expect(toAgent(base, { canDriveTab: false, channels: false })).toMatchObject({ linked: true, canDriveTab: false, delivery: "piggyback" });
-    expect(toAgent(base, null)).toMatchObject({ linked: false, canDriveTab: false, delivery: "spawn" });
+    expect(toAgent(base, null)).toMatchObject({ linked: false, canDriveTab: false, delivery: "none" });
   });
   it("mergeAgents applies the link lookup per agent", () => {
     const bases = parseClaudeAgents(JSON.stringify([claudeRecord(10, 1000), claudeRecord(11, 2000)]));
     const all = mergeAgents([bases], (a) => (a.pid === 10 ? { canDriveTab: true, channels: false } : null));
     expect(all.map((a) => [a.id, a.linked, a.delivery])).toEqual([
-      ["claude:11:2000", false, "spawn"],
+      ["claude:11:2000", false, "none"],
       ["claude:10:1000", true, "piggyback"],
     ]);
   });

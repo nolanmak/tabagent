@@ -98,6 +98,7 @@ const LEVELS: Record<string, string> = {
   "downloads.read": "none",
   "policy.denylist_change": "full",
   "policy.site_change": "full",
+  "policy.mode_change": "full",
   "workflow.capture_start": "act",
   "workflow.capture_stop": "act",
   "workflow.list": "none",
@@ -106,6 +107,7 @@ const LEVELS: Record<string, string> = {
   "workflow.unschedule": "none",
   "workflow.runs": "none",
   "workflow.review_repair": "full",
+  "workflow.edit_draft": "none",
   "session.info": "none",
   "session.permissions": "none",
   "session.end": "none",
@@ -162,6 +164,7 @@ describe("D18 static sensitivity", () => {
     ["tabs", { action: "new" }, undefined],
     ["policy.denylist_change", {}, "p"],
     ["policy.site_change", {}, "p"],
+    ["policy.mode_change", {}, "p"],
     ["act.click", {}, undefined],
     ["network.list", {}, undefined],
   ] as const)("%s %j -> %s", (name, params, cat) => {
@@ -169,7 +172,7 @@ describe("D18 static sensitivity", () => {
   });
   it("no other tool is statically sensitive", () => {
     const statics = tools.filter((t) => t.sensitive || Object.values(t.actions ?? {}).some((a) => a.sensitive)).map((t) => t.name);
-    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "policy.site_change", "storage.get", "tabs", "workflow.review_repair"].sort());
+    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "policy.mode_change", "policy.site_change", "storage.get", "tabs", "workflow.review_repair"].sort());
   });
 });
 
@@ -309,5 +312,33 @@ describe("policy.site_change accepts authAuto (#131)", () => {
   it("its result reports authAuto", () => {
     const shape = (t().result as any).shape.site.shape;
     expect(Object.keys(shape)).toContain("authAuto");
+  });
+});
+
+describe("workflow.edit_draft params (#107)", () => {
+  const tool = () => getTool("workflow.edit_draft")!;
+  const id = "7b0f3c1e-2d4a-4c6b-9e8f-0a1b2c3d4e5f";
+  it("accepts remove_step and parameterize ops", () => {
+    const ops = [{ op: "remove_step", index: 0 }, { op: "parameterize", index: 2, name: "SEARCH_TERM" }];
+    expect(validateParams(tool(), { id, ops })).toEqual({ id, ops });
+  });
+  it.each([
+    ["no ops", { id, ops: [] }],
+    ["unknown op", { id, ops: [{ op: "rename", index: 0 }] }],
+    ["negative index", { id, ops: [{ op: "remove_step", index: -1 }] }],
+    ["fractional index", { id, ops: [{ op: "remove_step", index: 1.5 }] }],
+    ["parameterize without a name", { id, ops: [{ op: "parameterize", index: 0 }] }],
+    ["lower-case name", { id, ops: [{ op: "parameterize", index: 0, name: "search" }] }],
+    ["braced name", { id, ops: [{ op: "parameterize", index: 0, name: "{{SEARCH}}" }] }],
+    ["name starting with an underscore", { id, ops: [{ op: "parameterize", index: 0, name: "_X" }] }],
+    ["name over 80 characters", { id, ops: [{ op: "parameterize", index: 0, name: "A".repeat(81) }] }],
+    ["extra field", { id, ops: [{ op: "remove_step", index: 0, name: "X" }] }],
+    ["non-uuid id", { id: "abc", ops: [{ op: "remove_step", index: 0 }] }],
+  ])("rejects %s with BAD_REQUEST", (_why, params) => {
+    expect(() => validateParams(tool(), params)).toThrow(TabAgentError);
+  });
+  it("is a full-profile, no-tab, no-prompt authoring tool", () => {
+    expect(tool()).toMatchObject({ group: "workflow", level: "none", profiles: [], handledBy: "extension" });
+    expect(tool().sensitive).toBeUndefined();
   });
 });

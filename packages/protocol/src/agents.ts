@@ -21,6 +21,11 @@ export const AgentSchema = z.object({
   vendor: z.enum(AGENT_VENDORS),
   /** From the vendor record; null when it has none (the panel then shows cwd basename and age). */
   name: z.string().nullable(),
+  /**
+   * #137: the readable label. Claude: the session's last `custom-title`, else its last `ai-title` (from the
+   * transcript), else `name`. Codex: the thread name. Absent when there is none (older bridges never send it).
+   */
+  title: z.string().optional(),
   cwd: z.string(),
   /** Epoch ms. */
   startedAt: z.number(),
@@ -75,6 +80,7 @@ export const AGENT_SEND_CODES = [
   "SPAWN_FAILED",
   "QUEUE_FAILED",
   "QUEUE_FULL",
+  "CHANNEL_TIMEOUT",
   "BAD_REQUEST",
   "NO_EXTENSION",
   "TIMEOUT",
@@ -110,8 +116,9 @@ export const AgentSendSchema = z.object({
   url: z.string().optional(),
   selection: z.string().optional(),
   /**
-   * The user chose "Start new session instead" (§7) for an agent that would otherwise get the message
-   * piggybacked: route `spawn` (Claude only, AD6), and any message still held for that agent expires.
+   * The user pressed the explicit "Start a new session in <folder>" button (§7, #137): route `spawn`
+   * (Claude only, AD6), and any message still held for that agent expires. Without it the bridge never
+   * spawns: an unlinked Claude session gets `none` / NO_ROUTE.
    */
   forceSpawn: z.boolean().optional(),
 });
@@ -144,6 +151,8 @@ export type AgentStatusEvent = z.infer<typeof AgentStatusSchema>;
 /** `GET` opens the SSE stream (same bearer auth as REST); `POST {msgId}` acks one push. */
 export const INBOX_PATH = "/v1/inbox";
 export const INBOX_ACK_PATH = "/v1/inbox/ack";
+/** `POST` one proxy-side audit event (AD9: an ignored channel permission request). */
+export const INBOX_EVENT_PATH = "/v1/inbox/event";
 
 /**
  * Registration headers the proxy sends on `GET /v1/inbox` (AD4). `x-tabagent-session` is the same value
@@ -165,3 +174,8 @@ export const PIGGYBACK_LIMITS = { maxHeld: 3, ttlMs: 30 * 60_000 } as const;
 export const InboxPushSchema = z.object({ msgId: z.string().min(1) }).passthrough();
 export type InboxPush = z.infer<typeof InboxPushSchema>;
 export const InboxAckSchema = z.object({ msgId: z.string().min(1).max(200) });
+/** AD9: the proxy ignored a channel permission-relay method; the bridge audits it. Nothing else is accepted. */
+export const InboxEventSchema = z.object({ event: z.literal("channel.permission_ignored"), method: z.string().min(1).max(200) });
+
+/** AD9: how long the bridge waits for the proxy to ack a channel push before reporting CHANNEL_TIMEOUT. */
+export const CHANNEL_ACK_TIMEOUT_MS = 5_000;

@@ -161,7 +161,7 @@ describe("GET /v1/inbox (AD4, AD5)", () => {
     expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: true, canDriveTab: true, delivery: "piggyback" });
     s.close();
     await until(() => d.agents.inbox.size === 0);
-    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: false, canDriveTab: false, delivery: "spawn" });
+    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: false, canDriveTab: false, delivery: "none" });
   });
   it("no agent pid header -> registered but links nothing (e.g. Cursor); unlinked streams are not listed", async () => {
     await boot();
@@ -262,8 +262,11 @@ describe("piggyback route (AD6, AD7, AD8)", () => {
     await send({ requestId: "g1" });
     s.close();
     expect(await status("g1")).toMatchObject({ state: "expired" });
+    // #137: once unlinked, a plain send never spawns; only an explicit forceSpawn does.
     claude.set("bg.out", "backgrounded · 0badc0de\n");
-    expect(await send({ requestId: "g2" })).toMatchObject({ route: "spawn", state: "started" });
+    expect(await send({ requestId: "g2" })).toMatchObject({ route: "none", state: "failed", code: "NO_ROUTE" });
+    expect(claude.read("bg.text")).toBeNull();
+    expect(await send({ requestId: "g3", forceSpawn: true })).toMatchObject({ route: "spawn", state: "started" });
   });
   it("a replaced stream keeps the held messages (same key)", async () => {
     await boot();
@@ -282,14 +285,6 @@ describe("piggyback route (AD6, AD7, AD8)", () => {
     expect(claude.read("bg.text")).toBe(`${H}\nFresh start`);
     expect((await tool()).body.userMessages).toBeUndefined();
   });
-  it("a linked agent still gets the no-tab template (the tab grant is P2b)", async () => {
-    await boot();
-    await openInbox(d.cfg.secret);
-    await send({ requestId: "n1", includeTab: true, tabId: 5, title: "Docs", url: "https://docs.test/a" });
-    const [m] = (await tool()).body.userMessages;
-    expect(m).toContain("The user was looking at this page (you do not have browser access to it):");
-    expect(m).not.toContain("is now in your TabAgent tab group");
-  });
   it("audits held and delivered with the same requestId", async () => {
     await boot();
     await openInbox(d.cfg.secret);
@@ -307,5 +302,264 @@ describe("piggyback route (AD6, AD7, AD8)", () => {
       ["piggyback", "held"],
       ["piggyback", "delivered"],
     ]);
+  });
+});
+
+describe("tab grant on Send (AD11, AD12, AD15, §6 step 4)", () => {
+  const page = { includeTab: true, tabId: 5, title: "Docs", url: "https://docs.test/a?token=zzz" };
+  const WITH_TAB = "Browser tab 5 is now in your TabAgent tab group (use tabId 5).";
+  const NO_TAB = "The user was looking at this page (you do not have browser access to it):";
+  /** Answer the next agent.grant with this reply (or stay silent); resolves to the grant message. */
+  const answerGrant = async (reply: Record<string, unknown> | null) => {
+    const g = await ext.next("agent.grant", () => true, 3000);
+    if (reply) ext.send({ type: "agent.granted", requestId: g.requestId, ...reply });
+    return g;
+  };
+  const sendAsync = async (fields: Record<string, unknown>) => {
+    ext.send({ type: "agent.send", agentId: AGENT, prompt: "Please look", ...fields });
+    const sent = await ext.next("agent.sent", (m) => m.requestId === fields.requestId, 8000);
+    expect(AgentSentSchema.safeParse(sent).success).toBe(true);
+    const { __seen: _s, ...wire } = sent;
+    return wire;
+  };
+  const audits = async (requestId: string) => {
+    const { readFileSync } = await import("node:fs");
+    return readFileSync(d.audit.path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.event === "agent.send" && r.data?.requestId === requestId)
+      .map((r) => r.data);
+  };
+
+  it("canDriveTab target with a tab: agent.grant {requestId, meta, tabId} goes out before agent.sent; ok -> the with-tab template", async () => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    const sent = sendAsync({ requestId: "g-ok", ...page });
+    const g = await answerGrant({ ok: true, added: true });
+    expect(g).toMatchObject({ type: "agent.grant", requestId: "g-ok", tabId: 5, meta: { id: "mcp:local:100-aaaaaa", cap: "full", sites: [] } });
+    // §6: nothing is composed or delivered before the grant answer.
+    expect(ext.msgs.some((m) => m.type === "agent.sent" && m.requestId === "g-ok")).toBe(false);
+    expect(await sent).toEqual({ type: "agent.sent", requestId: "g-ok", route: "piggyback", state: "held" });
+    const [m] = (await tool()).body.userMessages;
+    expect(m).toContain(WITH_TAB);
+    expect(m).not.toContain(NO_TAB);
+    const [ev] = await audits("g-ok");
+    expect(ev.grant).toEqual({ sessionId: "mcp:local:100-aaaaaa", tabId: 5, ok: true });
+    expect(ev.tabOrigin).toBe("https://docs.test");
+  });
+
+  it.each(["TAB_BUSY", "PERMISSION_DENIED", "NOT_FOUND"])("refused with %s -> the no-tab template and 'tab not shared: <code>'", async (code) => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    const sent = sendAsync({ requestId: `g-${code}`, ...page });
+    await answerGrant({ ok: false, code });
+    expect(await sent).toEqual({ type: "agent.sent", requestId: `g-${code}`, route: "piggyback", state: "held", detail: `tab not shared: ${code}` });
+    const [m] = (await tool()).body.userMessages;
+    expect(m).toContain(NO_TAB);
+    expect(m).not.toContain("is now in your TabAgent tab group");
+    const [ev] = await audits(`g-${code}`);
+    expect(ev.grant).toEqual({ sessionId: "mcp:local:100-aaaaaa", tabId: 5, ok: false, code });
+  });
+
+  it("no agent.granted within the timeout -> TIMEOUT and the no-tab template; a late ok that attached the tab releases it", async () => {
+    await boot({ grantTimeoutMs: 100 });
+    await openInbox(d.cfg.secret);
+    const sent = sendAsync({ requestId: "g-slow", ...page });
+    const g = await answerGrant(null);
+    expect(await sent).toMatchObject({ state: "held", detail: "tab not shared: TIMEOUT" });
+    expect((await tool()).body.userMessages[0]).toContain(NO_TAB);
+    ext.send({ type: "agent.granted", requestId: g.requestId, ok: true, added: true });
+    expect(await ext.next("agent.release", () => true, 2000)).toMatchObject({ type: "agent.release", sessionId: "mcp:local:100-aaaaaa", tabId: 5 });
+  });
+
+  it("no grant without includeTab, without a tabId, or for an unlinked (spawn) target", async () => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    await send({ requestId: "ng1", includeTab: false });
+    await send({ requestId: "ng2", includeTab: true, title: "Docs", url: "https://docs.test/a" });
+    claude.set("bg.out", "backgrounded · 0badc0de\n");
+    expect(await send({ requestId: "ng3", ...page, agentId: "claude:77:1000", forceSpawn: true })).toMatchObject({ route: "spawn", state: "started" });
+    expect(claude.read("bg.text")).toContain(NO_TAB);
+    expect(ext.msgs.some((m) => m.type === "agent.grant")).toBe(false);
+    expect((await audits("ng1"))[0].grant).toBeUndefined();
+  });
+
+  it("a token-scoped linked session: the grant carries the token's cap and sites so the worker can refuse", async () => {
+    await boot();
+    const tok = createToken(d.cfg, "ci", "read", ["docs.test"]);
+    saveConfig(d.cfg);
+    await openInbox(tok, proxyHeaders("100-aaaaaa", { "x-tabagent-agent-pid": "77" }));
+    const sent = sendAsync({ requestId: "g-tok", ...page, agentId: "claude:77:1000" });
+    const g = await answerGrant({ ok: false, code: "PERMISSION_DENIED" });
+    expect(g.meta).toMatchObject({ id: "mcp:ci:100-aaaaaa", label: "ci", cap: "read", sites: ["docs.test"] });
+    expect(await sent).toMatchObject({ detail: "tab not shared: PERMISSION_DENIED" });
+  });
+
+  it("an expired message that attached the tab releases it; one that found the tab already in the session does not", async () => {
+    await boot({ holdTtlMs: 300 });
+    await openInbox(d.cfg.secret);
+    const a = sendAsync({ requestId: "r-new", ...page });
+    await answerGrant({ ok: true, added: true });
+    await a;
+    const b = sendAsync({ requestId: "r-old", ...page, tabId: 6 });
+    await answerGrant({ ok: true, added: false });
+    await b;
+    expect(await status("r-new", 2000)).toMatchObject({ state: "expired" });
+    expect(await status("r-old", 2000)).toMatchObject({ state: "expired" });
+    expect(await ext.next("agent.release", () => true, 2000)).toMatchObject({ sessionId: "mcp:local:100-aaaaaa", tabId: 5 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(ext.msgs.filter((m) => m.type === "agent.release")).toHaveLength(1);
+  });
+
+  it("stream gone: the held message expires and its tab is released", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret);
+    const a = sendAsync({ requestId: "r-gone", ...page });
+    await answerGrant({ ok: true, added: true });
+    await a;
+    s.close();
+    expect(await status("r-gone")).toMatchObject({ state: "expired" });
+    expect(await ext.next("agent.release", () => true, 2000)).toMatchObject({ tabId: 5 });
+  });
+
+  it("a delivered message never releases its tab", async () => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    const a = sendAsync({ requestId: "r-dl", ...page });
+    await answerGrant({ ok: true, added: true });
+    await a;
+    await tool();
+    expect(await status("r-dl")).toMatchObject({ state: "delivered" });
+    expect(ext.msgs.some((m) => m.type === "agent.release")).toBe(false);
+  });
+
+  it("a full hold queue fails with QUEUE_FULL before any grant is asked for", async () => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    for (const n of [1, 2, 3]) await send({ requestId: `qf${n}` });
+    expect(await send({ requestId: "qf4", ...page })).toMatchObject({ state: "failed", code: "QUEUE_FULL" });
+    expect(ext.msgs.some((m) => m.type === "agent.grant")).toBe(false);
+  });
+
+  it("a malformed agent.granted or one for an unknown requestId is ignored", async () => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    ext.send({ type: "agent.granted", requestId: "nobody", ok: true, added: true });
+    ext.send({ type: "agent.granted", requestId: 5 });
+    await send({ requestId: "after" });
+    expect(ext.msgs.some((m) => m.type === "agent.release")).toBe(false);
+  });
+});
+
+describe("channel route (AD6, AD7, AD9: P3)", () => {
+  const chan = (session = "100-aaaaaa") => proxyHeaders(session, { "x-tabagent-channels": "1" });
+  const ack = (msgId: string, session = "100-aaaaaa") => rest(base, "/v1/inbox/ack", d.cfg.secret, { msgId }, { "x-tabagent-session": session });
+  const pushes = (s: Inbox) => s.events.filter((e) => e.event === "message").map((e) => e.data);
+
+  it("a linked Claude agent whose proxy reported channels=1 is listed with delivery channel", async () => {
+    await boot();
+    await openInbox(d.cfg.secret, chan());
+    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: true, delivery: "channel" });
+  });
+  it("pushes {msgId, kind: channel, content} on the stream; sent only after the proxy acks (never delivered)", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "c1", agentId: AGENT, prompt: "Reply with CHANNEL-OK", includeTab: false });
+    await until(() => pushes(s).length === 1);
+    const [p] = pushes(s);
+    expect(p).toEqual({ msgId: expect.any(String), kind: "channel", content: `${H}\nReply with CHANNEL-OK` });
+    // Not yet acked: no reply.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ext.msgs.some((m) => m.type === "agent.sent" && m.requestId === "c1")).toBe(false);
+    expect((await ack(p.msgId)).body).toEqual({ ok: true });
+    const sent = await ext.next("agent.sent", (m) => m.requestId === "c1");
+    const { __seen: _s, ...wire } = sent;
+    expect(wire).toEqual({ type: "agent.sent", requestId: "c1", route: "channel", state: "sent" });
+    // Nothing is held for piggyback, so the next tool result carries no copy.
+    expect((await tool()).body.userMessages).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ext.msgs.some((m) => m.type === "agent.status" && m.requestId === "c1")).toBe(false);
+  });
+  it("tab grant on the channel route: the pushed content uses the with-tab template once the grant is ok", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "cg1", agentId: AGENT, prompt: "Look", includeTab: true, tabId: 5, title: "Docs", url: "https://docs.test/a" });
+    const g = await ext.next("agent.grant", () => true);
+    expect(pushes(s)).toHaveLength(0);
+    ext.send({ type: "agent.granted", requestId: g.requestId, ok: true, added: true });
+    await until(() => pushes(s).length === 1);
+    expect(pushes(s)[0].content).toContain("Browser tab 5 is now in your TabAgent tab group (use tabId 5).");
+    await ack(pushes(s)[0].msgId);
+    expect(await ext.next("agent.sent", (m) => m.requestId === "cg1")).toMatchObject({ route: "channel", state: "sent" });
+    expect(ext.msgs.some((m) => m.type === "agent.release")).toBe(false);
+  });
+  it("tab grant on the channel route: a refusal notes it; an unacked push releases a tab the grant added", async () => {
+    await boot({ channelAckTimeoutMs: 150 });
+    await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "cg2", agentId: AGENT, prompt: "Look", includeTab: true, tabId: 5, title: "Docs", url: "https://docs.test/a" });
+    const g = await ext.next("agent.grant", () => true);
+    ext.send({ type: "agent.granted", requestId: g.requestId, ok: true, added: true });
+    expect(await ext.next("agent.sent", (m) => m.requestId === "cg2")).toMatchObject({ route: "channel", state: "failed", code: "CHANNEL_TIMEOUT" });
+    expect(await ext.next("agent.release", () => true)).toMatchObject({ tabId: 5 });
+  });
+  it("no ack within the timeout -> failed CHANNEL_TIMEOUT", async () => {
+    await boot({ channelAckTimeoutMs: 150 });
+    const s = await openInbox(d.cfg.secret, chan());
+    const sent = await send({ requestId: "c2" });
+    expect(sent).toMatchObject({ route: "channel", state: "failed", code: "CHANNEL_TIMEOUT" });
+    expect(sent.detail).toMatch(/did not confirm/);
+    // A late ack is refused.
+    expect((await ack(pushes(s)[0].msgId)).status).toBe(404);
+  });
+  it("the stream closes before the ack -> failed AGENT_GONE", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "c3", agentId: AGENT, prompt: "x", includeTab: false });
+    await until(() => pushes(s).length === 1);
+    s.close();
+    const sent = await ext.next("agent.sent", (m) => m.requestId === "c3");
+    expect(sent).toMatchObject({ route: "channel", state: "failed", code: "AGENT_GONE", detail: "The agent's TabAgent connection closed" });
+  });
+  it("channels=0 falls back to piggyback (held)", async () => {
+    await boot();
+    await openInbox(d.cfg.secret);
+    expect(await send({ requestId: "c4" })).toMatchObject({ route: "piggyback", state: "held" });
+  });
+  it("audits the channel send with route channel and state sent", async () => {
+    await boot();
+    const s = await openInbox(d.cfg.secret, chan());
+    ext.send({ type: "agent.send", requestId: "c5", agentId: AGENT, prompt: "x", includeTab: false });
+    await until(() => pushes(s).length === 1);
+    await ack(pushes(s)[0].msgId);
+    await ext.next("agent.sent", (m) => m.requestId === "c5");
+    const { readFileSync } = await import("node:fs");
+    await until(() => readFileSync(d.audit.path, "utf8").includes('"c5"'));
+    const ev = readFileSync(d.audit.path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.event === "agent.send" && r.data?.requestId === "c5")
+      .map((r) => [r.data.route, r.data.state]);
+    expect(ev).toEqual([["channel", "sent"]]);
+  });
+});
+
+describe("POST /v1/inbox/event (AD9: ignored channel permission requests are audited)", () => {
+  const event = (body: unknown, token = d.cfg.secret) => rest(base, "/v1/inbox/event", token, body, { "x-tabagent-mcp": "1", "x-tabagent-session": "100-aaaaaa" });
+  it("audits channel.permission_ignored with the method and the session; nothing else is accepted", async () => {
+    await boot();
+    expect((await event({ event: "channel.permission_ignored", method: "notifications/claude/channel/permission_request" })).body).toEqual({ ok: true });
+    expect((await event({ event: "something.else", method: "x" })).status).toBe(400);
+    expect((await event({ event: "channel.permission_ignored", method: "x".repeat(201) })).status).toBe(400);
+    expect((await event({ event: "channel.permission_ignored", method: "x" }, "nope")).status).toBe(401);
+    const { readFileSync } = await import("node:fs");
+    const ev = readFileSync(d.audit.path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.event === "agent.channel_permission_ignored");
+    expect(ev).toHaveLength(1);
+    expect(ev[0].data).toEqual({ method: "notifications/claude/channel/permission_request", session: "mcp:local:100-aaaaaa" });
   });
 });

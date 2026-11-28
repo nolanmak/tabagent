@@ -126,7 +126,10 @@ describe("gate: requireSensitive", () => {
     expect(pr).toBeTruthy();
     expect(pr.summary).toBe(summary);
     expect(pr.auth).toMatchObject({ signup: true });
-    P.answerPrompt(pr.promptId, "always");
+    // #108: "Always" is not offered for a sign-up, so it is refused outright; the prompt stays pending.
+    expect(P.answerPrompt(pr.promptId, "always")).toBe(false);
+    expect(P.pendingPrompts().some((x) => x.promptId === pr.promptId)).toBe(true);
+    expect(P.answerPrompt(pr.promptId, "once")).toBe(true);
     await p;
     expect((await Set_.getSettings()).sites[A].authAlways).toEqual(["bitwarden:new"]);
     // Asked again next time.

@@ -1,6 +1,6 @@
 # Spec: Send to agent — prompt local Claude Code / Codex sessions from the browser
 
-Status: **audited v3** (2026-11-27). v3 folds in the P0 spike results ([agent-inbox-spike.md](agent-inbox-spike.md)). Spec-interrogation audit: fresh-eyes pass, 38-seam swarm, and
+Status: **audited v3** (2026-11-27), amended by #137 (no surprise spawns, session titles). v3 folds in the P0 spike results ([agent-inbox-spike.md](agent-inbox-spike.md)). Spec-interrogation audit: fresh-eyes pass, 38-seam swarm, and
 a conversation check. Findings and their resolutions are in [agent-inbox-audit.md](agent-inbox-audit.md).
 Epic: see the GitHub issue that links this file. Where this spec and an issue differ, the spec wins
 until it is amended.
@@ -48,8 +48,8 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
 - **AD1. Names and directions.**
   - Panel→worker: `ui.agents_list`, `ui.agent_send`.
   - Worker→bridge, on the paired WS: `agents.list` → `agents.listed`; `agent.send` → `agent.sent`.
-  - Bridge→extension: `agent.grant` → `agent.granted` (AD11) and the event `agent.status` (AD7).
-  - Bridge→proxy: `GET /v1/inbox` (SSE).
+  - Bridge→extension: `agent.grant` → `agent.granted` (AD11), the event `agent.release` (AD11) and the event `agent.status` (AD7).
+  - Bridge→proxy: `GET /v1/inbox` (SSE). Proxy→bridge: `POST /v1/inbox/ack`, and `POST /v1/inbox/event` (AD9 audit only).
   - The P3 reply tool is `panel.reply`, not `inbox.reply`.
   - *Why:* each name has one direction and one owner. "inbox" is internal only.
 - **AD2. WebSocket only for the panel. No REST discovery or send route.** There is no `GET /v1/agents` and no REST send. *Why:* every local agent holds the bridge secret (DESIGN D1/D3), so a REST route would let any agent list its siblings and inject prompts into them. That would bypass the user-initiated control. A CLI listing is a non-goal (§12).
@@ -82,8 +82,10 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   1. `channel`: linked, Claude, `channels=1`, and the P0 spike confirmed (AD9).
   2. `piggyback`: linked (any vendor, which means Claude in v1).
   3. `queue`: Codex.
-  4. `spawn`: a Claude agent that is not linked, or that the user explicitly chose "Start new session" for. Claude only.
-  5. `none`: anything else. Send is disabled, and the panel explains why.
+  4. `spawn`: **only** when the send carries `forceSpawn`, which only the explicit "Start a new session in \<folder\>" button sets (#137). Claude only. This check comes first: a `forceSpawn` send spawns even for a linked agent (and drops what it holds, §6).
+  5. `none`: anything else, **including an unlinked Claude agent** (#137). Send is disabled, and the panel explains why.
+
+  *Why (amended by #137):* v3 made `spawn` the default for unlinked Claude agents. In live QA a user picked a session, pressed Send, and the bridge silently started a different background session; the chosen session never got the message. A new session is now always a separate, explicit action, and `chooseRoute` enforces it on the bridge: `agent.send` without `forceSpawn` never spawns.
 
   `delivery` in `agents.listed` is the route the bridge **would** pick now. `agent.sent.route` is the route it **did** use. Both use this one enum.
 - **AD7. Delivery states are what the bridge can observe. They are never inferred.**
@@ -107,6 +109,12 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   - **P0 confirmed it** (spike §2): pushes land as a user turn when idle and queue behind the current turn when busy. The notification is `{method: "notifications/claude/channel", params: {content, meta: {source: "tabagent"}}}`. Launching needs `--dangerously-load-development-channels server:tabagent` plus a one-time "local development" confirmation dialog. Claude does not advertise channel support in `initialize`, so argv is the only signal.
   - Channels can be silently dropped: by org policy, on third-party providers, on a protocol revision, or when the server is not in the flag list. That is why the state is only `sent`.
   - The proxy never declares any permission-relay capability. If `channel/permission_request` arrives anyway, it ignores it and logs it to the audit.
+  - **Minimum Claude Code version: 2.1.332** (the version P0 verified; `CHANNEL_MIN_CLAUDE_VERSION`).
+  - **As built (P3, #93):**
+    - *Detection* (`agents/channels.ts`, pure): `ps -ww -o args= -p <agentPid>` is split shell-style. After `--channels` or `--dangerously-load-development-channels` (or their `=` form), the following tokens that consist only of `server:`/`plugin:` entries (comma or space separated) are the entry list; the list stops at the first other token, and nothing after a bare `--` counts. A match is `server:<name>` or `plugin:<name>@<marketplace>`. `<name>` defaults to `tabagent`; `TABAGENT_CHANNEL_NAME` in the proxy's environment overrides it when the user gave TabAgent another MCP config key. No agent pid, a failing `ps` or no match means `0`.
+    - *Capability:* decided before the stdio proxy connects (`buildMcpServer({channels})`), so it never changes mid-session.
+    - *Push/ack:* the bridge pushes `{msgId, kind: "channel", content}` on the agent's inbox stream and waits up to 5 s (`CHANNEL_ACK_TIMEOUT_MS`) for `POST /v1/inbox/ack {msgId}`. The proxy writes `notifications/claude/channel` and then acks; it refuses (no ack) an unknown kind or a channel push when it did not declare the capability. Ack → `sent`. No ack in time → `failed` / `CHANNEL_TIMEOUT` (a late ack is refused, so the panel never sees a second state). The stream closes or is replaced first → `failed` / `AGENT_GONE`. Nothing falls back after a push was written, because the agent may already have it; the piggyback fallback is the route choice itself (channels=0 → piggyback).
+    - *Ignored permission requests:* any notification or request whose method starts with `claude/channel/permission` (optionally under `notifications/`) is dropped (requests get method-not-found), logged to stderr, and reported with `POST /v1/inbox/event {event: "channel.permission_ignored", method}`, which the bridge audits as `agent.channel_permission_ignored {method, session}`. That endpoint accepts nothing else.
 - **AD10. Codex discovery and queue** (transport confirmed in spike §4).
   - The bridge connects with JSON-RPC over WebSocket to the control socket: `ws+unix://~/.codex/app-server-control/app-server-control.sock:/`. It sends `initialize {clientInfo: {name: "tabagent", version}}`, then the `initialized` notification. Discovery: `thread/loaded/list`, then `thread/read {threadId}` for each thread. The bridge never starts the daemon. If the socket is missing or refused, there are no Codex entries and `sources.codex = "unavailable"`. Only threads hosted by the daemon are discoverable; threads hosted by the Codex desktop app, the IDE or a plain TUI process are not (non-goal).
   - Status map: `active` → busy; `idle` → idle; `notLoaded` → not listed; `systemError` → listed but not sendable. `waitingOnApproval`/`waitingOnUserInput` → busy, with that label.
@@ -115,12 +123,12 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   1. On `agent.send` with a tab, for a target with canDriveTab, the bridge first resolves the target and route.
   2. The bridge sends `agent.grant {requestId, meta: SessionMeta, tabId}`.
   3. The worker runs `getSession(meta)` then `addTab(s, tabId, {attached: true, makeActive: true})`.
-  4. The worker replies `agent.granted {requestId, ok, code?}`.
+  4. The worker replies `agent.granted {requestId, ok, added?, code?}`. `added` is true when this grant put the tab in the session (false when the session already had it). The bridge waits up to 5 s; no reply counts as a refusal with `TIMEOUT`, and a late ok that added the tab is released at once.
   5. Only then does the bridge compose and deliver the message.
 
   The worker refuses the grant when the tab is owned by another session (TAB_BUSY), is private (PERMISSION_DENIED), is in a handoff (TAB_BUSY), or is closed (NOT_FOUND). On a refusal, the send continues with the **no-tab** template and the feed shows "tab not shared: \<code\>".
 
-  When a piggyback message reaches `expired`, the tab is released: ungrouped and never closed, because it is `attached`. Send grants **only** the attach. It does not grant site policy or any D18 gate. The grant function is called only from the `agent.grant` handler.
+  When a piggyback message whose grant added the tab reaches `expired`, the bridge sends `agent.release {sessionId, tabId}` and the worker releases the tab: out of the session, ungrouped and never closed, because it is `attached`. A token-scoped session is also refused (PERMISSION_DENIED) a tab outside its `sites`, and a paused TabAgent refuses with PAUSED. Send grants **only** the attach. It does not grant site policy or any D18 gate. The grant function is called only from the `agent.grant` handler.
 - **AD12. The message is composed by the bridge, from raw fields.**
   - The panel sends `{requestId, agentId, prompt, includeTab, tabId?, title?, url?, selection?}`. The panel reads title and url with `chrome.tabs.get` at Send time. The bridge treats them as untrusted.
   - Template with a tab, when canDriveTab and the grant is ok:
@@ -166,8 +174,11 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   - Codex app-server (AD10).
   - Registered inbox streams (AD4).
 - **Response:** `{agents: Agent[], sources: {claude: "ok"|"unavailable", codex: "ok"|"unavailable"}}`. A failed source never fails the call.
-- **`Agent` fields:** `{id, vendor: "claude"|"codex", name, cwd, startedAt, pid?, status: "busy"|"idle"|"error", statusLabel?, linked: boolean, canDriveTab: boolean, delivery: Route}`.
-  - `name` comes from the vendor record. If it is missing, the panel shows `cwd` basename · age.
+- **`Agent` fields:** `{id, vendor: "claude"|"codex", name, title?, cwd, startedAt, pid?, status: "busy"|"idle"|"error", statusLabel?, linked: boolean, canDriveTab: boolean, delivery: Route}`.
+  - `name` comes from the vendor record. Claude's names are auto-generated (`<cwd basename>-<hex>`) and not useful on their own.
+  - `title` (#137) is the readable label. Claude: the **last** `custom-title` entry (`customTitle`, the user's `/rename`) in the session transcript, else the last `ai-title` (`aiTitle`), else `name`. Codex: the thread name. Omitted when there is none; the panel then shows `cwd` basename · age.
+  - The transcript is `<projects>/<slug>/<sessionId>.jsonl`, where `<projects>` is `$TABAGENT_CLAUDE_PROJECTS_DIR`, else `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`, and `<slug>` is the cwd with every non-alphanumeric character replaced by `-` (verified against claude 2.1.x). If that file is missing (Claude hashes slugs over 200 characters), the bridge looks for `<sessionId>.jsonl` in every project folder. The `sessionId` is used only to find the file; it is never sent on the wire (AD3).
+  - The bridge reads only the last 256 KB of the transcript and parses only lines whose `type` is `custom-title` or `ai-title`. It never reads message content. Claude repeats title entries through the transcript, so the tail normally has one; if not, the title falls back to `name`. Results are cached per file by size and mtime.
 - **Unlinked streams:** a registered stream that matches no discovered agent (for example Cursor or Claude Desktop) is **not listed** in v1.
 - **Cache:** the bridge caches the list for 5 s, for display only. A send always re-resolves (AD3).
 - **Refresh:** the panel asks when it opens and every 5 s while visible.
@@ -186,21 +197,21 @@ Sequence: worker → bridge `agent.send`. Then:
 
 The bridge **always** replies, including on failure. The worker times out after 20 s, with `failed` / `TIMEOUT`.
 
-`spawn` details: `execFile("claude", ["--bg", text], {cwd: agent.cwd, timeout: 30000})`. Parse `backgrounded · <shortId>` from stdout and return it in `detail` with an `attach` hint. If the cwd no longer exists, the result is `failed` / `NO_CWD`. If stdout or stderr contains `Workspace not trusted`, the result is `failed` / `WORKSPACE_UNTRUSTED`, with the CLI message as the detail. Claude refuses `--bg` in folders whose trust prompt was never accepted, including home and folders used only with `--dangerously-skip-permissions` (spike §5). Spawn uses the no-tab template, because the new session has no TabAgent session yet, and it uses Claude's default permission mode. Choosing spawn for an agent that already has a `held` message drops that held message (`expired`).
+`spawn` details: `execFile("claude", ["--bg", text], {cwd: agent.cwd, timeout: 30000})`. Spawn runs only for a send with `forceSpawn` (AD6). Parse `backgrounded · <shortId>` from stdout and return it in `detail` with the folder it runs in and an `attach` hint. If the cwd no longer exists, the result is `failed` / `NO_CWD`. If stdout or stderr contains `Workspace not trusted`, the result is `failed` / `WORKSPACE_UNTRUSTED`, with the CLI message as the detail. Claude refuses `--bg` in folders whose trust prompt was never accepted, including home and folders used only with `--dangerously-skip-permissions` (spike §5). Spawn uses the no-tab template, because the new session has no TabAgent session yet, and it uses Claude's default permission mode. Choosing spawn for an agent that already has a `held` message drops that held message (`expired`).
 
 ## 7. UI
 
 - **Agents section** (new), separate from **Sessions**. Sessions keeps its current role, and its empty text becomes "No sessions."
 - **Each agent row:**
-  - vendor icon, name, cwd basename, age, pid
-  - busy/idle label
+  - vendor icon and `title` (§5) as the primary label; cwd basename · age · pid · busy/idle as secondary text
   - badges: **linked** and **can drive tab**
-  - the route as words: "instant (channel)", "on its next browser action", "queued (Codex)", "starts a new session"
+  - the route as words: "instant (channel)", "on its next browser action", "queued (Codex)"
+  - an unlinked Claude agent (#137) says **Not connected — can't message this session**, with a short link **Connect it: run tabagent setup claude, then restart this session** (#152) to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
+- **Order and grouping (#137):** linked agents first, then the most recently started. Agents that are not connected **and** have no real title (no title, or a title equal to the vendor's auto name) are collapsed under an **N other sessions** disclosure, which opens when one of them is selected.
 - **Composer:** prompt box; "Share this tab" (on), which shows the tab title; "Include selection" (on when a selection exists, disabled when none); **Send**.
-  - For `spawn` targets the button reads **Start new session**.
-  - For `none` targets the button is disabled, with the reason shown.
-  - For agents in a piggyback state there is a secondary **Start new session instead** action.
-- **Feed:** one line per send, keyed by `requestId` and updated by `agent.status`. It shows route, state and the grant result. The text is rendered with the existing `esc()`.
+  - **Send** never spawns. For `none` targets (including unlinked Claude agents) it is disabled, with the reason shown.
+  - For every Claude agent with a cwd there is a separate secondary button, **Start a new session in \<folder\>** (with "instead" appended for a linked agent). It is the only control that sets `forceSpawn` (AD6). The limits (AD13) apply to it too.
+- **Feed:** one line per send, keyed by `requestId` and updated by `agent.status`. It shows route, state and the grant result. A new session's line is named "New session in \<folder\>" and its detail names the full folder and the `claude attach <id>` command. The text is rendered with the existing `esc()`.
 - **Context menu:** "Send to agent ▸" lists up to 5 recently sent-to agents (ids stored in `chrome.storage.local`, re-validated against the current list) plus "Choose…". See AD14. An unknown id opens the panel with nothing selected and a notice.
 
 ## 8. Security summary
@@ -216,7 +227,7 @@ The bridge **always** replies, including on failure. The worker times out after 
 - **AR1. A secret holder can open an inbox stream under another session's key and read pushed messages.** *Compensating:* the bridge secret already grants full browser control under the DESIGN D1 trust model, so this adds no new power. Streams are bound to `restKey`, and one replaces the other, so a hijacked stream makes the real proxy reconnect visibly. *Ends when:* per-session inbox tokens are issued at registration (no schema change needed).
 - **AR2. Piggyback and channel text may not be obeyed.** *Compensating:* the states never claim the agent read or acted on a message, and there is an `INSTRUCTIONS` line plus framing. *Ends when:* the P0 spike and real use show it is reliable, or the route is dropped.
 - **AR3. Audit is best effort.** This matches every other audit event (DESIGN D20).
-- **AR4. Channels rely on an undocumented, experimental Claude Code surface.** *Compensating:* gated by AD9; a minimum version is recorded by P0; the route falls back to piggyback.
+- **AR4. Channels rely on an undocumented, experimental Claude Code surface.** *Compensating:* gated by AD9; the minimum version recorded by P0 is Claude Code 2.1.332; the route falls back to piggyback.
 
 ## 10. Build order (each stage has a testable exit)
 

@@ -1,6 +1,6 @@
 {
   "name": "@nolmak/tabagent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Let any AI agent drive your real Chrome, including sign-in and 2FA without seeing your secrets: MCP server + CLI bridge for the TabAgent extension.",
   "type": "module",
   "license": "MIT",

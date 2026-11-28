@@ -223,7 +223,7 @@ describe("composer with a selection (AD12, AD13)", () => {
 
   it("blocks an over-limit selection and says to untick it", () => {
     const selection = "s".repeat(AGENT_LIMITS.selection + 1);
-    expect(composerState({ agent: v, prompt: "go", share, selection })).toEqual({ canSend: false, label: "Send", note: "The selection is 16,001 characters; the limit is 16,000. Untick Include selection to send without it." });
+    expect(composerState({ agent: v, prompt: "go", share, selection })).toEqual({ canSend: false, label: "Send", note: "The selection is 16,001 characters; the limit is 16,000. Untick Include selection to send without it.", spawnLabel: null, canSpawn: false });
     expect(composerState({ agent: v, prompt: "go", share, selection: "s".repeat(AGENT_LIMITS.selection) }).canSend).toBe(true);
   });
 });

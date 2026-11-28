@@ -1,14 +1,18 @@
 // Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions, agents (#90),
 // activity feed (audit records only) and settings. A view over worker state.
-import type { Agent, AgentSources } from "@tabagent/protocol";
+import { answerLabel, type Agent, type AgentSources, type PromptAnswer } from "@tabagent/protocol";
 import { authEnabled, type StoredPolicy } from "../background/policy";
-import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
+import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, shareTabLabel, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
+import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
+import { formatRemaining } from "../pure/modeChange";
 import { filterSites } from "../pure/siteFilter";
+import { workflowStepDetail } from "../pure/workflow";
 import { alwaysLabel, authAutoActive, hasCodesAlways, revokeAlways, setAuthAuto, setCodesAlways, setSignIn } from "../pure/siteAuth";
 import { AUTH_AUTO_WARNING, applyLevel, authBlockedReason } from "../pure/siteLevel";
-import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
+import { promptView } from "../pure/promptView";
+import { feedReducer, promptReducer, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const send = (msg: unknown) => chrome.runtime.sendMessage(msg) as Promise<any>;
@@ -33,33 +37,23 @@ function renderStatus() {
   $("killBtn").hidden = !!state.settings.paused;
   $("resumeBtn").hidden = !state.settings.paused;
   $("killNote").textContent = state.settings.paused ? "All agents are stopped. Every command returns KILLED until you resume." : "Shortcut: Alt+Shift+K";
+  const until = Number(state.authRestartLockedUntil ?? 0);
+  $("restartLock").hidden = !(until > Date.now());
+  if (until > Date.now()) $("restartLockText").textContent = `TabAgent restarted during a sign-in, so agents can't type passwords or codes until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
 }
 
 function promptHtml(p: any) {
-  const title = promptTitle(p);
-  const detail =
-    p.kind === "site"
-      ? p.level === "read"
-        ? "It will be able to see page content."
-        : p.level === "act"
-          ? "It will be able to click, type and navigate on this site."
-          : "It will be able to run scripts and read cookies and storage on this site."
-      : p.sensitive
-        ? p.sensitive.category === "p"
-          ? p.sensitive.description // policy changes are not tied to the tab's page; the summary names the site
-          : `${p.sensitive.description} · on ${p.origin}`
-        : `on ${p.origin}`;
-  const isAuth = p.sensitive?.category === "g";
-  const oneShot = p.kind === "attach" || p.sensitive?.category === "p" || p.sensitive?.category === "r" || !!p.auth?.signup;
-  const always = oneShot ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
-  const left = Math.max(0, Math.round((p.expires - Date.now()) / 1000));
-  return `<li class="prompt-item" data-prompt-id="${esc(p.promptId)}">
-    <div class="ptitle">${esc(title)}</div>
-    <div class="muted small pdetail">${esc(detail)}</div>
-    <div class="muted small psummary">${esc(p.summary)}</div>
-    <ul class="preasons reasons">${(p.reasons ?? []).map((r: string) => `<li>${esc(r)}</li>`).join("")}</ul>
-    <div class="muted small">Tool: ${esc(p.tool)} · <span class="countdown" data-expires="${Number(p.expires)}">${left}s</span></div>
-    <div class="actions"><button data-a="deny" data-id="${esc(p.promptId)}">Deny</button>${always}<button data-a="once" data-id="${esc(p.promptId)}" class="primary">Allow once</button></div>
+  // #108: the same strings and answers the CLI and the phone page show (pure/promptView).
+  const v = promptView(p);
+  const btn = (a: string) => `<button data-a="${a}" data-id="${esc(v.promptId)}"${a === "once" ? ' class="primary"' : ""}>${esc(answerLabel(a as PromptAnswer, v.alwaysLabel))}</button>`;
+  const left = Math.max(0, Math.round((v.expires - Date.now()) / 1000));
+  return `<li class="prompt-item" data-prompt-id="${esc(v.promptId)}">
+    <div class="ptitle">${esc(v.title)}</div>
+    <div class="muted small pdetail">${esc(v.detail)}</div>
+    <div class="muted small psummary">${esc(v.summary)}</div>
+    <ul class="preasons reasons">${v.reasons.map((r: string) => `<li>${esc(r)}</li>`).join("")}</ul>
+    <div class="muted small">Tool: ${esc(v.tool)} · <span class="countdown" data-expires="${Number(v.expires)}">${left}s</span></div>
+    <div class="actions">${v.answers.map(btn).join("")}</div>
   </li>`;
 }
 
@@ -89,9 +83,17 @@ function renderSessions() {
     ul.innerHTML = `<li class="muted">No sessions.</li>`;
     return;
   }
-  ul.innerHTML = state.sessions
-    .map((s: any) => `<li><span><span class="dot g-${esc(s.color)}"></span><b>${esc(s.label)}</b> <span class="muted">${s.tabs} tab${s.tabs === 1 ? "" : "s"} · ${esc(s.cap)}</span></span><button data-end="${esc(s.id)}">End</button></li>`)
-    .join("");
+  ul.innerHTML = (state.sessions as SessionView[]).map(sessionRowHtml).join("");
+}
+
+let sessionsNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+/** A short-lived message under the Sessions list, e.g. "Tab closed" (#133). */
+function sessionsNotice(text: string) {
+  const el = $("sessionsNotice");
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(sessionsNoticeTimer);
+  sessionsNoticeTimer = setTimeout(() => (el.hidden = true), 4000);
 }
 
 function feedLine(e: FeedEntry) {
@@ -116,6 +118,8 @@ let selectedAgentId: string | null = null;
 let agentNotice = "";
 let agentSending = false;
 let agentSendFeed: AgentFeedEntry[] = [];
+/** #137: the "N other sessions" disclosure is open. */
+let agentsOtherOpen = false;
 /** The active tab as it would be shared; re-read at Send time. */
 let activeTab: SharedTab | null = null;
 /** The active tab's id, shareable or not; undefined until first read. */
@@ -148,7 +152,7 @@ function renderAgentList() {
     ? `<li class="muted">Looking for agents…</li>`
     : agentsError
       ? `<li class="err">${esc(agentsError)}</li>`
-      : agents.map((a) => agentRowHtml(agentRowView(a, now), a.id === selectedAgentId)).join("") || `<li class="muted">No agents running.</li>`;
+      : agentListHtml(agents.map((a) => agentRowView(a, now)), selectedAgentId, agentsOtherOpen) || `<li class="muted">No agents running.</li>`;
   setHtml($("agents"), html);
   const notes = sourcesNotes(agentSources);
   $("agentSources").hidden = !notes.length;
@@ -165,10 +169,16 @@ function renderComposer() {
   const btn = $("agentSend") as HTMLButtonElement;
   btn.textContent = c.label;
   btn.disabled = !c.canSend || agentSending;
+  // #137/§7: the separate "Start a new session in <folder>" button (also "… instead" for linked agents).
+  const spawn = $("agentSpawn") as HTMLButtonElement;
+  spawn.hidden = !c.spawnLabel;
+  spawn.textContent = c.spawnLabel ?? "";
+  spawn.disabled = !c.canSpawn || agentSending;
+  $("agentShareLabel").textContent = shareTabLabel(v);
   $("agentComposerNote").textContent = c.note;
   const target = $("agentTarget");
   target.hidden = !v && !agentNotice;
-  target.innerHTML = v ? `To <b>${esc(v.title)}</b> <span class="muted">(${esc(v.vendorLabel)}, ${esc(v.routeWords)})</span>` : `<span class="err">${esc(agentNotice)}</span>`;
+  target.innerHTML = v ? `To <b>${esc(v.title)}</b> <span class="muted">(${esc(v.vendorLabel)}, ${esc(v.notConnected ? "not connected" : v.routeWords)})</span>` : `<span class="err">${esc(agentNotice)}</span>`;
   $("agentTabTitle").textContent = activeTab ? `(${activeTab.title || activeTab.url})` : "(no web page in this tab)";
 }
 
@@ -309,9 +319,11 @@ function selectAgent(el: EventTarget | null) {
   agentPrompt().focus();
 }
 
-async function sendToSelectedAgent() {
+/** `forceSpawn`: the explicit Start a new session button (#137). Plain Send never spawns. */
+async function sendToSelectedAgent(forceSpawn = false) {
   const v = selectedAgentView();
   if (!v || agentSending) return;
+  if (forceSpawn && !v.spawnLabel) return;
   const prompt = agentPrompt().value;
   // AD12: title and url are read at Send time, not from the label shown earlier.
   // AD14: re-check the active tab now too, so a tab switch the panel missed still drops the selection.
@@ -319,26 +331,29 @@ async function sendToSelectedAgent() {
   const share = shareTab() ? current : null;
   if (shareTab()) activeTab = share;
   const selection = outgoingSelection();
-  if (!composerState({ agent: v, prompt, share, selection }).canSend) return renderComposer();
+  const c = composerState({ agent: v, prompt, share, selection });
+  if (!(forceSpawn ? c.canSpawn : c.canSend)) return renderComposer();
   const requestId = crypto.randomUUID();
-  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route: v.route });
+  const t = sendTarget(v, forceSpawn);
+  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: t.agentName, vendor: v.vendor, route: t.route });
   agentSending = true;
   renderComposer();
   let r: any;
   try {
-    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, selection }));
+    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, selection, forceSpawn }));
   } catch (e) {
     r = { error: String((e as Error)?.message ?? e) };
   }
   agentSending = false;
   if (r?.type === "agent.sent") agentFeed({ type: "sent", msg: r });
-  else agentFeed({ type: "sent", msg: { requestId, route: v.route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
+  else agentFeed({ type: "sent", msg: { requestId, route: t.route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
   // Keep the text after a failure so it can be retried.
   if (r?.type === "agent.sent" && r.state !== "failed") {
     agentPrompt().value = "";
     // The selection went with this message; the next one starts without it.
     if (selection) heldSelection = null;
-    void rememberRecent({ id: v.id, name: v.title });
+    // A new session is not this agent, so it does not go in the context menu's recent list.
+    if (!forceSpawn) void rememberRecent({ id: v.id, name: v.title });
   }
   renderComposer();
 }
@@ -357,8 +372,7 @@ function renderWorkflows() {
   $("workflows").innerHTML = list
     .map((w) => {
       const steps = (w.steps ?? []).map((step: any, index: number) => {
-        const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
-        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? (step.locator ? `${step.key} in ${target}` : step.key) : step.kind === "check" ? `${target} → ${step.checked === false ? "off" : "on"}` : step.kind === "wait" ? `${step.waitFor ?? "?"}${step.waitValue ? ` ${step.waitValue}` : ""}` : step.kind === "scroll" ? `${step.locator ? `${target} ` : ""}by ${step.dx ?? 0},${step.dy ?? 0}` : step.kind === "download" ? (step.download?.mime ?? step.download?.extension ?? "artifact") : target;
+        const detail = workflowStepDetail(step);
         const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
         const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
         return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
@@ -366,6 +380,14 @@ function renderWorkflows() {
       return `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}<ol class="workflow-steps">${steps}</ol></span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`;
     })
     .join("") || `<li class="muted">No captured recipes yet.</li>`;
+}
+
+/** #109: a timed YOLO (policy.mode_change durationMin) shows the time left; the worker switches it off. */
+function renderYoloExpiry() {
+  const at = state?.settings?.yolo ? state.settings.yoloExpiresAt : null;
+  const el = $("yoloExpiry");
+  el.hidden = typeof at !== "number";
+  el.textContent = typeof at === "number" ? `Switches off automatically in ${formatRemaining(at - Date.now())}.` : "";
 }
 
 function renderSettings() {
@@ -376,7 +398,10 @@ function renderSettings() {
   ($("forceLite") as HTMLInputElement).checked = s.forceLite;
   ($("devAllowSensitive") as HTMLInputElement).checked = s.devAllowSensitive;
   ($("yolo") as HTMLInputElement).checked = !!s.yolo;
+  ($("outsideApprovals") as HTMLInputElement).checked = !!s.outsideApprovals;
+  $("phoneLinkRow").hidden = !s.outsideApprovals;
   $("yoloBanner").hidden = !s.yolo;
+  renderYoloExpiry();
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
   renderSites();
   $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
@@ -461,6 +486,7 @@ chrome.runtime.onMessage.addListener((m: any) => {
       break;
     case "status":
     case "paused":
+    case "settings":
       refresh();
       break;
   }
@@ -475,6 +501,7 @@ $("pairForm").addEventListener("submit", async (e) => {
 });
 $("killBtn").addEventListener("click", () => send({ type: "ui.kill" }).then(refresh));
 $("resumeBtn").addEventListener("click", () => send({ type: "ui.resume" }).then(refresh));
+$("endRestartLock").addEventListener("click", () => send({ type: "ui.endRestartLock" }).then(refresh));
 $("prompts").addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (!b?.dataset.id) return;
@@ -490,16 +517,33 @@ $("handoffs").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.handoff) send({ type: "ui.handoff", tabId: Number(b.dataset.tab), result: b.dataset.handoff }).then(refresh);
 });
-$("sessions").addEventListener("click", (e) => {
+$("sessions").addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("button");
-  if (b?.dataset.end) send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
+  if (b?.dataset.end) return send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
+  if (b?.dataset.viewTab) {
+    const res = await send({ type: "ui.focusTab", tabId: Number(b.dataset.viewTab) });
+    if (res?.error) {
+      sessionsNotice(res.error);
+      void refresh();
+    }
+  }
 });
 $("agents").addEventListener("click", (e) => selectAgent(e.target));
 $("agents").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
+  // Leave the disclosure summary and the connect link to their own keyboard behaviour.
+  if ((e.target as HTMLElement).closest("summary, a")) return;
   e.preventDefault();
   selectAgent(e.target);
 });
+// #137: remember whether "N other sessions" is open across the 5 s re-render. `toggle` does not bubble.
+$("agents").addEventListener(
+  "toggle",
+  (e) => {
+    if (e.target instanceof HTMLDetailsElement) agentsOtherOpen = e.target.open;
+  },
+  true,
+);
 agentPrompt().addEventListener("input", renderComposer);
 agentPrompt().addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -514,6 +558,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[SEND_INTENT_KEY]?.newValue !== undefined) void takeIntent();
 });
 $("agentSend").addEventListener("click", () => void sendToSelectedAgent());
+// #137: the only way to start a new session is this separate, explicitly labelled button.
+$("agentSpawn").addEventListener("click", () => void sendToSelectedAgent(true));
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 chrome.tabs.onUpdated.addListener((_id, info, tab) => {
   if (tab.active && (info.title || info.url)) void refreshActiveTab();
@@ -546,7 +592,15 @@ $("manualCaptureStop").addEventListener("click", () => send({ type: "ui.workflow
 const patch = (p: unknown) => send({ type: "ui.settings", patch: p }).then(refresh);
 const sites = () => structuredClone(state.settings.sites ?? {}) as Record<string, any>;
 for (const id of ["onSessionEnd", "beforeUnload"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLSelectElement).value }));
-for (const id of ["showOverlay", "forceLite", "devAllowSensitive", "yolo"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
+for (const id of ["showOverlay", "forceLite", "devAllowSensitive", "yolo", "outsideApprovals"]) $(id).addEventListener("change", (e) => patch({ [id]: (e.target as HTMLInputElement).checked }));
+// #108: a one-time link to approve prompts from a phone (tailnet only). Clicking here is the presence proof.
+$("phoneLinkBtn").addEventListener("click", async () => {
+  const out = $("phoneLink");
+  out.hidden = false;
+  out.textContent = "Asking the bridge…";
+  const r = await send({ type: "ui.approvals.phoneLink" }).catch((e) => ({ ok: false, error: { message: String(e) } }));
+  out.textContent = r?.ok && r.url ? `${r.url}\nOne-time link, valid until ${new Date(r.expiresAt).toLocaleTimeString()}. Open it on your phone; it works for one device only.` : `No phone link: ${r?.error?.message ?? "the bridge did not answer"}${r?.error?.hint ? ` (${r.error.hint})` : ""}`;
+});
 
 /** Why choosing full did not turn on sign-in (#118), or the sign-in-without-asking warning (#131). */
 function showLevelNote(note: string | undefined) {
@@ -649,6 +703,7 @@ setInterval(() => {
 }, AGENTS_REFRESH_MS);
 setInterval(() => {
   for (const el of document.querySelectorAll<HTMLElement>(".countdown")) el.textContent = `${Math.max(0, Math.round((Number(el.dataset.expires) - Date.now()) / 1000))}s`;
+  if (state) renderYoloExpiry();
 }, 1000);
 setInterval(() => {
   if (state && state.status !== "connected") refresh();

@@ -1,4 +1,5 @@
 /** Browser-independent recipe capture, redaction, and bounded locator healing. */
+import { TabAgentError } from "@tabagent/protocol";
 export type Locator = { role?: string; name?: string; label?: string; text?: string; selector?: string; context?: string };
 export type InputValue = { kind: "fixed"; value: string } | { kind: "parameter"; placeholder: string } | { kind: "secret-ref"; placeholder: string } | { kind: "omit" };
 /** Metadata-only expectation for a download. Names, URLs, and file contents never enter a recipe. */
@@ -190,4 +191,96 @@ export function chooseLocatorCandidate(wanted: Locator, candidates: readonly Loc
   // substantial runner-up margin prevents a near-tie from becoming an unattended click.
   if (!best || best.score < 0.65 || (ranked[1] && best.score - ranked[1].score < 0.15)) return null;
   return best;
+}
+
+// ---------------- draft edits (#107) ----------------
+// The side panel (ui.workflow.remove_step / parameterize_step) and the agent tool
+// workflow.edit_draft both go through applyDraftEdits, so the two paths cannot drift.
+
+export type DraftEditOp = { op: "remove_step"; index: number } | { op: "parameterize"; index: number; name: string };
+export type AppliedDraftEdit = { op: "remove_step"; index: number; kind: WorkflowStep["kind"] } | { op: "parameterize"; index: number; kind: "input"; placeholder: string };
+/** Parameter names become the `{{NAME}}` replay input key. */
+export const PARAMETER_NAME = /^[A-Z0-9][A-Z0-9_]{0,79}$/;
+const REVIEW_HINT = "Reviewed recipes are immutable. Capture the task again for a new draft, edit that, then have the user review it in the TabAgent side panel.";
+
+const badEdit = (message: string, hint?: string) => new TabAgentError("BAD_REQUEST", message, hint);
+
+/** The name the side panel's "Make parameter" button gives a step: its label, UPPER_SNAKE. */
+export function panelParameterName(step: WorkflowStep): string {
+  const label = step.locator?.name || step.locator?.label || "input";
+  return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 80) || "INPUT";
+}
+
+/**
+ * Apply edits to a draft, in order: each op's index refers to the step list left by the
+ * previous ops. Validation is all-or-nothing; the input recipe is never mutated. Any edit
+ * resets review state (status draft, review-only dedupe key and URL postcondition cleared),
+ * so approving and replaying still need the side-panel review.
+ *
+ * `sharedParameters` keeps the panel's existing behaviour, where two inputs with the same
+ * label share one derived parameter; an agent naming a parameter must pick a fresh name.
+ */
+export function applyDraftEdits(recipe: WorkflowRecipe, ops: readonly DraftEditOp[], opts: { sharedParameters?: boolean } = {}): { recipe: WorkflowRecipe; applied: AppliedDraftEdit[] } {
+  if (recipe.status !== "draft") throw badEdit(`Only draft recipes can be edited; "${recipe.name}" is ${recipe.status}`, REVIEW_HINT);
+  if (!ops.length) throw badEdit("workflow.edit_draft needs at least one op");
+  const steps: WorkflowStep[] = structuredClone(recipe.steps);
+  const applied: AppliedDraftEdit[] = [];
+  ops.forEach((op, i) => {
+    const where = `op ${i + 1} (${String((op as { op?: unknown }).op)})`;
+    const index = (op as { index?: unknown }).index;
+    if (op.op !== "remove_step" && op.op !== "parameterize") throw badEdit(`${where}: unknown op; use remove_step or parameterize`);
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= steps.length) {
+      throw badEdit(`${where}: no step at index ${String(index)}; the draft has ${steps.length} steps at this point`, "Indices are 0-based and refer to the step list after the previous ops in this call.");
+    }
+    const step = steps[index];
+    if (op.op === "remove_step") {
+      steps.splice(index, 1);
+      applied.push({ op: "remove_step", index, kind: step.kind });
+      return;
+    }
+    if (typeof op.name !== "string" || !PARAMETER_NAME.test(op.name)) throw badEdit(`${where}: parameter name ${JSON.stringify(op.name)} must be UPPER_SNAKE letters, digits and _ (max 80)`);
+    if (step.kind !== "input" || step.value?.kind !== "fixed") throw badEdit(`${where}: step ${index} is a ${step.kind}${step.value ? ` with a ${step.value.kind} value` : ""}; only fixed input steps can become parameters`);
+    const placeholder = `{{${op.name}}}`;
+    if (!opts.sharedParameters && steps.some((other) => (other.value?.kind === "parameter" || other.value?.kind === "secret-ref") && other.value.placeholder === placeholder)) {
+      throw badEdit(`${where}: ${placeholder} is already used by another step; pick a different name`);
+    }
+    step.value = { kind: "parameter", placeholder };
+    applied.push({ op: "parameterize", index, kind: "input", placeholder });
+  });
+  const next: WorkflowRecipe = { ...recipe, status: "draft", steps };
+  delete next.dedupeKey;
+  delete next.assertions;
+  return { recipe: next, applied };
+}
+
+/** One line per step, as the side panel shows it. */
+export function workflowStepDetail(step: WorkflowStep): string {
+  const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
+  switch (step.kind) {
+    case "navigate":
+      return step.url ?? "";
+    case "press":
+      return step.locator ? `${step.key} in ${target}` : String(step.key ?? "");
+    case "check":
+      return `${target} → ${step.checked === false ? "off" : "on"}`;
+    case "wait":
+      return `${step.waitFor ?? "?"}${step.waitValue ? ` ${step.waitValue}` : ""}`;
+    case "scroll":
+      return `${step.locator ? `${target} ` : ""}by ${step.dx ?? 0},${step.dy ?? 0}`;
+    case "download":
+      return step.download?.mime ?? step.download?.extension ?? "artifact";
+    default:
+      return target;
+  }
+}
+
+/** What workflow.edit_draft returns: enough to review the edit without a second workflow.list. */
+export function draftSummary(recipe: WorkflowRecipe) {
+  return {
+    id: recipe.id,
+    name: recipe.name,
+    status: recipe.status,
+    needsReview: recipe.status !== "reviewed",
+    steps: recipe.steps.map((step, index) => ({ index, kind: step.kind, detail: workflowStepDetail(step), ...(step.value?.kind === "parameter" ? { parameter: step.value.placeholder } : {}) })),
+  };
 }

@@ -1,6 +1,7 @@
 import { applyDenylistChanges, validateDenylistChanges } from "../../pure/denylistChange";
 import { applySiteChange, checkSiteChange, normalizeSiteOrigin, siteChangeSnapshot, type SiteChanges } from "../../pure/siteChange";
-import { getSettings, updateSettings } from "../settings";
+import { checkModeChange, modeChangeSnapshot, type ModeChangeParams } from "../../pure/modeChange";
+import { getSettings, settingsNow, updateSettings } from "../settings";
 import { TabAgentError } from "@tabagent/protocol";
 
 const snapshot = (denylist: readonly string[]) => [...denylist].map((glob) => glob.trim().toLowerCase()).filter(Boolean).sort().join("\u0000");
@@ -17,10 +18,17 @@ export async function policyPrecheck(tool: string, p: Record<string, unknown>): 
     const { origin } = checkSiteChange(current, String(p.origin ?? ""), p.changes as SiteChanges);
     return siteChangeSnapshot(current, origin);
   }
+  if (tool === "policy.mode_change") {
+    checkModeChange(current, p as ModeChangeParams, settingsNow());
+    return modeChangeSnapshot(current);
+  }
   return undefined;
 }
 
-/** The router has already obtained the one-time visible category-p approval. */
+/**
+ * The router has already obtained the one-time visible category-p approval, except for
+ * policy.mode_change requests that only turn modes off (#109), which need none.
+ */
 export const policyHandlers = {
   "policy.denylist_change": async ({ p, policySnapshot }: any) => {
     const changes = validateDenylistChanges(p.changes);
@@ -40,5 +48,14 @@ export const policyHandlers = {
     const result = applySiteChange(current.sites, origin, p.changes, !!current.yolo);
     await updateSettings({ sites: result.sites });
     return { status: "applied", origin, site: result.site, applied: result.applied };
+  },
+  "policy.mode_change": async ({ p, policySnapshot }: any) => {
+    const current = await getSettings();
+    // Duration starts now, at approval; the expiry alarm follows the stored timestamp (index.ts).
+    const { next, applied, needsApproval } = checkModeChange(current, p as ModeChangeParams, settingsNow());
+    // Fail closed: turning a mode on needs proof the user approved exactly this state.
+    if (needsApproval && (typeof policySnapshot !== "string" || modeChangeSnapshot(current) !== policySnapshot)) throw STALE("YOLO or developer mode setting");
+    await updateSettings({ ...next });
+    return { status: "applied", ...next, applied };
   },
 };

@@ -10,6 +10,7 @@ export * from "./auth-code";
 export * from "./captcha";
 export * from "./handoff";
 export * from "./settings";
+export * from "./approvals";
 
 // ---------------------------------------------------------------------------
 // Site policy helpers (shared by extension engine + bridge token limits)

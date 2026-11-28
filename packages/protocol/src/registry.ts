@@ -21,7 +21,7 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   d: "Reading credentials (cookies, storage, network headers/bodies)",
   e: "Transferring a local file (upload or reading a download)",
   f: "Taking over one of your tabs",
-  p: "Changing the TabAgent denylist",
+  p: "Changing TabAgent policy (denylist, site settings, YOLO or developer mode)",
   r: "Accepting a proposed workflow repair",
 };
 
@@ -756,6 +756,30 @@ export const TOOLS = [
     lite: "supported",
     handledBy: "extension",
   }),
+  def({
+    name: "policy.mode_change",
+    group: "policy",
+    description: "Turn YOLO or devAllowSensitive on or off. Off applies at once; on needs a visible approval YOLO cannot bypass. durationMin (yolo: true only) switches YOLO off after that many minutes.",
+    params: z.strictObject({
+      yolo: z.boolean().optional(),
+      devAllowSensitive: z.boolean().optional(),
+      durationMin: zint().min(1).max(1440).optional(),
+      reason: z.string().min(1).max(500),
+    }),
+    result: loose({
+      status: z.literal("applied"),
+      yolo: z.boolean(),
+      devAllowSensitive: z.boolean(),
+      yoloExpiresAt: z.number().nullable(),
+      applied: z.array(z.object({ field: z.enum(["yolo", "devAllowSensitive", "yoloExpiresAt"]), from: z.union([z.boolean(), z.number()]).nullable(), to: z.union([z.boolean(), z.number()]).nullable() })),
+    }),
+    level: "full",
+    sensitive: "p",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
   // ---------------- workflow ----------------
   def({
     name: "workflow.capture_start",
@@ -808,6 +832,30 @@ export const TOOLS = [
   def({ name: "workflow.schedule", group: "workflow", description: "Schedule a reviewed low-risk recipe using five-field cron and an IANA timezone. Inputs are explicit reviewed parameter values; missed runs are not replayed.", params: z.object({ id: z.string().uuid(), tabId, cron: z.string(), timeZone: z.string(), inputs: z.record(z.string(), z.string().max(1000)).optional() }), result: loose({ schedule: z.unknown() }), level: "act", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
   def({ name: "workflow.unschedule", group: "workflow", description: "Disable a saved workflow schedule.", params: z.object({ id: z.string().uuid() }), result: loose({ ok: z.boolean() }), level: "none", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
   def({ name: "workflow.runs", group: "workflow", description: "List inspectable local run history for workflow recipes.", params: z.object({ id: z.string().uuid().optional() }), result: loose({ runs: z.array(z.unknown()) }), level: "none", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
+  def({
+    name: "workflow.edit_draft",
+    group: "workflow",
+    description: "Edit a draft recipe: remove steps or make fixed inputs {{NAME}} parameters. Ops run in order; each index is into the list left by earlier ops. All-or-nothing. Drafts only; still needs user review.",
+    params: z.object({
+      id: z.string().uuid(),
+      ops: z
+        .array(
+          z.discriminatedUnion("op", [
+            z.object({ op: z.literal("remove_step"), index: z.number().int().min(0) }).strict(),
+            z.object({ op: z.literal("parameterize"), index: z.number().int().min(0), name: z.string().regex(/^[A-Z0-9][A-Z0-9_]{0,79}$/, "use UPPER_SNAKE letters, digits and _ (max 80)") }).strict(),
+          ]),
+        )
+        .min(1)
+        .max(50)
+        .describe('{op:"remove_step",index} or {op:"parameterize",index,name}; 0-based'),
+    }),
+    result: loose({ id: z.string(), status: z.literal("draft"), needsReview: z.literal(true), steps: z.array(z.unknown()), applied: z.array(z.unknown()) }),
+    level: "none",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
   def({ name: "workflow.review_repair", group: "workflow", description: "Accept or reject a proposed locator repair after inspecting the run.", params: z.object({ recipeId: z.string().uuid(), repairId: z.string().uuid(), decision: z.enum(["accept", "reject"]) }), result: loose({ repair: z.unknown(), recipe: z.unknown() }), level: "full", sensitive: "r", pageContent: [], profiles: [], lite: "supported", handledBy: "extension" }),
   def({
     name: "session.info",

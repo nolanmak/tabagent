@@ -1,6 +1,6 @@
 // Test doubles for Send to agent (spec §11): a stub `claude` executable on a temp PATH and a fake
 // Codex app-server speaking JSON-RPC over WebSocket on a temp unix socket. The real CLIs never run.
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,16 @@ export class StubClaude {
   }
   agents(records: object[]) {
     this.set("agents.json", records);
+  }
+  /** A stand-in for ~/.claude/projects (point TABAGENT_CLAUDE_PROJECTS_DIR or claudeProjectsDir here). */
+  get projectsDir(): string {
+    return join(this.dir, "projects");
+  }
+  /** Write `<projects>/<cwd slug>/<sessionId>.jsonl` with these entries, as Claude Code does (#137). */
+  transcript(cwd: string, sessionId: string, entries: object[]) {
+    const d = join(this.projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, `${sessionId}.jsonl`), entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
   }
   read(name: string): string | null {
     const p = join(this.dir, name);
