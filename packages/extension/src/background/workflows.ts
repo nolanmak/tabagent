@@ -1,6 +1,7 @@
 // Extension-owned capture state and local recipe store. Recipes are drafts until the user reviews
 // them; no credentials, cookies, raw DOM, or sensitive input values are persisted.
-import { agentCaptureEvent, exactNameMatch, assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
+import { TabAgentError } from "@tabagent/protocol";
+import { agentCaptureEvent, applyDraftEdits, draftSummary, panelParameterName, type AppliedDraftEdit, type DraftEditOp, exactNameMatch, assertionsPass, buildRecipe, chooseLocatorCandidate, repairCanPersist, replayBlockCode, replayBlockReason, resolveDedupeKey, resolveReplayInput, shouldSkipDuplicate, type CaptureEvent, type Locator, type RunState, type WorkflowRecipe, type WorkflowRunReason } from "../pure/workflow";
 import { driverFor } from "./driver";
 import { setCheckState } from "./handlers/check";
 import { downloadAfter, downloadsFromTabSince } from "./downloads";
@@ -160,29 +161,45 @@ export async function reviewWorkflow(id: string, approve: boolean, dedupeKey?: s
   return recipe;
 }
 
-/** The user may trim a draft before review, but reviewed recipes are immutable except repairs. */
-export async function removeWorkflowStep(id: string, index: number) {
-  const recipe = (await load()).find((entry) => entry.id === id);
-  if (!recipe) throw new Error(`No workflow recipe "${id}"`);
-  if (recipe.status !== "draft") throw new Error("Only draft recipes can be edited");
-  if (!Number.isInteger(index) || index < 0 || index >= recipe.steps.length) throw new Error("Workflow step was not found");
-  recipe.steps.splice(index, 1);
-  await save();
-  return recipe;
+export type WorkflowEditEvent = AppliedDraftEdit & { recipeId: string; source: "agent" | "panel"; sessionId?: string };
+const editListeners = new Set<(e: WorkflowEditEvent) => void>();
+/** The service worker forwards each applied op to the bridge audit log. */
+export function onWorkflowEdit(fn: (e: WorkflowEditEvent) => void) {
+  editListeners.add(fn);
+  return () => editListeners.delete(fn);
 }
 
-/** Replace a saved draft literal with an explicit caller-supplied placeholder. */
-export async function parameterizeWorkflowStep(id: string, index: number) {
-  const recipe = (await load()).find((entry) => entry.id === id);
-  const step = recipe?.steps[index];
-  if (!recipe || !step) throw new Error("Workflow step was not found");
-  if (recipe.status !== "draft") throw new Error("Only draft recipes can be edited");
-  if (step.kind !== "input" || step.value?.kind !== "fixed") throw new Error("Only fixed input steps can become parameters");
-  const label = step.locator?.name || step.locator?.label || "input";
-  const token = label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 80) || "INPUT";
-  step.value = { kind: "parameter", placeholder: `{{${token}}}` };
+/**
+ * The one write path for draft edits, shared by the side panel and workflow.edit_draft.
+ * Reviewed recipes are immutable except repairs; applyDraftEdits enforces that, validates
+ * every op before anything changes, and resets review state.
+ */
+async function editDraft(id: string, ops: (recipe: WorkflowRecipe) => DraftEditOp[], source: WorkflowEditEvent["source"], opts: { sharedParameters?: boolean; sessionId?: string } = {}) {
+  const all = await load();
+  const at = all.findIndex((entry) => entry.id === id);
+  if (at < 0) throw new TabAgentError("NOT_FOUND", `No workflow recipe "${id}"`, "workflow.list shows the stored recipes and their ids.");
+  const { recipe, applied } = applyDraftEdits(all[at], ops(all[at]), opts);
+  all[at] = recipe;
   await save();
-  return recipe;
+  for (const edit of applied) for (const fn of editListeners) fn({ ...edit, recipeId: id, source, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}) });
+  return { recipe, applied };
+}
+
+/** workflow.edit_draft: an agent cleans up a draft it captured. The user still reviews it. */
+export async function editDraftWorkflow(id: string, ops: DraftEditOp[], sessionId?: string) {
+  const { recipe, applied } = await editDraft(id, () => ops, "agent", { sessionId });
+  return { ...draftSummary(recipe), applied };
+}
+
+/** Side panel: the user trims a draft before review. */
+export async function removeWorkflowStep(id: string, index: number) {
+  return (await editDraft(id, () => [{ op: "remove_step", index }], "panel")).recipe;
+}
+
+/** Side panel: replace a saved draft literal with a placeholder named after the step's label. */
+export async function parameterizeWorkflowStep(id: string, index: number) {
+  const ops = (recipe: WorkflowRecipe): DraftEditOp[] => [{ op: "parameterize", index, name: recipe.steps[index] ? panelParameterName(recipe.steps[index]) : "INPUT" }];
+  return (await editDraft(id, ops, "panel", { sharedParameters: true })).recipe;
 }
 
 export async function listWorkflowRuns(recipeId?: string) {

@@ -76,6 +76,8 @@ export interface AuthEnv {
   filled?(kind: "username" | "password" | "code" | "autofill", secret: string | null): void;
   /** DA1 (review H1): agent JavaScript ran in the tab's current document; it could be listening. */
   scriptDirty?(): boolean;
+  /** When the post-restart lock ends (ms since epoch), or 0. */
+  restartLockedUntil?(): number;
   /** DA11 audit event (tool, origin, provider/source, masked account, outcome). Never a secret. */
   event(name: string, data: Record<string, unknown>): void;
   now(): number;
@@ -105,6 +107,12 @@ export const CHROME_AUTOFILL_ID = "chrome-autofill:saved";
 
 /** Refuse to type a secret into a document where agent JavaScript has run (review H1). */
 function assertClean(env: AuthEnv) {
+  const until = env.restartLockedUntil?.() ?? 0;
+  if (until > env.now()) {
+    const mins = Math.max(1, Math.ceil((until - env.now()) / 60_000));
+    const at = new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    throw new TabAgentError("PERMISSION_DENIED", `TabAgent restarted while a sign-in was in progress, so it won't type credentials anywhere until ${at} (about ${mins} min)`, "Wait, or ask the user to end the restart lock in the TabAgent side panel if they reloaded TabAgent themselves.");
+  }
   if (env.scriptDirty?.()) {
     throw new TabAgentError("PERMISSION_DENIED", "Agent JavaScript ran in this page, so TabAgent will not type a credential into it", "Call nav.reload (or open the sign-in page again), then retry without js.eval or nav.wait for=fn first.");
   }

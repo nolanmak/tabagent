@@ -27,7 +27,7 @@ import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listS
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
-import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
+import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, onWorkflowEdit, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve", AGENTS_FEATURE];
@@ -70,6 +70,9 @@ setCaptchaSender((m) => bridge.send(m));
 function sendEvent(event: string, data: Record<string, unknown> = {}) {
   bridge.send({ type: "event", event, data });
 }
+
+// #107: each applied draft edit (agent or side panel) is one audit event.
+onWorkflowEdit((e) => sendEvent("workflow.edit", e));
 
 function onBridgeMessage(msg: any) {
   if (onAgentsBridgeMessage(msg)) return;
@@ -355,7 +358,7 @@ function stoppedTabs() {
 async function uiState() {
   const s = await getSettings();
   const workflowTabs = (await chrome.tabs.query({})).filter((tab) => tab.id != null && /^https?:/i.test(tab.pendingUrl || tab.url || "")).map((tab) => ({ id: tab.id!, title: tab.title || tab.url || `Tab ${tab.id}`, url: tab.pendingUrl || tab.url || "" }));
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: await sessionsView(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id };
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: await sessionsView(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id, authRestartLockedUntil: authTaint.restartLockedUntil() };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -386,6 +389,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return { ok: true };
       case "ui.resume":
         await resume();
+        return { ok: true };
+      case "ui.endRestartLock":
+        await authTaintReady;
+        authTaint.endRestartLock();
         return { ok: true };
       case "ui.endSession":
         await endSession(msg.id);
