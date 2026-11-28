@@ -1,0 +1,28 @@
+// AD6: the route one send would use, chosen fresh at send time. Pure.
+import type { AgentRoute, AgentStatus, AgentVendor } from "@tabagent/protocol";
+
+export interface RouteTarget {
+  vendor: AgentVendor;
+  status: AgentStatus;
+  /** AD4: the agent's own `tabagent mcp` proxy registered with the bridge. Always false until P2. */
+  linked: boolean;
+  /** AD9: the linked proxy reported `x-tabagent-channels: 1`. */
+  channels?: boolean;
+}
+
+export interface RouteOpts {
+  /** AD9/P3: the channel route ships. False until then. */
+  channelEnabled?: boolean;
+  /** The user picked "Start new session" (Claude only). */
+  forceSpawn?: boolean;
+}
+
+export function chooseRoute(t: RouteTarget, o: RouteOpts = {}): AgentRoute {
+  if (o.forceSpawn) return t.vendor === "claude" ? "spawn" : "none";
+  if (t.linked && t.vendor === "claude" && t.channels && o.channelEnabled) return "channel";
+  if (t.linked) return "piggyback";
+  // AD10: a Codex thread in systemError is listed but not sendable.
+  if (t.vendor === "codex") return t.status === "error" ? "none" : "queue";
+  if (t.vendor === "claude") return "spawn";
+  return "none";
+}

@@ -139,7 +139,7 @@ function renderSettings() {
       .map(([o, e]) => {
         const pol = e.policy ?? "ask";
         const pre = CATS.map((c) => `<label class="chip"><input type="checkbox" data-pre="${c}" data-origin="${esc(o)}" ${e.preapproved?.[c] ? "checked" : ""}/>${CAT_LABEL[c]}</label>`).join("");
-        return `<tr><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}<label class="chip" title="Let agents sign in here with your saved accounts"><input type="checkbox" data-auth data-origin="${esc(o)}" ${authEnabled(e, o) ? "checked" : ""}/>sign-in</label>${(e.authAlways ?? []).length ? `<span class="muted small"> (${(e.authAlways ?? []).length} account${(e.authAlways ?? []).length === 1 ? "" : "s"} always)</span>` : ""}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
+        return `<tr><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}<label class="chip" title="Let agents sign in here with your saved accounts"><input type="checkbox" data-auth data-origin="${esc(o)}" ${authEnabled(e, o, !!state.settings?.yolo) ? "checked" : ""}/>sign-in</label>${(e.authAlways ?? []).length ? `<span class="muted small"> (${(e.authAlways ?? []).length} account${(e.authAlways ?? []).length === 1 ? "" : "s"} always)</span>` : ""}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
       })
       .join("") || `<tr><td colspan="5" class="muted">No site settings yet.</td></tr>`;
   $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
@@ -268,7 +268,7 @@ $("sites").addEventListener("change", (e) => {
     if ((el as HTMLInputElement).checked) entry.auth = true;
     else {
       // A default-on origin (Google) needs an explicit false to stay off.
-      if (AUTH_DEFAULT_ON_ORIGINS.includes(el.dataset.origin ?? "")) entry.auth = false;
+      if (state.settings?.yolo || AUTH_DEFAULT_ON_ORIGINS.includes(el.dataset.origin ?? "")) entry.auth = false;
       else delete entry.auth;
       delete entry.authAlways;
     }

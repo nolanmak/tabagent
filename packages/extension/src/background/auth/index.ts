@@ -199,7 +199,7 @@ function envFor(c: Ctx, tabId: number): AuthEnv {
     tabId,
     async siteCheck(url) {
       const s = await getSettings();
-      checkAuthSite({ sites: s.sites as any, denylist: s.denylist, authDenyHosts: AUTH_DENY_HOSTS }, url);
+      checkAuthSite({ sites: s.sites as any, denylist: s.denylist, authDenyHosts: AUTH_DENY_HOSTS, yolo: !!s.yolo }, url);
     },
     consent: (url, who, summary) => requireSensitive(c.meta, url, "g", c.tool.name, summary, ["Sign-in uses a saved credential; the agent never sees it"], { auth: who, tabId }),
     channel,
