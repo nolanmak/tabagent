@@ -322,3 +322,89 @@ describe("workflow capture hook", () => {
     expect(w.handlers["nav.goto"]).toHaveBeenCalled();
   });
 });
+
+describe("policy.site_change through the router (#104)", () => {
+  const params = { origin: "https://app.example.com", changes: { auth: true }, reason: "sign in to download statements" };
+  const siteWorld = (over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partial<PolicyState> = {}) => {
+    const handler = vi.fn(async (c: any) => ({ status: "applied", snapshot: c.policySnapshot }));
+    const w = world({ handler: (n) => (n === "policy.site_change" ? handler : undefined), policySnapshot: vi.fn(async () => "snap-1"), ...over }, state);
+    return { ...w, handler };
+  };
+
+  it("checks the request and takes the snapshot before the prompt, then hands the snapshot to the handler", async () => {
+    const order: string[] = [];
+    const w = siteWorld({
+      policySnapshot: vi.fn(async (tool: string) => (order.push(`snapshot:${tool}`), "snap-1")),
+      authorize: vi.fn(async (r: AuthorizeRequest) => void order.push(`authorize:${r.sensitive}`)),
+    });
+    const r = await w.router.handle(cmd("policy.site_change", params));
+    expect(r.ok).toBe(true);
+    expect(order).toEqual(["snapshot:policy.site_change", "authorize:p"]);
+    expect(w.handler).toHaveBeenCalledWith(expect.objectContaining({ policySnapshot: "snap-1" }));
+  });
+
+  it("the prompt is category p with the origin, each change and the reason in its summary", async () => {
+    const authorize = vi.fn(async (_r: AuthorizeRequest) => {});
+    const w = siteWorld({ authorize });
+    await w.router.handle(cmd("policy.site_change", { origin: "https://app.example.com", changes: { auth: false, policy: "deny", lite: true }, reason: "user asked to lock this down" }));
+    const req = authorize.mock.calls[0][0];
+    expect(req).toMatchObject({ tool: "policy.site_change", sensitive: "p", level: "full", url: "" });
+    expect(req.summary).toContain("https://app.example.com");
+    expect(req.summary).toContain("turn sign-in off");
+    expect(req.summary).toContain("set policy to deny");
+    expect(req.summary).toContain("turn lite mode on");
+    expect(req.summary).toContain("user asked to lock this down");
+    expect(req.reasons.join(" ")).toMatch(/site/i);
+  });
+
+  it("a refused precheck (vault, denylisted, wildcard) never reaches the prompt or the handler", async () => {
+    const w = siteWorld({
+      policySnapshot: vi.fn(async () => {
+        throw new TabAgentError("PERMISSION_DENIED", "blocked.example is on the TabAgent denylist", "Request policy.denylist_change first");
+      }),
+    });
+    const r = await w.router.handle(cmd("policy.site_change", params));
+    expect(r.error).toMatchObject({ code: "PERMISSION_DENIED", hint: "Request policy.denylist_change first" });
+    expect(w.authorize).not.toHaveBeenCalled();
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["denied", "PERMISSION_DENIED"],
+    ["timed out", "PROMPT_TIMEOUT"],
+  ])("a %s prompt leaves the handler unrun", async (_label, errCode) => {
+    const w = siteWorld({
+      authorize: vi.fn(async () => {
+        throw new RouterError(errCode, "no");
+      }),
+    });
+    const r = await w.router.handle(cmd("policy.site_change", params));
+    expect(r.error?.code).toBe(errCode);
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+
+  it("YOLO and developer mode do not skip the category p prompt", async () => {
+    // world()'s default authorize applies the pure policy and turns an ask into PERMISSION_DENIED.
+    const w = siteWorld({}, { yolo: true, devAllowSensitive: true });
+    const r = await w.router.handle(cmd("policy.site_change", params));
+    expect(r.error?.message).toContain("would ask (sensitive)");
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+
+  it("empty change sets, unknown policies and empty reasons are refused by the schema", async () => {
+    const w = siteWorld();
+    expect((await w.router.handle(cmd("policy.site_change", { ...params, changes: {} }))).error?.code).toBe("BAD_REQUEST");
+    expect((await w.router.handle(cmd("policy.site_change", { ...params, changes: { policy: "always" } }))).error?.code).toBe("BAD_REQUEST");
+    expect((await w.router.handle(cmd("policy.site_change", { ...params, reason: "" }))).error?.code).toBe("BAD_REQUEST");
+    expect(w.authorize).not.toHaveBeenCalled();
+  });
+
+  it("policy.denylist_change still gets its snapshot", async () => {
+    const policySnapshot = vi.fn(async () => "deny-snap");
+    const handler = vi.fn(async (c: any) => ({ status: "applied", denylist: [], applied: [], s: c.policySnapshot }));
+    const w = world({ handler: () => handler, policySnapshot, authorize: vi.fn(async () => {}) });
+    await w.router.handle(cmd("policy.denylist_change", { changes: [{ op: "add", glob: "x.example" }], reason: "r" }));
+    expect(policySnapshot).toHaveBeenCalledWith("policy.denylist_change", expect.objectContaining({ reason: "r" }));
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ policySnapshot: "deny-snap" }));
+  });
+});

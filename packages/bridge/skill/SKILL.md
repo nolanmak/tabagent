@@ -49,6 +49,7 @@ Signing in is part of the job; don't ask the user first. Tools: `auth` profile (
 2. Saved account: `auth.login` fills it once the user approves.
 3. SSO button ("Sign in with Google") or an emailed/texted code: click through, then `auth.code {source}` types it.
 4. Passkey, CAPTCHA or anything else: `auth.handoff {reason}`, then tell the user what to do.
+5. `Sign-in is not enabled`: request `policy.site_change {origin, changes: {auth: true}, reason}`, then retry.
 
 Sign in with Google (`accounts.google.com` off the denylist): click the site's Google button (popup: `tabs {action: "select"}` it). On Google: `auth.status`, then `auth.login {account}` with the chosen id; call again for the password. Codes: `auth.code {source}` with sms or totp, never email. `next` = handoff_required (phone prompt, passkey, CAPTCHA, recovery page): `auth.handoff`, then re-snapshot. Never change Google account settings.
 
