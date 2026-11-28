@@ -4,6 +4,7 @@ export * from "./errors";
 export * from "./messages";
 export * from "./registry";
 export * from "./wrap";
+export * from "./agents";
 export * from "./auth";
 export * from "./auth-code";
 export * from "./captcha";

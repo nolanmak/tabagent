@@ -93,7 +93,9 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
   - **Unpaired:** a valid pair code (one-time, 30-minute TTL, invalidated after
     5 wrong attempts; `tabagent pair` mints a new one) is accepted; the bridge
     records the extension ID in `config.json.extensionIds` and replies
-    `welcome {protocolVersion, bridgeVersion, secret}`.
+    `welcome {protocolVersion, bridgeVersion, secret, features?}`. Both hello and
+    welcome may list optional `features` (`files.resolve`, `agents`); a side
+    uses a feature only when the other advertises it.
   - **Paired:** hello must carry the secret and come from a recorded extension ID.
   - One extension connection: a reconnect from the same ID replaces the old
     socket, which is closed at once (terminated if it has not closed within
