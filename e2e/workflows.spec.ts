@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test, expect, Harness } from "./fixture";
 
 test("#68/#69 agent capture produces a reviewed recipe that replays safely", async ({ h }) => {
@@ -165,4 +167,74 @@ test("agent capture replays check, fill, targeted press and scroll; exact names 
   const replay = await h.ok(c, "workflow.run", { id: recipe.id, tabId });
   expect(replay.json.run.state, JSON.stringify(replay.json.run)).toBe("succeeded");
   expect(replay.json.run.repairs).toEqual([]);
+});
+
+test("#107 workflow.edit_draft edits a captured draft that still needs side-panel review", async ({ h }) => {
+  await h.trustFixtures();
+  const c = await h.mcp({ label: "workflow-edit-draft" });
+  const tabId = (await h.ok(c, "tabs", { action: "new" })).json.tabId;
+  await h.ok(c, "workflow.capture_start", { tabId, source: "agent", name: "edit draft fixture" });
+  await h.ok(c, "nav.goto", { tabId, url: `${h.A}/index.html` });
+  await h.ok(c, "nav.wait", { tabId, for: "load" });
+  const snap = await h.ok(c, "page.snapshot", { tabId });
+  await h.ok(c, "act.click", { tabId, ref: Harness.ref(snap.text, /button "Click me"/) });
+  await h.ok(c, "act.type", { tabId, ref: Harness.ref(snap.text, /searchbox "Search"/), text: "widgets" });
+  const recipe = (await h.ok(c, "workflow.capture_stop", { tabId })).json.recipe;
+  expect(recipe.steps.map((s: any) => s.kind)).toEqual(["navigate", "wait", "click", "input"]);
+
+  // Atomic: op 2 would hit the input on the original list, but after op 1 index 3 is out of range.
+  const bad = await h.call(c, "workflow.edit_draft", { id: recipe.id, ops: [{ op: "remove_step", index: 1 }, { op: "parameterize", index: 3, name: "QUERY" }] });
+  expect(bad.isError).toBe(true);
+  expect(bad.text).toContain("BAD_REQUEST");
+  const unchanged = (await h.ok(c, "workflow.list", {})).json.workflows.find((w: any) => w.id === recipe.id);
+  expect(unchanged.steps).toHaveLength(4);
+
+  // Indices refer to the list left by the previous op: removing the wait moves the input to 2.
+  const edited = await h.ok(c, "workflow.edit_draft", { id: recipe.id, ops: [{ op: "remove_step", index: 1 }, { op: "parameterize", index: 2, name: "QUERY" }] });
+  expect(edited.json).toMatchObject({ id: recipe.id, status: "draft", needsReview: true });
+  expect(edited.json.steps).toEqual([
+    { index: 0, kind: "navigate", detail: `${h.A}/index.html` },
+    { index: 1, kind: "click", detail: "Click me" },
+    { index: 2, kind: "input", detail: "Search", parameter: "{{QUERY}}" },
+  ]);
+  expect(edited.json.applied).toEqual([
+    { op: "remove_step", index: 1, kind: "wait" },
+    { op: "parameterize", index: 2, kind: "input", placeholder: "{{QUERY}}" },
+  ]);
+
+  // A draft is not runnable until the user reviews it.
+  const unreviewed = await h.ok(c, "workflow.run", { id: recipe.id, tabId, inputs: { "{{QUERY}}": "widgets" } });
+  expect(unreviewed.json.run).toMatchObject({ state: "blocked", reason: expect.stringMatching(/not been reviewed/) });
+
+  const panel = await h.openPanel();
+  try {
+    await expect(panel.locator("#workflows")).toContainText("{{QUERY}}");
+    await expect(panel.locator(`button[data-delete-workflow-step="${recipe.id}"]`)).toHaveCount(3);
+    await expect(panel.locator(`button[data-review-workflow="${recipe.id}"]`)).toBeVisible();
+    await panel.locator(`button[data-review-workflow="${recipe.id}"]`).click();
+    await expect(panel.locator(`button[data-review-workflow="${recipe.id}"]`)).toHaveCount(0);
+  } finally {
+    await panel.close();
+  }
+
+  // Reviewed recipes are immutable from the CLI.
+  const approved = await h.call(c, "workflow.edit_draft", { id: recipe.id, ops: [{ op: "remove_step", index: 0 }] });
+  expect(approved.isError).toBe(true);
+  expect(approved.text).toContain("BAD_REQUEST");
+  expect(approved.text).toMatch(/only draft/i);
+  expect((await h.ok(c, "workflow.list", {})).json.workflows.find((w: any) => w.id === recipe.id).steps).toHaveLength(3);
+
+  const missing = await h.call(c, "workflow.edit_draft", { id: "00000000-0000-4000-8000-000000000000", ops: [{ op: "remove_step", index: 0 }] });
+  expect(missing.isError).toBe(true);
+  expect(missing.text).toContain("NOT_FOUND");
+
+  // The audit log has the command (with its ops) and one workflow.edit event per applied op.
+  await expect.poll(() => readFileSync(join(h.home, "audit.jsonl"), "utf8")).toMatch(/"event":"workflow\.edit".*"op":"parameterize"/);
+  const audit = readFileSync(join(h.home, "audit.jsonl"), "utf8");
+  expect(audit).toMatch(/"tool":"workflow\.edit_draft".*"outcome":"ok"/);
+  const events = audit.split("\n").filter((l) => l.includes('"event":"workflow.edit"') && l.includes(recipe.id)).map((l) => JSON.parse(l).data);
+  expect(events).toEqual([
+    expect.objectContaining({ recipeId: recipe.id, source: "agent", op: "remove_step", index: 1, kind: "wait" }),
+    expect.objectContaining({ recipeId: recipe.id, source: "agent", op: "parameterize", index: 2, placeholder: "{{QUERY}}" }),
+  ]);
 });
