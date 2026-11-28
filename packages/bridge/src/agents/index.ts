@@ -60,7 +60,7 @@ const WHO = { caller: "side panel" };
 
 /** Why a send has no route (NO_ROUTE). The panel shows the same words before Send. */
 function noRouteDetail(a: Agent): string {
-  if (a.vendor === "claude" && !a.linked) return "This session is not connected to TabAgent, so it cannot be messaged. Start a new session instead, or connect this one (update TabAgent and restart the session).";
+  if (a.vendor === "claude" && !a.linked) return "This session is not connected to TabAgent, so it cannot be messaged. Start a new session instead, or connect this one (run `tabagent setup claude`, then restart the session).";
   return a.status === "error" ? `This agent cannot take messages (${a.statusLabel ?? "error"})` : "No way to deliver to this agent";
 }
 

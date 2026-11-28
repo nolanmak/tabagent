@@ -206,7 +206,7 @@ The bridge **always** replies, including on failure. The worker times out after 
   - vendor icon and `title` (§5) as the primary label; cwd basename · age · pid · busy/idle as secondary text
   - badges: **linked** and **can drive tab**
   - the route as words: "instant (channel)", "on its next browser action", "queued (Codex)"
-  - an unlinked Claude agent (#137) says **Not connected — can't message this session**, with a short link **Connect it: update TabAgent and restart this session** to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
+  - an unlinked Claude agent (#137) says **Not connected — can't message this session**, with a short link **Connect it: run tabagent setup claude, then restart this session** (#152) to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
 - **Order and grouping (#137):** linked agents first, then the most recently started. Agents that are not connected **and** have no real title (no title, or a title equal to the vendor's auto name) are collapsed under an **N other sessions** disclosure, which opens when one of them is selected.
 - **Composer:** prompt box; "Share this tab" (on), which shows the tab title; "Include selection" (on when a selection exists, disabled when none); **Send**.
   - **Send** never spawns. For `none` targets (including unlinked Claude agents) it is disabled, with the reason shown.

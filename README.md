@@ -45,10 +45,15 @@ your existing sign-ins, under permissions you control.
 4. **Connect your agent** (more in [examples/](examples)):
 
    ```bash
-   claude mcp add tabagent -- npx -y @nolmak/tabagent mcp --profile core,auth
-   codex  mcp add tabagent -- npx -y @nolmak/tabagent mcp --profile core,auth
+   tabagent setup claude --profile core,auth   # adds or updates Claude Code's tabagent MCP server
+   tabagent setup codex  --profile core,auth   # the same for Codex
    tabagent skill install --claude --codex     # optional usage skill
    ```
+
+   `tabagent setup` runs `claude mcp add` / `codex mcp add` for you with
+   `npx -y @nolmak/tabagent@latest mcp`, keeps an existing profile, and prints the next steps
+   (`--dry-run` shows the commands only). By hand:
+   `claude mcp add tabagent -s user -- npx -y @nolmak/tabagent@latest mcp --profile core,auth`.
 
    Cursor: copy [examples/cursor/mcp.json](examples/cursor/mcp.json) to `.cursor/mcp.json`.
 
@@ -70,7 +75,8 @@ loaded as a development channel:
 claude --dangerously-load-development-channels server:tabagent
 ```
 
-Claude Code shows a one-time "local development" confirmation; accept it. An idle session acts on the
+`tabagent setup claude` makes sure the session runs a TabAgent that links to the panel and prints this
+command with an alias line; restart each session after running it. Claude Code shows a one-time "local development" confirmation; accept it. An idle session acts on the
 message right away; a busy one runs it after the current turn. The panel then lists the agent as
 "instant" and the send ends at `sent`: TabAgent saw its proxy write the message, but Claude Code
 gives no receipt, so TabAgent never claims more. Without the flag, delivery falls back to the next
