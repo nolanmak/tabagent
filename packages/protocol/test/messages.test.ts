@@ -83,6 +83,11 @@ describe("envelope round-trips", () => {
     expect(ResultEnvelopeSchema.safeParse({ ...valid.result, ok: false, error: { code: "NOPE", message: "x" } }).success).toBe(false);
     expect(AuditRecordSchema.safeParse({ ...audit, outcome: "maybe" }).success).toBe(false);
   });
+  it("audit records may mark a sign-in allowed without asking (#131), and it survives parsing", () => {
+    expect(AuditRecordSchema.parse({ ...audit, authAuto: true }).authAuto).toBe(true);
+    expect(AuditRecordSchema.safeParse({ ...audit, authAuto: false }).success).toBe(false);
+    expect(AuditRecordSchema.parse(audit)).not.toHaveProperty("authAuto");
+  });
   it("discriminated unions route by type", () => {
     expect(ExtToBridgeSchema.parse(valid.hello).type).toBe("hello");
     expect(ExtToBridgeSchema.parse({ type: "ping" }).type).toBe("ping");

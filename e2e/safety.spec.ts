@@ -149,6 +149,22 @@ test("#104 policy.site_change shows origin, changes and reason; approval applies
   await h.trustFixtures();
 });
 
+test("#131 policy.site_change can turn on sign-in without asking, with the payment risk in the approval", async ({ h }) => {
+  await h.setPolicies({ [h.A]: "full", [h.B]: "full" }, { devAllowSensitive: false, sites: { [h.A]: { auth: true } } });
+  const c = await h.mcp({ label: "site-change-auto-e2e", profile: "full" });
+  const on = await h.answerPrompt("once", () => h.ok(c, "policy.site_change", { origin: h.A, changes: { authAuto: true }, reason: "enter texted codes without asking" }));
+  expect(on.prompt.sensitive.category).toBe("p");
+  expect(on.summary).toContain("turn sign-in without asking on");
+  expect(on.summary).toContain("payments or transfers");
+  expect((on.result as any).json).toMatchObject({ status: "applied", site: { auth: true, authAuto: true }, applied: [{ field: "authAuto", from: false, to: true }] });
+  expect((await settings(h)).sites[h.A]).toMatchObject({ auth: true, authAuto: true });
+  const r = await h.call(c, "policy.site_change", { origin: "https://www.chase.com", changes: { authAuto: true }, reason: "x" });
+  expect(r.isError).toBe(true);
+  expect(r.text).toContain("PERMISSION_DENIED");
+  expect(await h.pendingPrompts()).toHaveLength(0);
+  await h.trustFixtures();
+});
+
 test("#104 a denied site change leaves settings unchanged, and YOLO does not skip the prompt", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false, yolo: true });
   try {
@@ -334,11 +350,11 @@ test("#118 adding a site with full in the panel turns on sign-in and every pre-a
   await h.setPolicies({}, { paused: false, devAllowSensitive: false });
   const panel = await h.openPanel();
   await panel.click("#settingsBox summary");
-  expect(await panel.textContent("#addSite")).toContain("full also turns on sign-in and pre-approvals");
+  expect(await panel.textContent("#addSite")).toContain("full also turns on sign-in (without asking) and pre-approvals");
   await panel.fill("#newOrigin", h.A);
   await panel.selectOption("#newLevel", "full");
   await panel.click("#addSite button[type=submit]");
-  await expect.poll(async () => (await settings(h)).sites[h.A]).toEqual({ policy: "full", auth: true, preapproved: { a: true, b: true, c: true, d: true, e: true } });
+  await expect.poll(async () => (await settings(h)).sites[h.A]).toEqual({ policy: "full", auth: true, authAuto: true, preapproved: { a: true, b: true, c: true, d: true, e: true } });
   await expect(panel.locator(`input[data-auth][data-origin="${h.A}"]`)).toBeChecked();
   for (const c of ["a", "b", "c", "d", "e"]) await expect(panel.locator(`input[data-pre="${c}"][data-origin="${h.A}"]`)).toBeChecked();
   // A sensitive action (c: js.eval) on that origin runs with no extra toggle and no prompt.
@@ -349,7 +365,7 @@ test("#118 adding a site with full in the panel turns on sign-in and every pre-a
   expect(await h.pendingPrompts()).toHaveLength(0);
   // Lowering from full leaves the toggles alone.
   await panel.selectOption(`select[data-policy][data-origin="${h.A}"]`, "act");
-  await expect.poll(async () => (await settings(h)).sites[h.A]).toEqual({ policy: "act", auth: true, preapproved: { a: true, b: true, c: true, d: true, e: true } });
+  await expect.poll(async () => (await settings(h)).sites[h.A]).toEqual({ policy: "act", auth: true, authAuto: true, preapproved: { a: true, b: true, c: true, d: true, e: true } });
   await panel.close();
 });
 

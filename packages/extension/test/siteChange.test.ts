@@ -88,14 +88,14 @@ describe("applying a site change (#104)", () => {
   it("ask removes the stored policy, like the side panel", () => {
     const r = applySiteChange({ "https://app.example.com": { policy: "full", lite: true } }, "https://app.example.com", { policy: "ask" });
     expect(r.sites["https://app.example.com"]).toEqual({ lite: true });
-    expect(r.site).toEqual({ policy: "ask", lite: true, auth: false });
+    expect(r.site).toEqual({ policy: "ask", lite: true, auth: false, authAuto: false });
     expect(r.applied).toEqual([{ field: "policy", from: "full", to: "ask" }]);
   });
 
   it("turning sign-in off also clears the always-accounts; an emptied entry is removed", () => {
     const r = applySiteChange({ "https://app.example.com": { auth: true, authAlways: ["a1"] }, "https://other.example": { policy: "read" } }, "https://app.example.com", { auth: false });
     expect(r.sites).toEqual({ "https://other.example": { policy: "read" } });
-    expect(r.site).toEqual({ policy: "ask", lite: false, auth: false });
+    expect(r.site).toEqual({ policy: "ask", lite: false, auth: false, authAuto: false });
   });
 
   it("a default-on sign-in origin keeps an explicit false", () => {
@@ -114,7 +114,7 @@ describe("applying a site change (#104)", () => {
   it("turning things on keeps unrelated fields and pre-approvals", () => {
     const r = applySiteChange({ "https://app.example.com": { preapproved: { c: true } } }, "https://app.example.com", { auth: true, policy: "act", lite: true });
     expect(r.sites["https://app.example.com"]).toEqual({ preapproved: { c: true }, auth: true, policy: "act", lite: true });
-    expect(r.site).toEqual({ policy: "act", lite: true, auth: true });
+    expect(r.site).toEqual({ policy: "act", lite: true, auth: true, authAuto: false });
   });
 
   it("does not mutate its input", () => {
@@ -122,6 +122,57 @@ describe("applying a site change (#104)", () => {
     const copy = structuredClone(sites);
     applySiteChange(sites, "https://app.example.com", { auth: false, policy: "ask" });
     expect(sites).toEqual(copy);
+  });
+});
+
+describe("sign in without asking through policy.site_change (#131)", () => {
+  const o = "https://app.example.com";
+  it("turning it on also turns sign-in on, and both show as applied", () => {
+    expect(checkSiteChange(state({ [o]: { policy: "act" } }), o, { authAuto: true }).applied).toEqual([
+      { field: "auth", from: false, to: true },
+      { field: "authAuto", from: false, to: true },
+    ]);
+    const r = applySiteChange({ [o]: { policy: "act" } }, o, { authAuto: true });
+    expect(r.sites[o]).toEqual({ policy: "act", auth: true, authAuto: true });
+    expect(r.site).toEqual({ policy: "act", lite: false, auth: true, authAuto: true });
+  });
+  it("where sign-in is only on by default or by YOLO, it stores an explicit auth: true", () => {
+    const r = applySiteChange({}, o, { authAuto: true }, true);
+    expect(r.sites[o]).toEqual({ auth: true, authAuto: true });
+    expect(r.applied).toEqual([{ field: "authAuto", from: false, to: true }]);
+  });
+  it("turning sign-in off clears it too, and says so", () => {
+    const st = state({ [o]: { policy: "full", auth: true, authAuto: true, authAlways: ["a"] } });
+    expect(checkSiteChange(st, o, { auth: false }).applied).toEqual([
+      { field: "auth", from: true, to: false },
+      { field: "authAuto", from: true, to: false },
+    ]);
+    expect(applySiteChange(st.sites, o, { auth: false }).sites[o]).toEqual({ policy: "full" });
+  });
+  it("turning it off keeps sign-in on", () => {
+    const r = applySiteChange({ [o]: { auth: true, authAuto: true } }, o, { authAuto: false });
+    expect(r.sites[o]).toEqual({ auth: true });
+    expect(r.applied).toEqual([{ field: "authAuto", from: true, to: false }]);
+  });
+  it("refuses a contradictory request and a no-op", () => {
+    expect(code(() => checkSiteChange(state(), o, { auth: false, authAuto: true })).code).toBe("BAD_REQUEST");
+    expect(code(() => checkSiteChange(state({ [o]: { auth: true, authAuto: true } }), o, { authAuto: true })).message).toMatch(/already/);
+    expect(code(() => checkSiteChange(state({ [o]: { auth: true } }), o, { authAuto: false })).message).toMatch(/already/);
+  });
+  it.each(["https://www.chase.com", "https://app.mercury.com", "https://mail.google.com", "https://blocked.example"])("is refused on blocked host %s", (origin) => {
+    expect(code(() => checkSiteChange(state(), origin, { authAuto: true })).code).toBe("PERMISSION_DENIED");
+  });
+  it("the snapshot changes when authAuto changes", () => {
+    expect(siteChangeSnapshot(state({ [o]: { auth: true, authAuto: true } }), o)).not.toBe(siteChangeSnapshot(state({ [o]: { auth: true } }), o));
+  });
+  it("the prompt names it and the payment risk", () => {
+    const s = describeSiteChange({ origin: o, changes: { authAuto: true }, reason: "pay bills" });
+    expect(s).toContain("turn sign-in without asking on");
+    expect(s).toMatch(/payments or transfers/);
+    expect(describeSiteChange({ origin: o, changes: { authAuto: false }, reason: "r" })).toContain("turn sign-in without asking off");
+  });
+  it("counts as a change on its own", () => {
+    expect(code(() => checkSiteChange(state(), o, {})).message).toContain("authAuto");
   });
 });
 

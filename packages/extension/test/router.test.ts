@@ -96,6 +96,21 @@ describe("router order and envelope", () => {
     expect(r.audit).toMatchObject({ tool: "page.snapshot", origin: "https://a.example", outcome: "ok", resultSummary: { bytes: expect.any(Number), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) } });
     expect(JSON.stringify(r.audit)).not.toContain('"snapshot":"x"');
   });
+  it("a handler that signed in without asking marks the audit record authAuto (#131)", async () => {
+    const w = world({ handler: (n) => (n === "page.snapshot" ? async (c: any) => (c.auditNote({ authAuto: true }), { ok: true }) : undefined) });
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.audit).toMatchObject({ tool: "page.snapshot", outcome: "ok", authAuto: true });
+    const plain = await world().router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(plain.audit).not.toHaveProperty("authAuto");
+  });
+  it("the authAuto mark survives a handler error", async () => {
+    const w = world({ handler: () => async (c: any) => {
+      c.auditNote({ authAuto: true });
+      throw new RouterError("NOT_FOUND", "no code");
+    } });
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.audit).toMatchObject({ outcome: "error", authAuto: true });
+  });
   it("feed gets a running entry then a final one with the same id", async () => {
     const w = world();
     await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
