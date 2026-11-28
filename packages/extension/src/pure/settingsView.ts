@@ -4,7 +4,7 @@ import { AUTH_DENY_HOSTS, authEnabled, VAULT_DENY_HOSTS, type SiteEntry } from "
 import type { StoredShape } from "../background/settingsModel";
 
 /** The stored fields the snapshot reads. Anything else (the pairing secret, the port, future keys) is never touched. */
-export type SnapshotSource = Pick<StoredShape, "denylist" | "sites" | "yolo" | "devAllowSensitive" | "onSessionEnd" | "beforeUnload" | "showOverlay" | "forceLite" | "liteSites">;
+export type SnapshotSource = Pick<StoredShape, "denylist" | "sites" | "yolo" | "devAllowSensitive" | "onSessionEnd" | "beforeUnload" | "showOverlay" | "forceLite" | "liteSites"> & { yoloExpiresAt?: number | null };
 
 function siteView(entry: SiteEntry, origin: string, yolo: boolean): SettingsSnapshot["sites"][string] {
   const out: SettingsSnapshot["sites"][string] = { policy: entry.policy ?? "ask", auth: authEnabled(entry, origin, yolo), lite: !!entry.lite };
@@ -24,6 +24,7 @@ export function settingsSnapshot(s: SnapshotSource): SettingsSnapshot {
     denylist: [...s.denylist],
     sites,
     yolo,
+    ...(yolo && typeof s.yoloExpiresAt === "number" ? { yoloExpiresAt: s.yoloExpiresAt } : {}),
     devAllowSensitive: !!s.devAllowSensitive,
     onSessionEnd: s.onSessionEnd,
     beforeUnload: s.beforeUnload,

@@ -301,6 +301,113 @@ test("#106 `tabagent kill` stops every agent with no session and no prompt; tool
   await h.ok(c, "tabs", { action: "list" });
 });
 
+const audit = (h: Harness) => readFileSync(join(h.home, "audit.jsonl"), "utf8");
+const sw = <T>(h: Harness, fn: string, ...args: unknown[]) => h.sw.evaluate(([f, a]) => (globalThis as any).__tabagent[f as string](...(a as unknown[])), [fn, args] as const) as Promise<T>;
+
+test("#109 turning YOLO on is refused unless the user approves; YOLO itself does not skip the prompt", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false, yolo: false });
+  const c = await h.mcp({ label: "mode-deny", profile: "full" });
+  const denied = await h.answerPrompt("deny", () => h.call(c, "policy.mode_change", { yolo: true, durationMin: 30, reason: "bulk-download statements from many sites" }));
+  expect(denied.prompt.sensitive.category).toBe("p");
+  expect(denied.summary).toContain("turn YOLO mode on for 30 minutes");
+  expect(denied.summary).toContain("bulk-download statements from many sites");
+  expect(denied.reasons).toContain("every site without asking");
+  expect((denied.result as any).text).toContain("PERMISSION_DENIED");
+  expect(await settings(h)).toMatchObject({ yolo: false, yoloExpiresAt: null, devAllowSensitive: false });
+
+  // With YOLO already on, turning developer mode on still asks.
+  await h.trustFixtures({ devAllowSensitive: false, yolo: true });
+  try {
+    const d2 = await h.answerPrompt("deny", () => h.call(c, "policy.mode_change", { devAllowSensitive: true, reason: "skip confirmations" }));
+    expect(d2.prompt.sensitive.category).toBe("p");
+    expect(d2.reasons).toContain("JavaScript");
+    expect((d2.result as any).text).toContain("PERMISSION_DENIED");
+    expect((await settings(h)).devAllowSensitive).toBe(false);
+  } finally {
+    await h.trustFixtures({ yolo: false });
+  }
+});
+
+test("#109 turning YOLO and developer mode off works with no prompt and the audit log records the reason", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: true, yolo: true });
+  const c = await h.mcp({ label: "mode-off", profile: "full" });
+  const r = await h.ok(c, "policy.mode_change", { yolo: false, devAllowSensitive: false, reason: "task finished, locking it down" });
+  expect(r.json).toMatchObject({ status: "applied", yolo: false, devAllowSensitive: false, yoloExpiresAt: null });
+  expect(r.json.applied).toEqual([
+    { field: "yolo", from: true, to: false },
+    { field: "devAllowSensitive", from: true, to: false },
+  ]);
+  expect(await h.pendingPrompts()).toHaveLength(0);
+  expect(await settings(h)).toMatchObject({ yolo: false, devAllowSensitive: false });
+  await expect.poll(() => audit(h)).toMatch(/"tool":"policy\.mode_change".*task finished, locking it down/);
+  // A no-op is refused.
+  const again = await h.call(c, "policy.mode_change", { yolo: false, reason: "again" });
+  expect(again.isError).toBe(true);
+  expect(again.text).toContain("BAD_REQUEST");
+  expect(again.text).toContain("Nothing to change");
+  await h.trustFixtures();
+});
+
+test("#109 an approved YOLO request applies with an expiry the panel counts down, and expiry switches it off", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false, yolo: false });
+  const c = await h.mcp({ label: "mode-on", profile: "full" });
+  const t0 = Date.now();
+  const on = await h.answerPrompt("once", () => h.ok(c, "policy.mode_change", { yolo: true, durationMin: 1, reason: "short bulk task" }));
+  const res = (on.result as any).json;
+  expect(res).toMatchObject({ status: "applied", yolo: true });
+  expect(res.yoloExpiresAt).toBeGreaterThanOrEqual(t0 + 60_000);
+  expect(res.yoloExpiresAt).toBeLessThan(Date.now() + 61_000);
+  expect(await settings(h)).toMatchObject({ yolo: true, yoloExpiresAt: res.yoloExpiresAt });
+  // The expiry survives worker restarts: it is a stored timestamp with a chrome.alarms alarm.
+  const alarm = await h.sw.evaluate(() => chrome.alarms.get("tabagent-yolo-expiry"));
+  expect(alarm?.scheduledTime).toBe(res.yoloExpiresAt);
+
+  const panel = await h.openPanel();
+  try {
+    await expect(panel.locator("#yoloBanner")).toBeVisible();
+    await expect(panel.locator("#yoloExpiry")).toContainText(/Switches off automatically in (\d+ s|1 min)/);
+    // Jump the worker's clock past the expiry and fire the alarm handler.
+    await sw(h, "advanceClock", 61_000);
+    await sw(h, "checkYoloExpiry");
+    expect(await settings(h)).toMatchObject({ yolo: false, yoloExpiresAt: null });
+    await expect(panel.locator("#yoloBanner")).toBeHidden();
+    await expect.poll(() => h.sw.evaluate(() => chrome.alarms.get("tabagent-yolo-expiry"))).toBeFalsy();
+    await expect.poll(() => audit(h)).toContain('"event":"yolo.expired"');
+
+    // A settings read alone also enforces an expiry the alarm has not reached yet.
+    await h.sw.evaluate(() => (globalThis as any).__tabagent.updateSettings({ yolo: true, yoloExpiresAt: Date.now() + 30_000 }));
+    expect((await settings(h)).yolo).toBe(false);
+  } finally {
+    await sw(h, "advanceClock", 0);
+    await panel.close();
+    await h.trustFixtures({ yolo: false });
+  }
+});
+
+test("#109 an approval is refused when the modes changed while the prompt was open; an approved developer mode applies", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false, yolo: false });
+  const c = await h.mcp({ label: "mode-stale", profile: "full" });
+  const pend = h.call(c, "policy.mode_change", { yolo: true, durationMin: 10, reason: "stale approval" });
+  await expect.poll(async () => (await h.pendingPrompts()).length, { timeout: 10000 }).toBe(1);
+  const [p] = await h.pendingPrompts();
+  await h.sw.evaluate(() => (globalThis as any).__tabagent.updateSettings({ devAllowSensitive: true }));
+  await h.sw.evaluate((id) => (globalThis as any).__tabagent.answerPrompt(id, "once"), p.promptId);
+  const r = await pend;
+  expect(r.text).toContain("BAD_REQUEST");
+  expect(r.text).toContain("changed while this approval was pending");
+  expect(await settings(h)).toMatchObject({ yolo: false, yoloExpiresAt: null });
+
+  await h.trustFixtures({ devAllowSensitive: false, yolo: false });
+  const pend2 = h.call(c, "policy.mode_change", { devAllowSensitive: true, reason: "debugging a checkout flow" });
+  await expect.poll(async () => (await h.pendingPrompts()).length, { timeout: 10000 }).toBe(1);
+  const [p2] = await h.pendingPrompts();
+  expect(p2.sensitive.category).toBe("p");
+  await h.sw.evaluate((id) => (globalThis as any).__tabagent.answerPrompt(id, "once"), p2.promptId);
+  expect((await pend2).json).toMatchObject({ status: "applied", devAllowSensitive: true, yolo: false });
+  expect((await settings(h)).devAllowSensitive).toBe(true);
+  await h.trustFixtures();
+});
+
 test("#13 login form: submit with a password prompts; deny leaves the page unchanged; feed masks the password", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
   const c = await h.mcp({ label: "login" });

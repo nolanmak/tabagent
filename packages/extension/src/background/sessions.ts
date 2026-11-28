@@ -355,6 +355,19 @@ export async function removeTab(tabId: number) {
   await persist();
 }
 
+/**
+ * Give an attached tab back to the user: it leaves the session and is ungrouped, never closed (AD11: a
+ * Send's grant whose message expired). Only a tab this session owns and holds as attached is touched.
+ */
+export async function releaseAttachedTab(sessionId: string, tabId: number): Promise<boolean> {
+  await restoreSessions();
+  const s = sessions.get(sessionId);
+  if (!s || owner.get(tabId) !== sessionId || !s.attached.includes(tabId)) return false;
+  await removeTab(tabId);
+  await chrome.tabs.ungroup(tabId).catch(() => {});
+  return true;
+}
+
 export async function endSession(id: string, how?: "collapse" | "close" | "keep") {
   await restoreSessions();
   const s = sessions.get(id);

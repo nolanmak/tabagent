@@ -2,11 +2,13 @@
 // activity feed (audit records only) and settings. A view over worker state.
 import { answerLabel, type Agent, type AgentSources, type PromptAnswer } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
-import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
+import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, shareTabLabel, sourcesNotes, spawnInsteadOffered, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
 import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
+import { formatRemaining } from "../pure/modeChange";
 import { filterSites } from "../pure/siteFilter";
+import { workflowStepDetail } from "../pure/workflow";
 import { applyLevel } from "../pure/siteLevel";
 import { promptView } from "../pure/promptView";
 import { feedReducer, promptReducer, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
@@ -34,6 +36,9 @@ function renderStatus() {
   $("killBtn").hidden = !!state.settings.paused;
   $("resumeBtn").hidden = !state.settings.paused;
   $("killNote").textContent = state.settings.paused ? "All agents are stopped. Every command returns KILLED until you resume." : "Shortcut: Alt+Shift+K";
+  const until = Number(state.authRestartLockedUntil ?? 0);
+  $("restartLock").hidden = !(until > Date.now());
+  if (until > Date.now()) $("restartLockText").textContent = `TabAgent restarted during a sign-in, so agents can't type passwords or codes until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
 }
 
 function promptHtml(p: any) {
@@ -161,6 +166,11 @@ function renderComposer() {
   const btn = $("agentSend") as HTMLButtonElement;
   btn.textContent = c.label;
   btn.disabled = !c.canSend || agentSending;
+  // §7: a secondary "Start new session instead" for agents that would get the message piggybacked.
+  const alt = $("agentSpawnInstead") as HTMLButtonElement;
+  alt.hidden = !spawnInsteadOffered(v);
+  alt.disabled = !c.canSend || agentSending;
+  $("agentShareLabel").textContent = shareTabLabel(v);
   $("agentComposerNote").textContent = c.note;
   const target = $("agentTarget");
   target.hidden = !v && !agentNotice;
@@ -305,9 +315,10 @@ function selectAgent(el: EventTarget | null) {
   agentPrompt().focus();
 }
 
-async function sendToSelectedAgent() {
+async function sendToSelectedAgent(forceSpawn = false) {
   const v = selectedAgentView();
   if (!v || agentSending) return;
+  if (forceSpawn && !spawnInsteadOffered(v)) return;
   const prompt = agentPrompt().value;
   // AD12: title and url are read at Send time, not from the label shown earlier.
   // AD14: re-check the active tab now too, so a tab switch the panel missed still drops the selection.
@@ -317,18 +328,19 @@ async function sendToSelectedAgent() {
   const selection = outgoingSelection();
   if (!composerState({ agent: v, prompt, share, selection }).canSend) return renderComposer();
   const requestId = crypto.randomUUID();
-  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route: v.route });
+  const route = forceSpawn ? "spawn" : v.route;
+  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route });
   agentSending = true;
   renderComposer();
   let r: any;
   try {
-    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, selection }));
+    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, selection, forceSpawn }));
   } catch (e) {
     r = { error: String((e as Error)?.message ?? e) };
   }
   agentSending = false;
   if (r?.type === "agent.sent") agentFeed({ type: "sent", msg: r });
-  else agentFeed({ type: "sent", msg: { requestId, route: v.route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
+  else agentFeed({ type: "sent", msg: { requestId, route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
   // Keep the text after a failure so it can be retried.
   if (r?.type === "agent.sent" && r.state !== "failed") {
     agentPrompt().value = "";
@@ -353,8 +365,7 @@ function renderWorkflows() {
   $("workflows").innerHTML = list
     .map((w) => {
       const steps = (w.steps ?? []).map((step: any, index: number) => {
-        const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
-        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? (step.locator ? `${step.key} in ${target}` : step.key) : step.kind === "check" ? `${target} → ${step.checked === false ? "off" : "on"}` : step.kind === "wait" ? `${step.waitFor ?? "?"}${step.waitValue ? ` ${step.waitValue}` : ""}` : step.kind === "scroll" ? `${step.locator ? `${target} ` : ""}by ${step.dx ?? 0},${step.dy ?? 0}` : step.kind === "download" ? (step.download?.mime ?? step.download?.extension ?? "artifact") : target;
+        const detail = workflowStepDetail(step);
         const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
         const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
         return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
@@ -362,6 +373,14 @@ function renderWorkflows() {
       return `<li><span><b>${esc(w.name)}</b> <span class="muted">${esc(w.status)} · ${Number(w.steps?.length ?? 0)} steps · ${esc(w.source)}</span><br><span class="muted small">${esc((w.stopRules ?? []).join("; "))}</span>${w.dedupeKey ? `<br><span class="muted small">Duplicate key: ${esc(w.dedupeKey)}</span>` : ""}<ol class="workflow-steps">${steps}</ol></span>${w.status === "draft" ? `<span><input data-dedupe-key="${esc(w.id)}" maxlength="200" placeholder="Optional duplicate key" aria-label="Duplicate key for ${esc(w.name)}"/><input data-url-assertion="${esc(w.id)}" maxlength="500" placeholder="Optional final URL must contain" aria-label="Expected final URL for ${esc(w.name)}"/><button class="primary" data-review-workflow="${esc(w.id)}">Review & approve</button></span>` : ""}</li>`;
     })
     .join("") || `<li class="muted">No captured recipes yet.</li>`;
+}
+
+/** #109: a timed YOLO (policy.mode_change durationMin) shows the time left; the worker switches it off. */
+function renderYoloExpiry() {
+  const at = state?.settings?.yolo ? state.settings.yoloExpiresAt : null;
+  const el = $("yoloExpiry");
+  el.hidden = typeof at !== "number";
+  el.textContent = typeof at === "number" ? `Switches off automatically in ${formatRemaining(at - Date.now())}.` : "";
 }
 
 function renderSettings() {
@@ -375,6 +394,7 @@ function renderSettings() {
   ($("outsideApprovals") as HTMLInputElement).checked = !!s.outsideApprovals;
   $("phoneLinkRow").hidden = !s.outsideApprovals;
   $("yoloBanner").hidden = !s.yolo;
+  renderYoloExpiry();
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
   renderSites();
   $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
@@ -442,6 +462,7 @@ chrome.runtime.onMessage.addListener((m: any) => {
       break;
     case "status":
     case "paused":
+    case "settings":
       refresh();
       break;
   }
@@ -456,6 +477,7 @@ $("pairForm").addEventListener("submit", async (e) => {
 });
 $("killBtn").addEventListener("click", () => send({ type: "ui.kill" }).then(refresh));
 $("resumeBtn").addEventListener("click", () => send({ type: "ui.resume" }).then(refresh));
+$("endRestartLock").addEventListener("click", () => send({ type: "ui.endRestartLock" }).then(refresh));
 $("prompts").addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (!b?.dataset.id) return;
@@ -502,6 +524,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[SEND_INTENT_KEY]?.newValue !== undefined) void takeIntent();
 });
 $("agentSend").addEventListener("click", () => void sendToSelectedAgent());
+$("agentSpawnInstead").addEventListener("click", () => void sendToSelectedAgent(true));
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 chrome.tabs.onUpdated.addListener((_id, info, tab) => {
   if (tab.active && (info.title || info.url)) void refreshActiveTab();
@@ -636,6 +659,7 @@ setInterval(() => {
 }, AGENTS_REFRESH_MS);
 setInterval(() => {
   for (const el of document.querySelectorAll<HTMLElement>(".countdown")) el.textContent = `${Math.max(0, Math.round((Number(el.dataset.expires) - Date.now()) / 1000))}s`;
+  if (state) renderYoloExpiry();
 }, 1000);
 setInterval(() => {
   if (state && state.status !== "connected") refresh();

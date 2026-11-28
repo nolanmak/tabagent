@@ -44,6 +44,16 @@ describe("settings.change preference allowlist (#106)", () => {
     expect(e.hint).toContain(hint);
   });
 
+  it("the yolo / devAllowSensitive hint points at the shipped policy.mode_change (#109)", () => {
+    for (const key of ["yolo", "devAllowSensitive", "yoloExpiresAt"]) {
+      const e = reject({ [key]: true });
+      expect(e.code, key).toBe("PERMISSION_DENIED");
+      expect(e.hint, key).toContain("policy.mode_change");
+      expect(e.hint, key).not.toMatch(/planned/);
+      expect(e.hint, key).toMatch(/off/);
+    }
+  });
+
   it("an escalating key is refused even next to allowed ones (nothing is applied piecemeal)", () => {
     expect(reject({ showOverlay: false, yolo: true }).code).toBe("PERMISSION_DENIED");
   });

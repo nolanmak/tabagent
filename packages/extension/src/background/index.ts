@@ -1,7 +1,8 @@
 // TabAgent service worker: wires the bridge client, the command router, the
 // permission gate, the kill switch, the badge and the UI API together.
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
-import { AGENTS_FEATURE, APPROVALS_FEATURE, ApprovalsLinkResultSchema, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, APPROVALS_FEATURE, ApprovalsLinkResultSchema, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { grantTab, releaseGrantedTab } from "./agentGrant";
 import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
@@ -25,10 +26,10 @@ import { isPanelSender } from "../pure/uiSender";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, focusSessionTab, sessionsView, type Session } from "./sessions";
-import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
+import { getSettings, isPaused, onYoloExpired, setSettingsClockOffset, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
-import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
+import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, onWorkflowEdit, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
 const FEATURES = ["files.resolve", AGENTS_FEATURE, APPROVALS_FEATURE];
@@ -51,6 +52,7 @@ const bridge = createBridgeClient({
     refreshBadge();
     // #92: re-validate the menu's recent agents once the bridge can list them.
     if (status === "connected") void rebuildMenus(currentAgents).catch(() => {});
+    if (status === "connected") flushQueuedEvents();
     if (status === "connected") void syncPrompts();
   },
   protocolVersion: PROTOCOL_VERSION,
@@ -73,6 +75,17 @@ function sendEvent(event: string, data: Record<string, unknown> = {}) {
   bridge.send({ type: "event", event, data });
 }
 
+/** Audit events that must not be lost while the bridge is offline (a YOLO expiry at startup, #109). */
+const queuedEvents: { event: string; data: Record<string, unknown> }[] = [];
+function sendEventQueued(event: string, data: Record<string, unknown>) {
+  if (!bridge.send({ type: "event", event, data })) queuedEvents.push({ event, data });
+}
+function flushQueuedEvents() {
+  while (queuedEvents.length && bridge.send({ type: "event", event: queuedEvents[0].event, data: queuedEvents[0].data })) queuedEvents.shift();
+}
+// #107: each applied draft edit (agent or side panel) is one audit event.
+onWorkflowEdit((e) => sendEvent("workflow.edit", e));
+
 function onBridgeMessage(msg: any) {
   if (onAgentsBridgeMessage(msg)) return;
   switch (msg?.type) {
@@ -85,6 +98,20 @@ function onBridgeMessage(msg: any) {
     case "files.resolved":
       onFilesResolved(msg);
       break;
+    case "agent.grant": {
+      // AD11: the only caller of the grant path. A user-initiated Send is the attach consent (no prompt).
+      const g = AgentGrantSchema.safeParse(msg);
+      if (!g.success) break;
+      grantTab(g.data.meta, g.data.tabId)
+        .catch(() => ({ ok: false as const, code: "FAILED" as const }))
+        .then((r) => bridge.send({ type: "agent.granted", requestId: g.data.requestId, ...r }));
+      break;
+    }
+    case "agent.release": {
+      const r = AgentReleaseSchema.safeParse(msg);
+      if (r.success) releaseGrantedTab(r.data.sessionId, r.data.tabId).catch(() => {});
+      break;
+    }
     case "auth.accounts.result":
     case "auth.signup.result":
     case "secret":
@@ -224,13 +251,36 @@ async function refreshBadge() {
 onSessionsChanged(() => refreshBadge());
 
 // Review M1: YOLO / devAllowSensitive toggles are audited and the badge follows, whatever wrote them.
+// #109: the YOLO expiry alarm follows the stored expiry, and an open side panel re-reads the modes.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes.settings) return;
   const before = migrateSettings(changes.settings.oldValue as Record<string, unknown> | undefined);
   const after = migrateSettings(changes.settings.newValue as Record<string, unknown> | undefined);
-  for (const e of settingsAuditEvents(before, after)) sendEvent(e.event, e.data);
+  const events = settingsAuditEvents(before, after);
+  for (const e of events) sendEventQueued(e.event, e.data);
+  const expiryMoved = before.yoloExpiresAt !== after.yoloExpiresAt;
+  if (expiryMoved) void syncYoloAlarm(after);
+  if (events.length || expiryMoved) broadcast({ type: "settings" });
   if (before.outsideApprovals !== after.outsideApprovals) void syncPrompts();
   refreshBadge();
+});
+
+// ---------------------------------------------------------------------------
+// Timed YOLO (#109): policy.mode_change durationMin stores yoloExpiresAt. A chrome.alarms alarm
+// (which survives worker restarts) fires at that time; every settings read also enforces it.
+// ---------------------------------------------------------------------------
+const YOLO_ALARM = "tabagent-yolo-expiry";
+async function syncYoloAlarm(s: { yolo: boolean; yoloExpiresAt: number | null }) {
+  if (s.yolo && s.yoloExpiresAt != null) await chrome.alarms.create(YOLO_ALARM, { when: s.yoloExpiresAt });
+  else await chrome.alarms.clear(YOLO_ALARM);
+}
+/** The alarm handler: a settings read switches an expired YOLO off; then re-arm or clear the alarm. */
+async function checkYoloExpiry() {
+  await syncYoloAlarm(await getSettings());
+}
+onYoloExpired((expiresAt) => {
+  sendEventQueued("yolo.expired", { expiresAt: new Date(expiresAt).toISOString() });
+  broadcast({ type: "settings" });
 });
 
 // ---------------------------------------------------------------------------
@@ -403,7 +453,7 @@ function stoppedTabs() {
 async function uiState() {
   const s = await getSettings();
   const workflowTabs = (await chrome.tabs.query({})).filter((tab) => tab.id != null && /^https?:/i.test(tab.pendingUrl || tab.url || "")).map((tab) => ({ id: tab.id!, title: tab.title || tab.url || `Tab ${tab.id}`, url: tab.pendingUrl || tab.url || "" }));
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: await sessionsView(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id };
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: await sessionsView(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id, authRestartLockedUntil: authTaint.restartLockedUntil() };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -434,6 +484,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return { ok: true };
       case "ui.resume":
         await resume();
+        return { ok: true };
+      case "ui.endRestartLock":
+        await authTaintReady;
+        authTaint.endRestartLock();
         return { ok: true };
       case "ui.endSession":
         await endSession(msg.id);
@@ -518,6 +572,7 @@ chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() =>
 chrome.alarms.create("tabagent-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "tabagent-reconnect") bridge.tick();
+  if (a.name === YOLO_ALARM) void checkYoloExpiry();
   if (a.name === "tabagent-workflows") {
     void runDueSchedules(new Date(), bridge.connected()).then((runs) => {
       for (const run of runs) sendEvent("workflow.run", { runId: run.id, recipeId: run.recipeId, state: run.state, reason: run.reason ?? "" });
@@ -536,7 +591,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
 
 (async () => {
   await restoreSessions();
-  await getSettings();
+  await checkYoloExpiry();
   refreshBadge();
   bridge.connect();
 })();
@@ -564,5 +619,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   rebuildMenus: () => rebuildMenus(currentAgents),
   menuItems: menuItemsBuilt,
   contextMenuClick: onMenuClick,
+  checkYoloExpiry,
+  advanceClock: (ms: number) => setSettingsClockOffset(ms),
 };
 export type { Status };

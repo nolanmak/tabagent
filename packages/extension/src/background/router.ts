@@ -4,6 +4,7 @@
 import { buildAudit, liftSide, outcomeFor, type AuditRecord, type RedactOpts } from "./audit";
 import { normalizeNavUrl, requirementsFor, type Requirements, type ToolLike } from "./authorize";
 import { originOf, type Level, type SensitiveCategory } from "./policy";
+import { describeModeChange, modeChangeWarnings } from "../pure/modeChange";
 import { describeSiteChange } from "../pure/siteChange";
 
 /** What the agent gets instead of a result that carried a typed secret (DA1). */
@@ -170,6 +171,8 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
       return `change denylist: ${Array.isArray(p.changes) ? p.changes.map((c: any) => `${c.op} ${c.glob}`).join(", ") : ""}; reason: ${String(p.reason ?? "").slice(0, 160)}`;
     case "policy.site_change":
       return describeSiteChange(p);
+    case "policy.mode_change":
+      return describeModeChange(p);
     default:
       return tool;
   }
@@ -186,7 +189,15 @@ const REASONS: Record<string, string> = {
 const TOOL_REASONS: Record<string, string> = {
   "policy.site_change": "Changes what every agent may do on this site, including signing in",
 };
-const POLICY_TOOLS = new Set(["policy.denylist_change", "policy.site_change"]);
+const POLICY_TOOLS = new Set(["policy.denylist_change", "policy.site_change", "policy.mode_change"]);
+
+/** The reason lines a prompt shows; policy.mode_change spells out what each mode being turned on allows. */
+function reasonsFor(tool: string, sensitive: SensitiveCategory | undefined, p: Record<string, unknown>): string[] {
+  if (!sensitive) return [];
+  if (tool === "policy.mode_change") return modeChangeWarnings(p);
+  const r = TOOL_REASONS[tool] ?? REASONS[sensitive];
+  return r ? [r] : [];
+}
 
 export function createRouter<S>(deps: RouterDeps<S>) {
   let seq = 0;
@@ -276,7 +287,7 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         const policySnapshot = POLICY_TOOLS.has(tool.name) ? await deps.policySnapshot?.(tool.name, params) : undefined;
         // The D17 chokepoint: exactly one authorize() per command, before any handler.
         // authorize() asks about the site first and the sensitive category second.
-        await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: req.sensitive && (TOOL_REASONS[tool.name] ?? REASONS[req.sensitive]) ? [TOOL_REASONS[tool.name] ?? REASONS[req.sensitive]] : [] });
+        await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: reasonsFor(tool.name, req.sensitive, params) });
         // nav.goto resolves its tab inside the handler, so look up the session's current tab here
         // for capture only. No tab yet means nothing can be capturing; the handler still runs.
         let captureTab = tabId;

@@ -3,6 +3,7 @@
 // read the secret, D7). The paused flag is session state (chrome.storage.session, D11).
 import { hostMatches, hostOf, isBlank, originOf, type SiteEntry } from "./policy";
 import { migrateSettings, SEEDED_DENYLIST, type BeforeUnload, type OnSessionEnd } from "./settingsModel";
+import { yoloExpired } from "../pure/modeChange";
 
 export { SEEDED_DENYLIST, migrateSettings };
 export type { BeforeUnload, OnSessionEnd };
@@ -14,6 +15,8 @@ export interface Settings {
   denylist: string[];
   devAllowSensitive: boolean;
   yolo: boolean;
+  /** Epoch ms when YOLO switches itself off (#109); null = no expiry. */
+  yoloExpiresAt: number | null;
   onSessionEnd: OnSessionEnd;
   beforeUnload: BeforeUnload;
   showOverlay: boolean;
@@ -34,6 +37,33 @@ export interface Settings {
 export type StoredSettings = Omit<Settings, "paused" | "autoAcceptBeforeUnload" | "sensitiveAllowed">;
 
 let cache: StoredSettings | null = null;
+/** e2e only (#109): shifts the clock YOLO expiry is checked against. */
+let clockOffset = 0;
+let yoloExpiredListener: ((expiresAt: number) => void) | null = null;
+
+/** The clock YOLO expiry uses. */
+export function settingsNow(): number {
+  return Date.now() + clockOffset;
+}
+export function setSettingsClockOffset(ms: number) {
+  clockOffset = Number(ms) || 0;
+}
+/** Called once each time a timed YOLO switches itself off. */
+export function onYoloExpired(fn: (expiresAt: number) => void) {
+  yoloExpiredListener = fn;
+}
+
+/**
+ * A timed YOLO is off once its expiry has passed, whether or not the alarm has fired yet (#109). The
+ * expiry is a stored timestamp, so this also holds after a worker or browser restart.
+ */
+async function enforceYoloExpiry() {
+  if (!cache || !yoloExpired(cache, settingsNow())) return;
+  const expiresAt = cache.yoloExpiresAt as number;
+  cache = { ...cache, yolo: false, yoloExpiresAt: null };
+  await chrome.storage.local.set({ settings: cache });
+  yoloExpiredListener?.(expiresAt);
+}
 let paused: boolean | null = null;
 let accessSet = false;
 
@@ -65,6 +95,7 @@ export async function getSettings(): Promise<Settings> {
     const raw = (await chrome.storage.local.get("settings")).settings as Record<string, unknown> | undefined;
     cache = migrateSettings(raw);
   }
+  await enforceYoloExpiry();
   if (paused == null) {
     try {
       paused = !!(await chrome.storage.session.get("paused")).paused;

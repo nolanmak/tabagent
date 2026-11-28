@@ -835,7 +835,7 @@ export class Daemon {
       clearInterval(ping);
       this.agents.inbox.close(key, conn);
     });
-    const info = { sessionId: meta.id, ...parseInboxHeaders(req.headers) };
+    const info = { sessionId: meta.id, meta, ...parseInboxHeaders(req.headers) };
     this.agents.inbox.open(key, info, conn);
     conn.write("ready", { sessionId: meta.id });
   }

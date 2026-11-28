@@ -33,6 +33,8 @@ export interface StoredShape {
   devAllowSensitive: boolean;
   /** Allow every site without asking (denylist, kill switch and hard denies still apply). */
   yolo: boolean;
+  /** Epoch ms when YOLO switches itself off (policy.mode_change durationMin, #109); null = no expiry. */
+  yoloExpiresAt: number | null;
   onSessionEnd: OnSessionEnd;
   beforeUnload: BeforeUnload;
   showOverlay: boolean;
@@ -49,6 +51,7 @@ export const DEFAULTS: StoredShape = {
   denylist: SEEDED_DENYLIST,
   devAllowSensitive: false,
   yolo: false,
+  yoloExpiresAt: null,
   onSessionEnd: "collapse",
   beforeUnload: "accept",
   showOverlay: true,
@@ -109,6 +112,8 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
     denylist: Array.isArray(r.denylist) ? r.denylist.filter((x: unknown) => typeof x === "string" && x.trim()).map((x: string) => x.trim()) : DEFAULTS.denylist.slice(),
     devAllowSensitive: r.devAllowSensitive === true,
     yolo: r.yolo === true,
+    // An expiry only means something while YOLO is on; turning YOLO off (panel or tool) clears it.
+    yoloExpiresAt: r.yolo === true && typeof r.yoloExpiresAt === "number" && Number.isFinite(r.yoloExpiresAt) && r.yoloExpiresAt > 0 ? r.yoloExpiresAt : null,
     onSessionEnd: (ON_SESSION_END as readonly string[]).includes(r.onSessionEnd) ? r.onSessionEnd : DEFAULTS.onSessionEnd,
     beforeUnload,
     showOverlay: typeof r.showOverlay === "boolean" ? r.showOverlay : DEFAULTS.showOverlay,

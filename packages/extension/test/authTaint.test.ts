@@ -85,6 +85,42 @@ describe("auth taint per tab", () => {
   });
 });
 
+describe("restart lock (fail closed)", () => {
+  it("reports when the lock ends and only while it is active", () => {
+    const c = clock();
+    const a = new AuthTaint(c.now, 600_000);
+    expect(a.restartLockedUntil()).toBe(0);
+    a.failClosed();
+    expect(a.restartLockedUntil()).toBe(c.t + 600_000);
+    c.tick(600_001);
+    expect(a.restartLockedUntil()).toBe(0);
+  });
+
+  it("the user can end it early; per-tab taint and dirty documents still apply afterwards", () => {
+    const c = clock();
+    const a = new AuthTaint(c.now);
+    const seen: unknown[] = [];
+    a.onChange = (s) => seen.push(s);
+    a.ranScript(2);
+    a.failClosed();
+    expect(a.scriptDirty(1)).toBe(true);
+    a.endRestartLock();
+    expect(a.restartLockedUntil()).toBe(0);
+    expect(a.scriptDirty(1)).toBe(false);
+    expect(a.tainted(1)).toBe(false);
+    expect(a.scriptDirty(2)).toBe(true);
+    expect(seen.length).toBeGreaterThan(1);
+  });
+
+  it("ending it when no lock is active changes nothing", () => {
+    const a = new AuthTaint(clock().now);
+    const seen: unknown[] = [];
+    a.onChange = (s) => seen.push(s);
+    a.endRestartLock();
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("secret screen", () => {
   it("withholds raw, URL-encoded, form-encoded, JSON-escaped and HTML-escaped copies of a password", () => {
     const a = new AuthTaint(clock().now);

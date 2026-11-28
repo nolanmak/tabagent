@@ -53,7 +53,7 @@ export function createAuth(o: AuthOpts): Auth {
       idleLockMs: lockMs(cfg0.bitwarden.idleLockMinutes, 60_000),
       maxUnlockMs: lockMs(cfg0.bitwarden.maxUnlockHours, 3_600_000),
       remember: () => config().bitwarden.rememberUnlock === true,
-      keyStore: macKeychain(),
+      keyStore: macKeychain({ dataDir: bitwardenDataDir() }),
       event: (e, d) => o.audit.event(e, { kind: "auth", ...d }),
     });
   const sms = o.sms ?? new SmsSource({ enabled: () => config().sms });

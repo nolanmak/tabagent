@@ -191,7 +191,19 @@ by *effect*, so there is no side door through a different tool:
 | c | Arbitrary JavaScript | `js.eval`, `nav.wait` with `for: fn` (both need `full` on the site) |
 | d | Credential reads | `cookies.get`, `storage.get`, `network.get` (`network.list` never returns header values) |
 | e | Local file transfer | `act.upload`, `downloads.read` |
-| f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved) |
+| f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved; see "Send to agent" below for the one user-initiated exception) |
+
+**Send to agent shares a tab without the f prompt.** When *you* send a message from the side panel
+with "Share this tab" ticked, to a linked Claude Code agent whose TabAgent tools can drive tabs (the
+label then reads "Share this tab (agent can use it)"), that click is the attach consent: the tab
+moves into the agent's tab group with no further prompt. Only the side panel can start a send: there
+is no REST, CLI or page route, and the worker has a single
+caller for the grant. The tab is not shared when another agent owns it or it is handed to you
+(`TAB_BUSY`), when it is a private sign-in tab or outside a token's allowed sites
+(`PERMISSION_DENIED`), when it is closed (`NOT_FOUND`) or while TabAgent is paused; the agent then
+gets only the title and link, and the panel shows "tab not shared: <code>". If the message expires
+before the agent picks it up, the tab is ungrouped and left open. The grant is the attach only: the
+site policy prompt, token scope and every gate above still apply on the agent's first action.
 
 Categories a–e can be pre-approved per origin; f always asks. Choosing `full` for a site in the side
 panel (adding it or changing its row) also turns on sign-in and pre-approves a–e for it in one step
@@ -213,6 +225,12 @@ it is tainted, every c and d tool is refused on it, whatever the site policy, pr
 YOLO say. `network.get` never returns a request that started while the tab was tainted. For 10
 minutes, any result or error that contains a typed password or code is withheld. Auth also refuses
 to type into a page where agent JavaScript (`js.eval`, `nav.wait` fn) has run.
+
+If the extension reloads while a tab is tainted or dirty, the per-tab state is lost, so TabAgent fails
+closed: every tab counts as tainted and dirty for 10 minutes. Auth errors in that window say TabAgent
+restarted and when typing resumes (#140). The side panel shows the lock with an "End lock now" button
+for the user, typically after reloading TabAgent themselves. Agents can't reach it (panel-only
+`ui.endRestartLock`), and taint recorded after the restart still applies.
 
 ### Google sign-in (#79)
 
@@ -247,6 +265,30 @@ hosts below, the banking and password-manager hosts where TabAgent never signs i
 denylist (the agent is told to request a denylist change first). Removing a bank from the denylist
 never lets TabAgent sign in there.
 
+### YOLO and developer mode (#109)
+
+`policy.mode_change {yolo?, devAllowSensitive?, durationMin?, reason}` (also `full`-level) is the
+only way an agent can touch YOLO or `devAllowSensitive`:
+
+- **Turning either off** applies at once with no prompt, since it only narrows what agents may do.
+  It is in the audit log with the agent's reason, like every call.
+- **Turning either on** is a category p prompt like the tools above: "Allow once" or "Deny" only, not
+  skipped by YOLO, `devAllowSensitive` or saved permissions, and snapshotted so a change to either mode
+  (or YOLO's expiry) while the prompt is open refuses the approval. Whether a prompt is needed depends
+  only on the request (any `true`), never on the current state. The prompt lists each change, the
+  duration (or "no time limit"), the reason, and what the mode allows: YOLO means every site without
+  asking, sign-in on every site and no sensitive-action confirmations; developer mode means no
+  confirmations for form submits with secrets, risky clicks, JavaScript, credential reads and file
+  transfers. A request that turns one mode on and the other off is one approval; a denial applies
+  neither.
+- **`durationMin`** (1 to 1440, only with `yolo: true`) stores an expiry timestamp. A `chrome.alarms`
+  alarm switches YOLO off at that time, and every settings read also treats an expired YOLO as off, so
+  the limit holds across service-worker and browser restarts even if the alarm is late. The expiry is
+  audited (`yolo.expired`) and the side panel shows the time left. Without `durationMin` YOLO stays on
+  until the user turns it off, as from the panel; turning YOLO off by any route clears the expiry.
+
+A request that changes nothing is refused with `BAD_REQUEST`.
+
 ### Settings agents can read and change (#105, #106)
 
 `settings.get` lets any caller read the denylist, each saved site's policy, sign-in and lite mode,
@@ -257,8 +299,8 @@ field from an allowlist: it never returns the pairing secret, bridge tokens or s
 `settings.change` sets only preferences that do not widen what an agent can do: `showOverlay`,
 `beforeUnload`, `onSessionEnd`, `forceLite` and `liteSites`. It needs no approval but an `act`-capable
 token, and each call is in the audit log. Anything else is refused with a pointer: YOLO and
-`devAllowSensitive` stay panel-only (#109), and the denylist and sites go through the approval-gated
-policy tools above.
+`devAllowSensitive` go through `policy.mode_change` (#109), and the denylist and sites through the
+other approval-gated policy tools above.
 
 ### Never reachable
 
