@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyLevel, FULL_PREAPPROVED } from "../src/pure/siteLevel";
 
 const ctx = { denylist: ["*.blocked.example", "accounts.google.com"] };
-const all = { a: true, b: true, c: true, d: true, e: true };
+const all = { a: true, b: true, c: true, d: true, e: true } as const;
 
 describe("applyLevel (#118)", () => {
   it("full turns on sign-in and pre-approves every a-e category", () => {
@@ -27,7 +27,8 @@ describe("applyLevel (#118)", () => {
   it.each([
     ["https://secure.chase.com", "never signs in"],
     ["https://www.paypal.com", "never signs in"],
-    ["https://my.1password.com", "never signs in"],
+    ["https://app.mercury.com", "never signs in"],
+    ["https://my.1password.com", "never lets agents open"],
     ["https://passwords.google.com", "never lets agents open"],
     ["https://mail.google.com", "never lets agents open"],
     ["https://app.blocked.example", "denylist"],
