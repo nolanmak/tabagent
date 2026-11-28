@@ -528,6 +528,20 @@ describe("DA1 structural (security review H1): taint the tab before any secret r
     expect(c.values.size).toBe(0);
   });
 
+  it("restart lock: the refusal says TabAgent restarted and when typing resumes, not that agent JavaScript ran", async () => {
+    const pg = fakePage(okSteps());
+    const e = fakeEnv({ accounts: [GH()], secrets: { username: "u", password: "p" } });
+    tainting(e, pg, () => true);
+    const until = Date.now() + 7 * 60_000;
+    e.env.restartLockedUntil = () => until;
+    const err = await authLogin(e.env, pg.page, {}, newMemory()).catch((x) => x);
+    expect(err.code).toBe("PERMISSION_DENIED");
+    expect(err.message).toMatch(/restarted/i);
+    expect(err.message).not.toMatch(/Agent JavaScript ran/);
+    expect(err.hint).toMatch(/side panel/i);
+    expect(e.calls.secret).toEqual([]);
+  });
+
   it("agent JavaScript that starts during the prompt → refused before the first keystroke", async () => {
     const pg = fakePage(okSteps());
     let dirty = false;

@@ -63,6 +63,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`workflow.schedule`](#workflowschedule) | `workflow_schedule` | act | — | full only | supported | extension |
 | [`workflow.unschedule`](#workflowunschedule) | `workflow_unschedule` | none | — | full only | supported | extension |
 | [`workflow.runs`](#workflowruns) | `workflow_runs` | none | — | full only | supported | extension |
+| [`workflow.edit_draft`](#workflowedit_draft) | `workflow_edit_draft` | none | — | full only | supported | extension |
 | [`workflow.review_repair`](#workflowreview_repair) | `workflow_review_repair` | full | r | full only | supported | extension |
 | [`session.info`](#sessioninfo) | `session_info` | none | — | full only | supported | extension |
 | [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
@@ -723,6 +724,17 @@ MCP name `workflow_runs` · level none · profiles full only · lite supported �
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `id` | string |  |  |
+
+### workflow.edit_draft
+
+Edit a draft recipe: remove steps or make fixed inputs {{NAME}} parameters. Ops run in order; each index is into the list left by earlier ops. All-or-nothing. Drafts only; still needs user review.
+
+MCP name `workflow_edit_draft` · level none · profiles full only · lite supported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes |  |
+| `ops` | any[] | yes | {op:"remove_step",index} or {op:"parameterize",index,name}; 0-based |
 
 ### workflow.review_repair
 

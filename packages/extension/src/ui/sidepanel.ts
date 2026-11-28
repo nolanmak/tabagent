@@ -8,6 +8,7 @@ import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
 import { formatRemaining } from "../pure/modeChange";
 import { filterSites } from "../pure/siteFilter";
+import { workflowStepDetail } from "../pure/workflow";
 import { applyLevel } from "../pure/siteLevel";
 import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
@@ -34,6 +35,9 @@ function renderStatus() {
   $("killBtn").hidden = !!state.settings.paused;
   $("resumeBtn").hidden = !state.settings.paused;
   $("killNote").textContent = state.settings.paused ? "All agents are stopped. Every command returns KILLED until you resume." : "Shortcut: Alt+Shift+K";
+  const until = Number(state.authRestartLockedUntil ?? 0);
+  $("restartLock").hidden = !(until > Date.now());
+  if (until > Date.now()) $("restartLockText").textContent = `TabAgent restarted during a sign-in, so agents can't type passwords or codes until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
 }
 
 function promptHtml(p: any) {
@@ -366,8 +370,7 @@ function renderWorkflows() {
   $("workflows").innerHTML = list
     .map((w) => {
       const steps = (w.steps ?? []).map((step: any, index: number) => {
-        const target = step.locator?.name || step.locator?.label || step.locator?.text || step.locator?.role || "target";
-        const detail = step.kind === "navigate" ? step.url : step.kind === "press" ? (step.locator ? `${step.key} in ${target}` : step.key) : step.kind === "check" ? `${target} → ${step.checked === false ? "off" : "on"}` : step.kind === "wait" ? `${step.waitFor ?? "?"}${step.waitValue ? ` ${step.waitValue}` : ""}` : step.kind === "scroll" ? `${step.locator ? `${target} ` : ""}by ${step.dx ?? 0},${step.dy ?? 0}` : step.kind === "download" ? (step.download?.mime ?? step.download?.extension ?? "artifact") : target;
+        const detail = workflowStepDetail(step);
         const parameter = w.status === "draft" && step.kind === "input" && step.value?.kind === "fixed" ? ` <button data-parameterize-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Make step ${index + 1} a parameter">Make parameter</button>` : "";
         const placeholder = step.value?.kind === "parameter" ? ` (${step.value.placeholder})` : "";
         return `<li class="small">${esc(step.kind)}: ${esc(detail)}${esc(placeholder)}${w.status === "draft" ? ` <button data-delete-workflow-step="${esc(w.id)}" data-step-index="${index}" aria-label="Remove step ${index + 1}">Remove</button>${parameter}` : ""}</li>`;
@@ -477,6 +480,7 @@ $("pairForm").addEventListener("submit", async (e) => {
 });
 $("killBtn").addEventListener("click", () => send({ type: "ui.kill" }).then(refresh));
 $("resumeBtn").addEventListener("click", () => send({ type: "ui.resume" }).then(refresh));
+$("endRestartLock").addEventListener("click", () => send({ type: "ui.endRestartLock" }).then(refresh));
 $("prompts").addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (!b?.dataset.id) return;

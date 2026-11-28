@@ -107,6 +107,7 @@ const LEVELS: Record<string, string> = {
   "workflow.unschedule": "none",
   "workflow.runs": "none",
   "workflow.review_repair": "full",
+  "workflow.edit_draft": "none",
   "session.info": "none",
   "session.permissions": "none",
   "session.end": "none",
@@ -296,5 +297,33 @@ describe("validateParams", () => {
   });
   it("root-level errors are labelled", () => {
     expect(() => validateParams(getTool("act.click")!, 5)).toThrow(/\(root\)/);
+  });
+});
+
+describe("workflow.edit_draft params (#107)", () => {
+  const tool = () => getTool("workflow.edit_draft")!;
+  const id = "7b0f3c1e-2d4a-4c6b-9e8f-0a1b2c3d4e5f";
+  it("accepts remove_step and parameterize ops", () => {
+    const ops = [{ op: "remove_step", index: 0 }, { op: "parameterize", index: 2, name: "SEARCH_TERM" }];
+    expect(validateParams(tool(), { id, ops })).toEqual({ id, ops });
+  });
+  it.each([
+    ["no ops", { id, ops: [] }],
+    ["unknown op", { id, ops: [{ op: "rename", index: 0 }] }],
+    ["negative index", { id, ops: [{ op: "remove_step", index: -1 }] }],
+    ["fractional index", { id, ops: [{ op: "remove_step", index: 1.5 }] }],
+    ["parameterize without a name", { id, ops: [{ op: "parameterize", index: 0 }] }],
+    ["lower-case name", { id, ops: [{ op: "parameterize", index: 0, name: "search" }] }],
+    ["braced name", { id, ops: [{ op: "parameterize", index: 0, name: "{{SEARCH}}" }] }],
+    ["name starting with an underscore", { id, ops: [{ op: "parameterize", index: 0, name: "_X" }] }],
+    ["name over 80 characters", { id, ops: [{ op: "parameterize", index: 0, name: "A".repeat(81) }] }],
+    ["extra field", { id, ops: [{ op: "remove_step", index: 0, name: "X" }] }],
+    ["non-uuid id", { id: "abc", ops: [{ op: "remove_step", index: 0 }] }],
+  ])("rejects %s with BAD_REQUEST", (_why, params) => {
+    expect(() => validateParams(tool(), params)).toThrow(TabAgentError);
+  });
+  it("is a full-profile, no-tab, no-prompt authoring tool", () => {
+    expect(tool()).toMatchObject({ group: "workflow", level: "none", profiles: [], handledBy: "extension" });
+    expect(tool().sensitive).toBeUndefined();
   });
 });

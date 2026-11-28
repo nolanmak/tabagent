@@ -64,6 +64,7 @@ Totals: 47 supported, 4 degraded, 14 unsupported.
 | `workflow.schedule` | supported |  |
 | `workflow.unschedule` | supported |  |
 | `workflow.runs` | supported |  |
+| `workflow.edit_draft` | supported |  |
 | `workflow.review_repair` | supported |  |
 | `session.info` | supported |  |
 | `session.permissions` | supported |  |

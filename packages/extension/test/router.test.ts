@@ -323,6 +323,36 @@ describe("workflow capture hook", () => {
   });
 });
 
+describe("workflow.edit_draft through the router (#107)", () => {
+  const id = "7b0f3c1e-2d4a-4c6b-9e8f-0a1b2c3d4e5f";
+  const editWorld = () => {
+    const handler = vi.fn(async () => ({ id, status: "draft", needsReview: true, steps: [] }));
+    const captureWorkflowStep = vi.fn(async () => undefined);
+    const w = world({ handler: (n) => (n === "workflow.edit_draft" ? handler : undefined), captureWorkflowStep, getSession: async () => ({ tabs: [] }) });
+    return { ...w, handler };
+  };
+  it("needs no tab and no prompt: authorize sees no level and no sensitive category", async () => {
+    const w = editWorld();
+    const r = await w.router.handle(cmd("workflow.edit_draft", { id, ops: [{ op: "remove_step", index: 0 }] }));
+    expect(r.ok).toBe(true);
+    expect(w.authorize).toHaveBeenCalledWith(expect.objectContaining({ tool: "workflow.edit_draft", level: null, sensitive: undefined, url: "" }));
+    expect(w.handler).toHaveBeenCalledWith(expect.objectContaining({ p: { id, ops: [{ op: "remove_step", index: 0 }] } }));
+  });
+  it("audits every op in the command's params", async () => {
+    const w = editWorld();
+    const ops = [{ op: "remove_step", index: 1 }, { op: "parameterize", index: 2, name: "SEARCH" }];
+    const r = await w.router.handle(cmd("workflow.edit_draft", { id, ops }));
+    expect(r.audit).toMatchObject({ tool: "workflow.edit_draft", outcome: "ok", params: { id, ops } });
+  });
+  it("a malformed op is BAD_REQUEST before authorize or the handler", async () => {
+    const w = editWorld();
+    const r = await w.router.handle(cmd("workflow.edit_draft", { id, ops: [{ op: "parameterize", index: 0, name: "lower" }] }));
+    expect(r.error?.code).toBe("BAD_REQUEST");
+    expect(w.authorize).not.toHaveBeenCalled();
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+});
+
 describe("policy.site_change through the router (#104)", () => {
   const params = { origin: "https://app.example.com", changes: { auth: true }, reason: "sign in to download statements" };
   const siteWorld = (over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partial<PolicyState> = {}) => {
