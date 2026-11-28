@@ -48,7 +48,7 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
 - **AD1. Names and directions.**
   - Panel→worker: `ui.agents_list`, `ui.agent_send`.
   - Worker→bridge, on the paired WS: `agents.list` → `agents.listed`; `agent.send` → `agent.sent`.
-  - Bridge→extension: `agent.grant` → `agent.granted` (AD11) and the event `agent.status` (AD7).
+  - Bridge→extension: `agent.grant` → `agent.granted` (AD11), the event `agent.release` (AD11) and the event `agent.status` (AD7).
   - Bridge→proxy: `GET /v1/inbox` (SSE).
   - The P3 reply tool is `panel.reply`, not `inbox.reply`.
   - *Why:* each name has one direction and one owner. "inbox" is internal only.
@@ -115,12 +115,12 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   1. On `agent.send` with a tab, for a target with canDriveTab, the bridge first resolves the target and route.
   2. The bridge sends `agent.grant {requestId, meta: SessionMeta, tabId}`.
   3. The worker runs `getSession(meta)` then `addTab(s, tabId, {attached: true, makeActive: true})`.
-  4. The worker replies `agent.granted {requestId, ok, code?}`.
+  4. The worker replies `agent.granted {requestId, ok, added?, code?}`. `added` is true when this grant put the tab in the session (false when the session already had it). The bridge waits up to 5 s; no reply counts as a refusal with `TIMEOUT`, and a late ok that added the tab is released at once.
   5. Only then does the bridge compose and deliver the message.
 
   The worker refuses the grant when the tab is owned by another session (TAB_BUSY), is private (PERMISSION_DENIED), is in a handoff (TAB_BUSY), or is closed (NOT_FOUND). On a refusal, the send continues with the **no-tab** template and the feed shows "tab not shared: \<code\>".
 
-  When a piggyback message reaches `expired`, the tab is released: ungrouped and never closed, because it is `attached`. Send grants **only** the attach. It does not grant site policy or any D18 gate. The grant function is called only from the `agent.grant` handler.
+  When a piggyback message whose grant added the tab reaches `expired`, the bridge sends `agent.release {sessionId, tabId}` and the worker releases the tab: out of the session, ungrouped and never closed, because it is `attached`. A token-scoped session is also refused (PERMISSION_DENIED) a tab outside its `sites`, and a paused TabAgent refuses with PAUSED. Send grants **only** the attach. It does not grant site policy or any D18 gate. The grant function is called only from the `agent.grant` handler.
 - **AD12. The message is composed by the bridge, from raw fields.**
   - The panel sends `{requestId, agentId, prompt, includeTab, tabId?, title?, url?, selection?}`. The panel reads title and url with `chrome.tabs.get` at Send time. The bridge treats them as untrusted.
   - Template with a tab, when canDriveTab and the grant is ok:

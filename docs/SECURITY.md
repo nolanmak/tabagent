@@ -127,7 +127,19 @@ by *effect*, so there is no side door through a different tool:
 | c | Arbitrary JavaScript | `js.eval`, `nav.wait` with `for: fn` (both need `full` on the site) |
 | d | Credential reads | `cookies.get`, `storage.get`, `network.get` (`network.list` never returns header values) |
 | e | Local file transfer | `act.upload`, `downloads.read` |
-| f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved) |
+| f | Taking over one of your tabs | `tabs attach` (always asks, cannot be pre-approved; see "Send to agent" below for the one user-initiated exception) |
+
+**Send to agent shares a tab without the f prompt.** When *you* send a message from the side panel
+with "Share this tab" ticked, to a linked Claude Code agent whose TabAgent tools can drive tabs (the
+label then reads "Share this tab (agent can use it)"), that click is the attach consent: the tab
+moves into the agent's tab group with no further prompt. Only the side panel can start a send: there
+is no REST, CLI or page route, and the worker has a single
+caller for the grant. The tab is not shared when another agent owns it or it is handed to you
+(`TAB_BUSY`), when it is a private sign-in tab or outside a token's allowed sites
+(`PERMISSION_DENIED`), when it is closed (`NOT_FOUND`) or while TabAgent is paused; the agent then
+gets only the title and link, and the panel shows "tab not shared: <code>". If the message expires
+before the agent picks it up, the tab is ungrouped and left open. The grant is the attach only: the
+site policy prompt, token scope and every gate above still apply on the agent's first action.
 
 Categories a–e can be pre-approved per origin; f always asks. Choosing `full` for a site in the side
 panel (adding it or changing its row) also turns on sign-in and pre-approves a–e for it in one step

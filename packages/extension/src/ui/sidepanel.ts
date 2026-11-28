@@ -2,7 +2,7 @@
 // activity feed (audit records only) and settings. A view over worker state.
 import type { Agent, AgentSources } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
-import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
+import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, shareTabLabel, sourcesNotes, spawnInsteadOffered, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
 import { filterSites } from "../pure/siteFilter";
 import { applyLevel } from "../pure/siteLevel";
@@ -150,6 +150,11 @@ function renderComposer() {
   const btn = $("agentSend") as HTMLButtonElement;
   btn.textContent = c.label;
   btn.disabled = !c.canSend || agentSending;
+  // §7: a secondary "Start new session instead" for agents that would get the message piggybacked.
+  const alt = $("agentSpawnInstead") as HTMLButtonElement;
+  alt.hidden = !spawnInsteadOffered(v);
+  alt.disabled = !c.canSend || agentSending;
+  $("agentShareLabel").textContent = shareTabLabel(v);
   $("agentComposerNote").textContent = c.note;
   const target = $("agentTarget");
   target.hidden = !v && !agentNotice;
@@ -227,27 +232,29 @@ function selectAgent(el: EventTarget | null) {
   agentPrompt().focus();
 }
 
-async function sendToSelectedAgent() {
+async function sendToSelectedAgent(forceSpawn = false) {
   const v = selectedAgentView();
   if (!v || agentSending) return;
+  if (forceSpawn && !spawnInsteadOffered(v)) return;
   const prompt = agentPrompt().value;
   // AD12: title and url are read at Send time, not from the label shown earlier.
   const share = shareTab() ? await readActiveTab() : null;
   if (shareTab()) activeTab = share;
   if (!composerState({ agent: v, prompt, share }).canSend) return renderComposer();
   const requestId = crypto.randomUUID();
-  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route: v.route });
+  const route = forceSpawn ? "spawn" : v.route;
+  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route });
   agentSending = true;
   renderComposer();
   let r: any;
   try {
-    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share }));
+    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, forceSpawn }));
   } catch (e) {
     r = { error: String((e as Error)?.message ?? e) };
   }
   agentSending = false;
   if (r?.type === "agent.sent") agentFeed({ type: "sent", msg: r });
-  else agentFeed({ type: "sent", msg: { requestId, route: v.route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
+  else agentFeed({ type: "sent", msg: { requestId, route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
   // Keep the text after a failure so it can be retried.
   if (r?.type === "agent.sent" && r.state !== "failed") agentPrompt().value = "";
   renderComposer();
@@ -402,6 +409,7 @@ agentPrompt().addEventListener("keydown", (e) => {
 });
 $("agentShareTab").addEventListener("change", renderComposer);
 $("agentSend").addEventListener("click", () => void sendToSelectedAgent());
+$("agentSpawnInstead").addEventListener("click", () => void sendToSelectedAgent(true));
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 chrome.tabs.onUpdated.addListener((_id, info, tab) => {
   if (tab.active && (info.title || info.url)) void refreshActiveTab();

@@ -2,7 +2,7 @@
 // is pure over an injected connection; the HTTP side lives in daemon.ts.
 import { randomUUID } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
-import { INBOX_HEADERS, toolsForProfiles, type ToolDef } from "@tabagent/protocol";
+import { INBOX_HEADERS, toolsForProfiles, type SessionMeta, type ToolDef } from "@tabagent/protocol";
 
 export interface InboxConn {
   write(event: string, data: unknown): void;
@@ -13,6 +13,8 @@ export interface InboxConn {
 export interface InboxInfo {
   /** The bridge session id (SessionMeta.id) the stream belongs to. */
   sessionId: string;
+  /** That session's meta (label, token cap and sites); a tab grant carries it to the worker (AD11). */
+  meta?: SessionMeta;
   agentPid?: number;
   client: string;
   channels: boolean;
