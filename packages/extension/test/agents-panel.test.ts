@@ -147,8 +147,10 @@ describe("agent rows (§7)", () => {
     expect(agentRowView(agent({ name: "x-1", title: undefined }), NOW)).toMatchObject({ title: "x-1", titled: false });
   });
 
-  it("a linked Claude row is sendable (piggyback) and still offers a new session instead; no cwd means no spawn", () => {
-    expect(agentRowView(agent({ linked: true, delivery: "piggyback" }), NOW)).toMatchObject({ sendable: true, notConnected: false, actionLabel: "Send", spawnLabel: "Start a new session in tabagent instead" });
+  it("#159: a linked Claude row is sendable (piggyback) with Send only, no new-session action; no cwd means no spawn", () => {
+    const v = agentRowView(agent({ linked: true, delivery: "piggyback" }), NOW);
+    expect(v).toMatchObject({ sendable: true, notConnected: false, actionLabel: "Send" });
+    expect(v.spawnLabel).toBeUndefined();
     expect(agentRowView(agent({ cwd: "" }), NOW).spawnLabel).toBeUndefined();
   });
 
@@ -237,7 +239,8 @@ describe("composer (§7, AD13)", () => {
 
   it("Codex and linked targets: Send as before", () => {
     expect(composerState({ agent: queue, prompt: "go", share: null })).toEqual({ canSend: true, label: "Send", note: "", ...off });
-    expect(composerState({ agent: linked, prompt: "go", share: null })).toEqual({ canSend: true, label: "Send", note: "", spawnLabel: "Start a new session in tabagent instead", canSpawn: true });
+    // #159: the same copy as the chat page: a connected session gets Send, never "Start a new session".
+    expect(composerState({ agent: linked, prompt: "go", share: null })).toEqual({ canSend: true, label: "Send", note: "", ...off });
   });
 
   it("#137: unlinked Claude: Send is disabled; the separate Start a new session button is the only way to spawn", () => {
@@ -369,9 +372,10 @@ describe("tab grant in the panel (P2b, AD11, §7)", () => {
     expect(shareTabLabel(null)).toBe("Share this tab's title and link");
   });
 
-  it("'Start a new session in <folder> instead' is offered for linked piggyback/channel Claude targets, never for Codex", () => {
-    expect(agentRowView(agent({ linked: true, canDriveTab: true, delivery: "piggyback" }), NOW).spawnLabel).toBe("Start a new session in tabagent instead");
-    expect(agentRowView(agent({ linked: true, delivery: "channel" }), NOW).spawnLabel).toBe("Start a new session in tabagent instead");
+  it("#159: 'Start a new session in <folder>' is only for not-connected Claude; never for connected Claude or Codex", () => {
+    expect(agentRowView(agent({ linked: true, canDriveTab: true, delivery: "piggyback" }), NOW).spawnLabel).toBeUndefined();
+    expect(agentRowView(agent({ linked: true, delivery: "channel" }), NOW).spawnLabel).toBeUndefined();
+    expect(agentRowView(agent({ linked: false, delivery: "none" }), NOW).spawnLabel).toBe("Start a new session in tabagent");
     expect(agentRowView(agent({ vendor: "codex", delivery: "queue" }), NOW).spawnLabel).toBeUndefined();
   });
 
