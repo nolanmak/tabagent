@@ -15,6 +15,23 @@ export type AgentRoute = (typeof AGENT_ROUTES)[number];
 export const AGENT_STATUSES = ["busy", "idle", "error"] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
+/** #164: a command ran within this long counts as "working in the browser". */
+export const BROWSER_BUSY_WINDOW_MS = 10_000;
+
+/** #164: one tab a linked agent's session owns. */
+export const AgentBrowserTabSchema = z.object({ tabId: z.number().int(), title: z.string(), url: z.string() });
+export type AgentBrowserTab = z.infer<typeof AgentBrowserTabSchema>;
+
+/** #164: the agent's tabs and whether a command from its session is running or ran in the last 10 s. */
+export const AgentBrowserSchema = z.object({
+  tabs: z.array(AgentBrowserTabSchema),
+  activeTabId: z.number().int().optional(),
+  busy: z.boolean(),
+  /** Epoch ms of the last command that finished. */
+  lastActionAt: z.number().optional(),
+});
+export type AgentBrowser = z.infer<typeof AgentBrowserSchema>;
+
 export const AgentSchema = z.object({
   /** AD3: `claude:<pid>:<startedAt>` or `codex:<threadId>`. Never a sessionId or a display name. */
   id: z.string().min(1),
@@ -40,8 +57,16 @@ export const AgentSchema = z.object({
    * runs with `--remote-control`. Works whether or not the session is linked to TabAgent.
    */
   remoteControlUrl: z.string().optional(),
+  /**
+   * #164: the TabAgent session (SessionMeta.id) of the linked inbox stream: the id every command from this
+   * agent carries, so the extension can find the tabs that session owns. Linked agents only.
+   */
+  tabagentSessionId: z.string().optional(),
+  /** #164: added by the extension (never by the bridge): what this agent is doing in the browser. */
+  browser: AgentBrowserSchema.optional(),
 });
 export type Agent = z.infer<typeof AgentSchema>;
+
 
 export const AGENT_SOURCE_STATES = ["ok", "unavailable"] as const;
 export const AgentSourcesSchema = z.object({

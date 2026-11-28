@@ -1,7 +1,7 @@
 // TabAgent service worker: wires the bridge client, the command router, the
 // permission gate, the kill switch, the badge and the UI API together.
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
-import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, APPROVALS_FEATURE, ApprovalsLinkResultSchema, getTool, PROTOCOL_VERSION, TabAgentError, TASKS_FEATURE, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, APPROVALS_FEATURE, ApprovalsLinkResultSchema, getTool, PROTOCOL_VERSION, TabAgentError, TASKS_FEATURE, validateParams, type Agent, type SessionMeta } from "@tabagent/protocol";
 import { grantTab, releaseGrantedTab } from "./agentGrant";
 import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
@@ -15,7 +15,9 @@ import { agentRowView, chatPageUrl } from "../pure/agents";
 import { findChatTab } from "../pure/chatTabs";
 import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
-import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
+import { allCdpTabs, detachAll, getCdpTab, peekCdpTab } from "./cdp";
+import { activityReducer, enrichAgents, initialActivity, type ActivityEvent } from "../pure/liveView";
+import { createScreencasts, type Viewer } from "./screencast";
 import { disposeDrivers, driverFor } from "./driver";
 import { getDownload } from "./downloads";
 import { extraHandlers, fireKilled } from "./handlerRegistry";
@@ -27,8 +29,8 @@ import { mirrorMessage, onBridgeAnswer } from "../pure/promptMirror";
 import { isPanelSender } from "../pure/uiSender";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
-import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, focusSessionTab, sessionsView, type Session } from "./sessions";
-import { getSettings, isPaused, onYoloExpired, setSettingsClockOffset, updateSettings, type Settings } from "./settings";
+import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, ownerOf, resolveTab, restoreSessions, focusSessionTab, sessionsView, type Session } from "./sessions";
+import { getSettings, isPaused, liteForUrl, onYoloExpired, setSettingsClockOffset, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
 import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, onWorkflowEdit, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
@@ -101,6 +103,8 @@ function onBridgeMessage(msg: any) {
       router.handle(msg).then((env) => bridge.send(env));
       break;
     case "session.closed":
+      void screencasts.onSessionEnded(msg.sessionId);
+      activity = activityReducer(activity, { forget: msg.sessionId });
       endSession(msg.sessionId).catch(() => {});
       break;
     case "files.resolved":
@@ -230,7 +234,11 @@ export const router = createRouter<Session>({
     }
     return out;
   },
-  feed: (e) => feedPush(e),
+  feed: (e) => {
+    feedPush(e);
+    // #164: which sessions are working in the browser right now (busy badges, agentBrowser).
+    activity = activityReducer(activity, { sessionId: e.sessionId, id: e.id, status: e.status, ts: e.ms != null ? e.ts + e.ms : e.ts } as ActivityEvent);
+  },
   onInflight: () => refreshBadge(),
   captureWorkflowStep: captureAgentStep,
   recordWorkflowStep: recordAgent,
@@ -256,7 +264,11 @@ async function refreshBadge() {
   chrome.action.setBadgeBackgroundColor({ color: b.color }).catch(() => {});
   chrome.action.setTitle({ title: b.title }).catch(() => {});
 }
-onSessionsChanged(() => refreshBadge());
+onSessionsChanged(() => {
+  refreshBadge();
+  // #164: a tab that left its session (or a session that ended) is no longer shown live.
+  void screencasts.recheck();
+});
 
 // Review M1: YOLO / devAllowSensitive toggles are audited and the badge follows, whatever wrote them.
 // #109: the YOLO expiry alarm follows the stored expiry, and an open side panel re-reads the modes.
@@ -498,6 +510,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         authTaint.endRestartLock();
         return { ok: true };
       case "ui.endSession":
+        await screencasts.onSessionEnded(msg.id);
+        activity = activityReducer(activity, { forget: msg.id });
         await endSession(msg.id);
         sendEvent("session.ended", { sessionId: msg.id });
         return { ok: true };
@@ -506,7 +520,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "ui.agents_list": {
         // AD1/AD16: the panel lists agents through the worker; the bridge answers only on this socket.
         if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return { supported: false, agents: [], sources: { claude: "unavailable", codex: "unavailable" } };
-        return { supported: true, ...(await listAgents()) };
+        const listed = await listAgents();
+        // #164: linked agents get `browser` (their session's tabs, busy) joined on tabagentSessionId.
+        return { supported: true, ...listed, agents: await withBrowser(listed.agents) };
       }
       case "ui.tasks_list": {
         // #158: the panel's Tasks section; the bridge builds summaries from the audit log.
@@ -631,6 +647,69 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // ---------------------------------------------------------------------------
+// #164: live view and "working in browser". Frames go only to the chat pages' ports: never to the bridge,
+// storage, logs or the audit.
+// ---------------------------------------------------------------------------
+let activity = initialActivity;
+
+async function withBrowser(agents: Agent[]): Promise<Agent[]> {
+  await restoreSessions();
+  const sessions = listSessions();
+  const wanted = new Set(agents.map((a) => a.tabagentSessionId).filter(Boolean));
+  const tabs: Record<number, { title?: string; url?: string }> = {};
+  await Promise.all(
+    sessions
+      .filter((s) => wanted.has(s.id))
+      .flatMap((s) => s.tabIds)
+      .map(async (id) => {
+        const t = await chrome.tabs.get(id).catch(() => undefined);
+        if (t) tabs[id] = { title: t.title, url: t.pendingUrl || t.url };
+      }),
+  );
+  return enrichAgents(agents, { sessions, tabs, activity }, Date.now());
+}
+
+const screencasts = createScreencasts({
+  ownerOf,
+  url: (tabId) => tabUrl(tabId),
+  currentUrl: (tabId) => peekCdpTab(tabId)?.url || undefined,
+  lite: async (tabId) => liteForUrl(await tabUrl(tabId)),
+  attach: (tabId) => getCdpTab(tabId).ensure(),
+  send: (tabId, method, params) => getCdpTab(tabId).send(method, params ?? {}),
+});
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (method === "Page.screencastFrame" && source.tabId != null && !(source as { sessionId?: string }).sessionId) void screencasts.onFrame(source.tabId, (params ?? {}) as { data?: unknown; sessionId?: unknown });
+});
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source.tabId != null) screencasts.onDetached(source.tabId, String(reason));
+});
+chrome.tabs.onRemoved.addListener((tabId) => screencasts.onTabClosed(tabId));
+
+// The chat page's "Live view" strip holds this port while it shows a tab. Same gate as ui.*.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "agent-live") return;
+  if (!isPanelSender(port.sender, chrome.runtime.id, chrome.runtime.getURL(""))) {
+    port.disconnect();
+    return;
+  }
+  let open = true;
+  const viewer: Viewer = {
+    post: (m) => {
+      if (open) port.postMessage(m);
+    },
+  };
+  port.onMessage.addListener((m: any) => {
+    if (m?.type === "stop") return void screencasts.unwatch(viewer);
+    if (m?.type !== "watch" || typeof m.sessionId !== "string" || !m.sessionId || m.sessionId.length > 300 || !Number.isInteger(m.tabId)) return;
+    void screencasts.watch(viewer, m.sessionId, m.tabId);
+  });
+  port.onDisconnect.addListener(() => {
+    open = false;
+    void screencasts.unwatch(viewer);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Lifecycle (D11): alarm-driven reconnect every 30s; ping every 20s once welcomed.
 // ---------------------------------------------------------------------------
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -684,6 +763,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   rebuildMenus: () => rebuildMenus(currentAgents),
   menuItems: menuItemsBuilt,
   watchedAgents: () => watchedAgentsList(),
+  screencasts: () => screencasts.casts(),
   contextMenuClick: onMenuClick,
   checkYoloExpiry,
   advanceClock: (ms: number) => setSettingsClockOffset(ms),

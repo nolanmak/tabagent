@@ -1,7 +1,9 @@
 // The chat page's session list (#156 rail, #159 compact picker). Below 860px the rail is hidden, so the header
 // gets a button with the current session's title that opens the same list as a dropdown. Plain data in, plain
 // data or escaped HTML out; ui/chat.ts wires it to the DOM.
+import type { AgentBrowser } from "@tabagent/protocol";
 import { groupAgents, vendorShown, type AgentRowView, type ConnectionTone } from "./agents";
+import { browserBadgeHtml } from "./liveView";
 import { esc } from "./html";
 import { icon } from "./icons";
 
@@ -16,6 +18,8 @@ export interface SessionItem {
   /** This session's chat page, relative to chat.html. */
   href: string;
   cwd: string;
+  /** #164: working in the browser / its tabs. */
+  browser?: AgentBrowser;
 }
 
 /** Every running session in the side panel's order (linked first, then newest; collapsed ones last). */
@@ -30,6 +34,7 @@ export function sessionItems(views: AgentRowView[], currentId: string): SessionI
     current: v.id === currentId,
     href: `chat.html?agent=${encodeURIComponent(v.id)}`,
     cwd: v.cwd,
+    ...(v.browser ? { browser: v.browser } : {}),
   }));
 }
 
@@ -37,9 +42,14 @@ export function statusDotHtml(tone: ConnectionTone, busy: boolean): string {
   return `<span class="status-dot tone-${tone}${busy ? " busy-dot" : ""}" aria-hidden="true"></span>`;
 }
 
+function railBadge(b: AgentBrowser | undefined): string {
+  const html = browserBadgeHtml(b);
+  return html ? `<span class="rail-browser">${html}</span>` : "";
+}
+
 /** One session link: the rail and the picker share it. `attr` keys the link (focus restore, clicks). */
 export function sessionLinkHtml(i: SessionItem, attr: string): string {
-  return `<a href="${esc(i.href)}" ${attr}="${esc(i.id)}"${i.current ? ' aria-current="page"' : ""} title="${esc(i.cwd)}">${statusDotHtml(i.tone, i.busy)}<span class="rail-text"><span class="rail-title">${esc(i.title)}</span><span class="rail-meta">${esc(i.meta)}</span></span></a>`;
+  return `<a href="${esc(i.href)}" ${attr}="${esc(i.id)}"${i.current ? ' aria-current="page"' : ""} title="${esc(i.cwd)}">${statusDotHtml(i.tone, i.busy)}<span class="rail-text"><span class="rail-title">${esc(i.title)}</span><span class="rail-meta">${esc(i.meta)}</span>${railBadge(i.browser)}</span></a>`;
 }
 
 export interface PickerView {

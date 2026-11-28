@@ -368,3 +368,52 @@ test("chat page states: no agent id, and a session that is not running", async (
     await chat.close();
   }
 });
+
+test("#164: a linked agent driving a fixture tab: busy badge in the panel and rail, live frames in the chat, stopped on close", async ({ w }) => {
+  await w.h.trustFixtures();
+  const { client, pid } = await agentUnderClaude(w);
+  const startedAt = 1_795_639_900_000;
+  const agentId = `claude:${pid}:${startedAt}`;
+  const SID = "ffffffff-1111-4222-8333-444444444444";
+  w.claude.transcript(w.claude.dir, SID, [tx.title("Live view stub"), tx.user("Open the article"), tx.assistant([tx.text("On it.")])]);
+  w.claude.agents([claudeRecord(pid, startedAt, { cwd: w.claude.dir, sessionId: SID, name: "live-stub" })]);
+  const pages: Page[] = [];
+  try {
+    const r: any = await client.callTool({ name: "nav_goto", arguments: { url: `${w.h.A}/article.html` } }, undefined, { timeout: 60_000 });
+    expect(r.isError).toBeFalsy();
+    // A command that keeps running (waits for text that never shows) keeps the agent busy.
+    const waiting = client.callTool({ name: "nav_wait", arguments: { for: "text", value: "never-on-this-page", timeout: 20_000 } }, undefined, { timeout: 60_000 }).catch(() => null);
+
+    const panel = await w.h.openPanel();
+    pages.push(panel);
+    const row = panel.locator(`#agents [data-agent-id="${agentId}"]`);
+    await expect(row.locator(".browser-badge.busy")).toContainText("Working in browser", { timeout: 15_000 });
+    await expect(row.locator(".browser-badge.busy")).toContainText("Article");
+
+    const chat = await w.h.ctx.newPage();
+    pages.push(chat);
+    await chat.goto(`${CHAT}?agent=${encodeURIComponent(agentId)}`);
+    await expect(chat.locator(`#railList [data-rail-agent="${agentId}"] .browser-badge.busy`)).toContainText("Working in browser", { timeout: 15_000 });
+    const strip = chat.locator("#live .live-strip");
+    await expect(strip).toBeVisible({ timeout: 15_000 });
+    await expect(strip.locator(".live-head")).toContainText("Live view");
+    // At least one frame arrives: the <img> gets a JPEG data URL and the state says Live.
+    await expect.poll(async () => (await chat.locator("#liveImg").getAttribute("src")) ?? "", { timeout: 20_000 }).toMatch(/^data:image\/jpeg;base64,/);
+    await expect(strip.locator(".live-state")).toHaveText("Live");
+    expect(await w.h.sw.evaluate(() => (globalThis as any).__tabagent.screencasts())).toEqual([expect.objectContaining({ viewers: 1, live: true })]);
+
+    // Read-only and collapsible: collapsing stops the screencast.
+    await strip.locator("[data-live-toggle]").click();
+    await expect.poll(() => w.h.sw.evaluate(() => (globalThis as any).__tabagent.screencasts()), { timeout: 5000 }).toEqual([]);
+    await chat.locator("#live [data-live-toggle]").click();
+    await expect.poll(async () => (await w.h.sw.evaluate(() => (globalThis as any).__tabagent.screencasts())).length, { timeout: 10_000 }).toBe(1);
+
+    // Closing the chat page (port disconnect) stops it.
+    await chat.close();
+    await expect.poll(() => w.h.sw.evaluate(() => (globalThis as any).__tabagent.screencasts()), { timeout: 5000 }).toEqual([]);
+    await waiting;
+  } finally {
+    for (const p of pages) await p.close().catch(() => {});
+    await client.close();
+  }
+});
