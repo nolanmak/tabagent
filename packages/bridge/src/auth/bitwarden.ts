@@ -24,6 +24,7 @@ import {
   type TotpState,
 } from "@tabagent/protocol";
 import { CliMissing, CLI_TIMEOUT_MS, nodeRunner, SerialQueue, versionAtLeast, type Runner } from "./exec";
+import type { KeyStore } from "./keychain";
 import type { BridgeProvider, SecretRequestField } from "./provider";
 
 /**
@@ -103,6 +104,9 @@ export interface BitwardenOpts {
   enabled: () => boolean;
   idleLockMs?: number;
   maxUnlockMs?: number;
+  /** Opt-in: keep the session key across bridge restarts (`auth.bitwarden.rememberUnlock`). */
+  remember?: () => boolean;
+  keyStore?: KeyStore;
   /** Audit hook for unlock/lock events (never carries key material). */
   event?: (event: string, data: Record<string, unknown>) => void;
 }
@@ -156,10 +160,28 @@ export class BitwardenProvider implements BridgeProvider {
     );
   }
 
-  /** #37 startup: forget any inherited BW_SESSION and make sure TabAgent's CLI state is locked. */
+  private get remembering() {
+    return !!this.o.keyStore && !!this.o.remember?.();
+  }
+
+  /**
+   * #37 startup: forget any inherited BW_SESSION and make sure TabAgent's CLI state is locked,
+   * unless the user opted into rememberUnlock and the saved key still unlocks the vault.
+   */
   async startup(env: NodeJS.ProcessEnv = process.env): Promise<void> {
     delete env.BW_SESSION;
     if (!this.o.enabled()) return;
+    if (this.remembering) {
+      const saved = await this.o.keyStore!.load().catch(() => null);
+      if (saved && (await this.rawStatus(saved).catch(() => "locked" as const)) === "unlocked") {
+        this.key = saved;
+        this.unlockedAt = this.lastFetch = this.now();
+        this.o.event?.("bitwarden.unlocked", { restored: true });
+        await this.sync().catch(() => {});
+        return;
+      }
+    }
+    await this.o.keyStore?.clear().catch(() => {});
     await this.bw(["lock"], false).catch(() => {});
   }
 
@@ -211,6 +233,7 @@ export class BitwardenProvider implements BridgeProvider {
     this.totp = "unknown";
     this.unknownSynced = false;
     this.o.event?.("bitwarden.unlocked", {});
+    if (this.remembering) await this.o.keyStore!.save(key).catch(() => {});
     await this.sync().catch(() => {});
   }
 
@@ -221,7 +244,11 @@ export class BitwardenProvider implements BridgeProvider {
     this.cache.clear();
     this.totp = "unknown";
     this.queue.drop(() => this.lockedError());
+    // rememberUnlock: a bridge exit keeps the saved key valid (no `bw lock`) so the next start can
+    // restore it. Every other reason (lock, kill, idle, cap, rejected) forgets it for good.
+    if (reason === "daemon-exit" && this.remembering) return;
     if (had) this.o.event?.("bitwarden.locked", { reason });
+    await this.o.keyStore?.clear().catch(() => {});
     if (had || reason === "lock") await this.bw(["lock"], false).catch(() => {});
   }
 
