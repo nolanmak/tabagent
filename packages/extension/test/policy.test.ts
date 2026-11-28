@@ -221,6 +221,11 @@ describe("auth category g (M6)", () => {
     expect(resolve(base({ denylist: [], yolo: true, sites: { [o]: { policy: "full", auth: false } } }), req({ url: `${o}/`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
     expect(resolve(base({ denylist: ["accounts.google.com"], yolo: true }), req({ url: `${o}/`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
   });
+  it("YOLO enables sign-in everywhere but still asks consent per account (#110)", () => {
+    const o = "https://shop.example.com";
+    expect(resolve(base({ yolo: true }), req({ url: `${o}/login`, sensitive: "g", accountId: "x" })).decision).toBe("ask");
+    expect(resolve(base({ yolo: false, sites: { [o]: { policy: "full" } } }), req({ url: `${o}/login`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
+  });
   it("Google account pages stay never-reachable after the change (D4)", () => {
     const st = base({ denylist: [], yolo: true, sites: { "https://myaccount.google.com": { policy: "full", auth: true } } });
     expect(resolve(st, req({ url: "https://myaccount.google.com/security" })).decision).toBe("deny");
