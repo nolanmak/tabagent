@@ -1,11 +1,14 @@
 // Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions,
 // activity feed (audit records only) and settings. A view over worker state.
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled } from "../background/policy";
+import { filterSites } from "../pure/siteFilter";
 import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const send = (msg: unknown) => chrome.runtime.sendMessage(msg) as Promise<any>;
 let state: any = null;
+/** Sites search text (#117); kept here so it survives the re-render after every settings change. */
+let siteQuery = "";
 
 function esc(s: unknown) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -132,16 +135,23 @@ function renderSettings() {
   ($("yolo") as HTMLInputElement).checked = !!s.yolo;
   $("yoloBanner").hidden = !s.yolo;
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
-  const rows = Object.entries(s.sites as Record<string, any>);
+  renderSites();
+  $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
+}
+
+function renderSites() {
+  const { rows, total } = filterSites((state.settings.sites ?? {}) as Record<string, any>, siteQuery);
+  const filtering = siteQuery.trim() !== "";
+  $("siteCount").textContent = `${filtering ? `${rows.length} of ` : ""}${total} site${total === 1 ? "" : "s"}`;
+  $("siteSearchClear").hidden = siteQuery === "";
   $("sites").innerHTML =
     rows
       .map(([o, e]) => {
         const pol = e.policy ?? "ask";
         const pre = CATS.map((c) => `<label class="chip"><input type="checkbox" data-pre="${c}" data-origin="${esc(o)}" ${e.preapproved?.[c] ? "checked" : ""}/>${CAT_LABEL[c]}</label>`).join("");
-        return `<tr><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}<label class="chip" title="Let agents sign in here with your saved accounts"><input type="checkbox" data-auth data-origin="${esc(o)}" ${authEnabled(e, o, !!state.settings?.yolo) ? "checked" : ""}/>sign-in</label>${(e.authAlways ?? []).length ? `<span class="muted small"> (${(e.authAlways ?? []).length} account${(e.authAlways ?? []).length === 1 ? "" : "s"} always)</span>` : ""}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
+        return `<tr data-site="${esc(o)}"><td class="origin">${esc(o)}</td><td><select data-policy data-origin="${esc(o)}">${["ask", "read", "act", "full", "deny"].map((x) => `<option ${x === pol ? "selected" : ""}>${x}</option>`).join("")}</select></td><td><input type="checkbox" data-lite data-origin="${esc(o)}" ${e.lite ? "checked" : ""}/></td><td class="pre">${pre}<label class="chip" title="Let agents sign in here with your saved accounts"><input type="checkbox" data-auth data-origin="${esc(o)}" ${authEnabled(e, o, !!state.settings?.yolo) ? "checked" : ""}/>sign-in</label>${(e.authAlways ?? []).length ? `<span class="muted small"> (${(e.authAlways ?? []).length} account${(e.authAlways ?? []).length === 1 ? "" : "s"} always)</span>` : ""}</td><td><button data-del="${esc(o)}" title="Revoke everything for this site">✕</button></td></tr>`;
       })
-      .join("") || `<tr><td colspan="5" class="muted">No site settings yet.</td></tr>`;
-  $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
+      .join("") || `<tr><td colspan="5" class="muted">${filtering && total ? "No sites match." : "No site settings yet."}</td></tr>`;
 }
 
 function render() {
@@ -277,6 +287,22 @@ $("sites").addEventListener("click", (e) => {
   const all = sites();
   delete all[b.dataset.del];
   patch({ sites: all });
+});
+const siteSearch = $("siteSearch") as HTMLInputElement;
+const setSiteQuery = (q: string) => {
+  siteQuery = q;
+  if (siteSearch.value !== q) siteSearch.value = q;
+  if (state) renderSites();
+};
+siteSearch.addEventListener("input", () => setSiteQuery(siteSearch.value));
+siteSearch.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !siteSearch.value) return;
+  e.preventDefault();
+  setSiteQuery("");
+});
+$("siteSearchClear").addEventListener("click", () => {
+  setSiteQuery("");
+  siteSearch.focus();
 });
 $("addSite").addEventListener("submit", (e) => {
   e.preventDefault();

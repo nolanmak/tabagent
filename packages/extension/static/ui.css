@@ -49,3 +49,7 @@ button { white-space:nowrap; overflow-wrap:normal; flex-shrink:0; }
 .chip { display:inline-flex; gap:2px; align-items:center; margin-right:4px; white-space:nowrap; }
 .g-grey{background:#9ca3af}.g-blue{background:#3b82f6}.g-red{background:#ef4444}.g-yellow{background:#eab308}.g-green{background:#22c55e}.g-pink{background:#ec4899}.g-purple{background:#a855f7}.g-cyan{background:#06b6d4}.g-orange{background:#f97316}
 .yolo-banner { margin:8px 12px 0; padding:8px 10px; border-radius:8px; background:#db2777; color:#fff; font-size:13px; }
+.sitesearch { flex-wrap:nowrap; } .searchbox { position:relative; display:flex; flex:1 1 auto; min-width:0; }
+.searchbox input { width:100%; padding-right:26px; } .searchbox input::-webkit-search-cancel-button { display:none; }
+.searchbox button { position:absolute; right:2px; top:50%; transform:translateY(-50%); border:0; background:none; padding:2px 6px; color:var(--muted); }
+#siteCount { white-space:nowrap; flex-shrink:0; }
