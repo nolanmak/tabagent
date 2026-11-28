@@ -40,7 +40,8 @@ const KEYWORD = /\b(?:code|codes|verification|verify|otp|passcode|pass\s?code|2f
 const NEAR = 80;
 
 /** Digits 4-8 long, optionally one space or dash in the middle of 6 or 8 ("123 456", "1234-5678"). */
-const DIGIT_CODE = /(?<![\d\-+()./:,$#])(?<!\d[ -])(?:(\d{3})[ -](\d{3})|(\d{4})[ -](\d{4})|(\d{4,8}))(?![\d\-/:%]|[.,]\d|[ -]\d)/g;
+// "-" right before the digits means "not a bare code", except one capital letter + "-" (Google's "G-123456", #83 D9).
+const DIGIT_CODE = /(?<![\d+()./:,$#])(?<!(?<!(?:^|[^A-Za-z0-9])[A-Z])-)(?<!\d[ -])(?:(\d{3})[ -](\d{3})|(\d{4})[ -](\d{4})|(\d{4,8}))(?![\d\-/:%]|[.,]\d|[ -]\d)/g;
 
 function senderMatches(filter: string, from: string | undefined): boolean {
   if (!from) return false;

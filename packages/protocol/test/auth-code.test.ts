@@ -15,7 +15,11 @@ describe("extractCode (DA8)", () => {
     ["2FA code 123 456", "123456"],
     ["Security code: 123-456. Do not share it.", "123456"],
     ["Your login code is 9876-5432", "98765432"],
-    ["G-582113 is your Google verification code", null], // prefixed: "-" before digits means not a bare code
+    ["G-582113 is your Google verification code", "582113"], // #83 D9: one capital letter + "-" is Google's prefix
+    ["Your verification code is ref-482913", null], // multi-letter prefix is not a bare code
+    ["Your verification code is AB-482913", null],
+    ["Your verification code is -482913", null],
+    ["Call 555-482913 for your verification code", null],
   ])("%s -> %s", (text, want) => {
     const r = ex([msg(text)]);
     if (want === null) expect(r).toEqual({ none: true });

@@ -135,7 +135,9 @@ describe("DA10 profile", () => {
 describe("masking", () => {
   it.each([
     ["nolan@gmail.com", "n•••@gmail.com"],
-    ["nolanmak", "n•••k"],
+    ["nolanmak7@gmail.com", "nol•••k7@gmail.com"], // #82 D10: 7+ char local part shows 3 + 2
+    ["nolanmak", "nol•••ak"],
+    ["nolanm", "n•••m"],
     ["ab", "a•••"],
     ["", "•••"],
     [null, "•••"],
@@ -145,13 +147,16 @@ describe("masking", () => {
     expect(maskAccount(a)).toBe(want);
     expect(maskAccount(a)).toMatch(MASKED_ACCOUNT_RE);
   });
-  it("every mask matches the result regex and leaks at most 2 chars of the local part (property)", () => {
+  it("D10 tells apart Gmail logins that the old mask collapsed", () => {
+    expect(maskAccount("nolanmak7@gmail.com")).not.toBe(maskAccount("nathan.k@gmail.com"));
+  });
+  it("every mask matches the result regex and leaks at most 5 chars of the local part, 2 when short (property)", () => {
     fc.assert(
       fc.property(fc.string(), fc.option(fc.domain()), (local, domain) => {
         const m = maskAccount(domain ? `${local}@${domain}` : local);
         expect(m).toMatch(MASKED_ACCOUNT_RE);
         const visibleLocal = m.split("@")[0].replace("•••", "");
-        expect([...visibleLocal].length).toBeLessThanOrEqual(2);
+        expect([...visibleLocal].length).toBeLessThanOrEqual([...local.trim()].length >= 7 ? 5 : 2);
       }),
     );
   });

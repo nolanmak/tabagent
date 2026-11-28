@@ -25,7 +25,7 @@ function keysOf(schema: z.ZodType): string[] {
 
 /** Every name the skill may mention: params, result fields and envelope fields. */
 const KNOWN_FIELDS = new Set([...tools.flatMap((t) => [...Object.keys(t.params.shape), ...keysOf(t.result)]), ...Object.keys(ResultEnvelopeSchema.shape), ...PROFILES]);
-const TOOL_RE = /^(tabs|nav|page|act|form|extract|dialog|js|console|network|cookies|storage|downloads|session)([._][A-Za-z]+)?\b/;
+const TOOL_RE = /^(tabs|nav|page|act|form|extract|dialog|js|console|network|cookies|storage|downloads|session|auth|captcha|policy)([._][A-Za-z]+)?\b/;
 
 export function lintSkill(md: string): string[] {
   const problems: string[] = [];
@@ -79,6 +79,14 @@ describe("SKILL.md lint (#29)", () => {
     for (const t of ["auth.status", "auth.login", "auth.code", "auth.handoff"]) expect(text).toContain("`" + t);
     expect(text).toMatch(/--profile[^\n]*auth/);
     expect(text).not.toMatch(/At a login wall, ask the user to sign in/);
+  });
+  it("lints auth tool spans too (#84)", () => {
+    expect(lintSkill("use `auth.login {account}`")).toEqual([]);
+    expect(lintSkill("use `auth.login {user}`")).toEqual(["auth.login has no param user"]);
+    expect(lintSkill("use `auth.signin`")).toEqual(["unknown tool auth.signin"]);
+  });
+  it("has the Sign in with Google steps (#84)", () => {
+    for (const s of ["accounts.google.com", "`auth.login {account}`", "`auth.code {source}`", "handoff_required", "tabs {action: \"select\"}"]) expect(text).toContain(s);
   });
   it("covers the troubleshooting codes and D19 guidance", () => {
     for (const c of ["NO_EXTENSION", "TAB_BUSY", "PERMISSION_DENIED", "PROMPT_TIMEOUT", "KILLED", "DIALOG_OPEN", "REF_STALE"]) expect(text).toContain("`" + c + "`");

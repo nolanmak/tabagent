@@ -10,7 +10,7 @@ TabAgent controls the user's **real Chrome profile**, with their logins, cookies
 ## Setup check
 
 - MCP tool names use underscores: `nav_goto`, `page_snapshot`, `act_click`. This file writes registry names (`nav.goto`); they map one to one.
-- No TabAgent tools? Then MCP is not configured. Run `tabagent status`, and use the CLI: `tabagent <tool> --json '{...}'`, for example `tabagent nav.goto --json '{"url":"https://example.com"}'`. Flags like `--url` are shorthand.
+- No TabAgent tools? MCP is not configured: run `tabagent status` and use the CLI, `tabagent <tool> --json '{...}'` (flags like `--url` are shorthand).
 - `NO_EXTENSION`: Chrome is closed or the extension is not paired. Ask the user to open Chrome and pair: `tabagent status` prints the code to enter in the TabAgent side panel.
 
 ## Core loop
@@ -35,7 +35,7 @@ TabAgent controls the user's **real Chrome profile**, with their logins, cookies
 ## Getting data out
 
 - `extract.table` returns rows (`format: "csv"` for CSV). `page.markdown` returns readable text, `page.text` raw text.
-- `extract.links {filter}`, `extract.schema` (structured items plus reusable `selectors`), `extract.paginate {extractor, maxPages}` across pages.
+- `extract.links {filter}`, `extract.schema` (items plus reusable `selectors`), `extract.paginate {extractor, maxPages}`.
 
 ## Waiting
 
@@ -49,6 +49,8 @@ Signing in is part of the job; don't stop and ask the user to sign in first. The
 2. Saved account: `auth.login` fills it from the user's password manager after they approve in the side panel.
 3. SSO button ("Sign in with Google") or an emailed or texted code: click through, then `auth.code {source}` types the code.
 4. Only for a passkey, CAPTCHA or a step no route covers: `auth.handoff {reason}`, then tell the user what to do in the tab.
+
+Sign in with Google (user has removed `accounts.google.com` from the denylist and enabled sign-in there): click the site's Google button (popup: `tabs {action: "select"}` it). On Google, call `auth.status` and pass the chosen id as `auth.login {account}`; call again for the password step. Codes: `auth.code {source}` with sms or totp, never email. When `next` is handoff_required (phone prompt, passkey, CAPTCHA, "not secure", recovery page), `auth.handoff`, then re-snapshot. Never change Google account settings.
 
 ## Safety
 
@@ -64,12 +66,8 @@ Signing in is part of the job; don't stop and ask the user to sign in first. The
 - An action that opens an alert, confirm or prompt returns `dialogs`. Until you call `dialog.handle {action}` (accept or dismiss, plus `promptText`), every other call on that tab returns `DIALOG_OPEN`.
 - `TAB_BUSY`: that tab belongs to another agent session. Use your own tabs (`tabs {action: "new"}`).
 - Downloads show up in results. `downloads.wait`, then `downloads.read {id}` (up to 5 MB).
-- `page.screenshot {target}` (viewport, full or ref) is for visual checks; snapshots are far cheaper.
+- `page.screenshot {target}` is for visual checks; snapshots are cheaper.
 
 ## Tool profiles
 
-`tabagent mcp` exposes `core` by default. Add more with `--profile`, for example `tabagent mcp --profile forms,data`:
-- forms: `form.describe`, `form.blockers`, `form.submit`, `act.fill`, `act.check`, `act.upload`
-- data: `page.text`, `page.find`, `extract.links`, `extract.schema`, `extract.paginate`, `downloads.list`, `downloads.wait`, `downloads.read`
-- dev: `js.eval`, `console.list`, `network.list`, `network.get`, `cookies.get`, `storage.get`
-- full: everything, including `nav.back` and `act.hover`.
+`tabagent mcp` exposes `core` by default; add `--profile forms,data,dev,auth` or `full`. forms: `form.describe`, `form.blockers`, `act.fill`, `act.upload`. data: `page.text`, `extract.links`, `extract.schema`, `downloads.read`. dev: `js.eval`, `network.get`, `cookies.get`. auth: sign-in tools. full: everything.
