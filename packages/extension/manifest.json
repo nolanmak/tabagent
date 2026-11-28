@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TabAgent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Let AI agents (Claude Code, Codex, any MCP client) drive your browser and handle sign-in and 2FA, with permissions you control.",
   "minimum_chrome_version": "125",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtozrv3YwFAa405x0qBGjaRxWDpCVpx+GMLoFU/7YvMK/DvUUi35IF5b5iuAgh+gdJ6R+dJKQ/V9IizIaiIKoowW8wYbypR6t2tQVp7gpj5DI61N9Ii2TXuV49U/T1GX93+nrwwGm2hfA2ej7ty2bOFwtT8+Sc1VOOWhfxpLQtHSAyfPx2Uxhp/mQvptTpHBOqDVAve1AicB/9geGMTtPJSo4vWUA4q3sBBbjzwyvw6Fc602SWAHqlNbLWLYWOm9lg+ySObe3Ha92sDJIPhq0Q78E7geexrZXK1JlHVg2Rde+usH36C69w/eAMzJlZdRP4YR4o0dxQVln0/pJV+F88wIDAQAB",

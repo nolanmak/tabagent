@@ -22,8 +22,8 @@ A Claude Code session can only get messages from the side panel when its own `ta
 connected back to the TabAgent bridge. Until then the row says **Not connected — can't message this
 session**. To connect it:
 
-1. **Update TabAgent.** The session's `tabagent mcp` has to be a version that links to the bridge (the
-   first release after 0.1.0). With the documented install, `npx -y @nolmak/tabagent mcp` fetches the
+1. **Update TabAgent.** The session's `tabagent mcp` has to be a version that links to the bridge (0.2.0 or
+   later). With the documented install, `npx -y @nolmak/tabagent mcp` fetches the
    latest version when the session starts. If you installed it globally, run
    `npm i -g @nolmak/tabagent@latest`. Restart `tabagent serve` too, so the bridge and the extension match.
 2. **Restart the session.** A session started before the update keeps running the old `tabagent mcp`.
