@@ -36,6 +36,7 @@
     "downloads",
     "cookies",
     "alarms",
+    "contextMenus",
     "notifications",
     "scripting",
     "webNavigation"

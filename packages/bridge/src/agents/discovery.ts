@@ -104,21 +104,30 @@ export function codexThreadToAgent(thread: unknown): AgentBase | null {
   };
 }
 
-/** P1: nothing is linked yet (P2a), so linked and canDriveTab are false and delivery is queue/spawn/none. */
-export function toAgent(a: AgentBase): Agent {
-  const linked = false;
-  return { ...a, linked, canDriveTab: false, delivery: chooseRoute({ vendor: a.vendor, status: a.status, linked }) };
+/** AD4: the live inbox stream an agent is linked through, as discovery needs it. */
+export interface AgentLink {
+  /** Glossary canDriveTab: the linked session's profile has page_* / act_* tools. */
+  canDriveTab: boolean;
+  /** AD9: the proxy reported `x-tabagent-channels: 1`. */
+  channels: boolean;
+}
+export type LinkOf = (a: AgentBase) => AgentLink | null;
+
+/** An agent with its link (null: not linked) and the route the bridge would pick now (AD6). */
+export function toAgent(a: AgentBase, link: AgentLink | null = null): Agent {
+  const linked = !!link;
+  return { ...a, linked, canDriveTab: linked && link.canDriveTab, delivery: chooseRoute({ vendor: a.vendor, status: a.status, linked, channels: link?.channels }) };
 }
 
-/** Merge per-source lists: unique ids, newest first (stable for ties). */
-export function mergeAgents(lists: AgentBase[][]): Agent[] {
+/** Merge per-source lists: unique ids, newest first (stable for ties). `linkOf` marks linked agents. */
+export function mergeAgents(lists: AgentBase[][], linkOf: LinkOf = () => null): Agent[] {
   const seen = new Set<string>();
   const out: Agent[] = [];
   for (const list of lists)
     for (const a of list) {
       if (seen.has(a.id)) continue;
       seen.add(a.id);
-      out.push(toAgent(a));
+      out.push(toAgent(a, linkOf(a)));
     }
   return out.sort((a, b) => b.startedAt - a.startedAt);
 }

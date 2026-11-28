@@ -8,6 +8,8 @@ import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, sendToAgent, setAgentsSender, setAgentStatusListener } from "./bridgeAgents";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
+import { menuItemsBuilt, onMenuClick, rebuildMenus, wireContextMenu, type CurrentAgents } from "./contextMenu";
+import { agentRowView } from "../pure/agents";
 import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
@@ -45,6 +47,8 @@ const bridge = createBridgeClient({
   onStatus: (status, error) => {
     broadcast({ type: "status", status, error });
     refreshBadge();
+    // #92: re-validate the menu's recent agents once the bridge can list them.
+    if (status === "connected") void rebuildMenus(currentAgents).catch(() => {});
   },
   protocolVersion: PROTOCOL_VERSION,
   extensionVersion: VERSION,
@@ -458,6 +462,13 @@ chrome.alarms.onAlarm.addListener((a) => {
     });
   }
 });
+// #92: "Send to agent ▸" context menu (AD14: it only writes an intent and opens the panel).
+async function currentAgents(): ReturnType<CurrentAgents> {
+  if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return null;
+  const now = Date.now();
+  return (await listAgents()).agents.map((a) => ({ id: a.id, title: agentRowView(a, now).title }));
+}
+wireContextMenu(currentAgents);
 chrome.runtime.onStartup.addListener(() => bridge.connect());
 chrome.runtime.onInstalled.addListener(() => bridge.connect());
 
@@ -488,5 +499,8 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
   attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
   runDueSchedules,
+  rebuildMenus: () => rebuildMenus(currentAgents),
+  menuItems: menuItemsBuilt,
+  contextMenuClick: onMenuClick,
 };
 export type { Status };

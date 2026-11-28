@@ -61,6 +61,12 @@ export interface OutputResponse {
   navigation?: Navigation;
   dialogs?: DialogInfo[];
   downloads?: DownloadInfo[];
+  /**
+   * AD8 piggyback: messages the user sent from the side panel, attached by the bridge to a successful
+   * result after wrapping. Each one starts with the `[TabAgent: message from the user via the side panel]`
+   * header; the stdio proxy renders each as its own text block before the tool output.
+   */
+  userMessages?: string[];
 }
 
 /** Every piece of page text that will be wrapped, in order. Used for the nonce collision check. */
