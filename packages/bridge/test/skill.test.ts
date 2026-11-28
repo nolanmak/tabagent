@@ -75,6 +75,11 @@ describe("SKILL.md lint (#29)", () => {
     expect(kv.description.length).toBeGreaterThan(40);
     expect(kv.description.length).toBeLessThanOrEqual(1024);
   });
+  it("tells agents to sign in with the auth tools before asking the user", () => {
+    for (const t of ["auth.status", "auth.login", "auth.code", "auth.handoff"]) expect(text).toContain("`" + t);
+    expect(text).toMatch(/--profile[^\n]*auth/);
+    expect(text).not.toMatch(/At a login wall, ask the user to sign in/);
+  });
   it("covers the troubleshooting codes and D19 guidance", () => {
     for (const c of ["NO_EXTENSION", "TAB_BUSY", "PERMISSION_DENIED", "PROMPT_TIMEOUT", "KILLED", "DIALOG_OPEN", "REF_STALE"]) expect(text).toContain("`" + c + "`");
     expect(text).toMatch(/side panel/);
@@ -135,5 +140,13 @@ describe("skill installer (#29)", () => {
     writeFileSync(join(targets[0].dir, "keep.txt"), "x");
     expect(uninstallSkill(targets, true)[0].action).toBe("removed");
     expect(existsSync(join(targets[0].dir, "keep.txt"))).toBe(true);
+  });
+});
+
+describe("MCP server instructions", () => {
+  it("point agents at the auth tools for sign-in walls", async () => {
+    const { INSTRUCTIONS } = await import("../src/mcp");
+    expect(INSTRUCTIONS).toMatch(/auth_status/);
+    expect(INSTRUCTIONS).toMatch(/--profile[^.]*auth/);
   });
 });
