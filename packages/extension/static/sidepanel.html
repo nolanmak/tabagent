@@ -62,7 +62,7 @@
     <p id="agentTarget" class="small" hidden></p>
     <textarea id="agentPrompt" rows="3" placeholder="Message for the agent" aria-label="Message for the agent"></textarea>
     <label class="row check"><input type="checkbox" id="agentShareTab" checked /> <span><span id="agentShareLabel">Share this tab's title and link</span> <span id="agentTabTitle" class="muted small"></span></span></label>
-    <label class="row check muted"><input type="checkbox" id="agentSelection" disabled /> <span>Include selection <span class="small">(coming soon)</span></span></label>
+    <label class="row check"><input type="checkbox" id="agentSelection" disabled /> <span>Include selection <span id="agentSelectionPreview" class="muted small"></span></span></label>
     <div class="row composer-actions"><span id="agentComposerNote" class="muted small"></span><button id="agentSpawnInstead" hidden disabled>Start new session instead</button><button id="agentSend" class="primary" disabled>Send</button></div>
   </div>
   <ul id="agentFeed" class="feed agent-feed" aria-label="Messages sent to agents"></ul>

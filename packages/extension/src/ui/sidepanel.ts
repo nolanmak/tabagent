@@ -4,6 +4,7 @@ import type { Agent, AgentSources } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, shareTabLabel, sourcesNotes, spawnInsteadOffered, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
+import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
 import { filterSites } from "../pure/siteFilter";
 import { applyLevel } from "../pure/siteLevel";
 import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
@@ -116,10 +117,19 @@ let agentSending = false;
 let agentSendFeed: AgentFeedEntry[] = [];
 /** The active tab as it would be shared; re-read at Send time. */
 let activeTab: SharedTab | null = null;
+/** The active tab's id, shareable or not; undefined until first read. */
+let activeTabId: number | null | undefined;
+/** #92: a context-menu intent waiting for the agent list, and the selection it brought. */
+let pendingIntent: SendIntent | null = null;
+let heldSelection: HeldSelection | null = null;
+let selectionDropped = false;
 
 const agentsVisible = () => !!state?.agentsSupported;
 const agentPrompt = () => $("agentPrompt") as HTMLTextAreaElement;
 const shareTab = () => ($("agentShareTab") as HTMLInputElement).checked;
+const selectionBox = () => $("agentSelection") as HTMLInputElement;
+/** The selection that would be sent: held, ticked and with the tab shared (AD12). */
+const outgoingSelection = () => (heldSelection && selectionBox().checked && shareTab() ? heldSelection.text : null);
 
 function selectedAgentView() {
   const a = agents.find((x) => x.id === selectedAgentId);
@@ -146,7 +156,11 @@ function renderAgentList() {
 
 function renderComposer() {
   const v = selectedAgentView();
-  const c = composerState({ agent: v, prompt: agentPrompt().value, share: shareTab() ? activeTab : null });
+  const sv = selectionView({ selection: heldSelection, dropped: selectionDropped, shareOn: shareTab() });
+  selectionBox().disabled = !sv.enabled;
+  if (!heldSelection) selectionBox().checked = false;
+  $("agentSelectionPreview").textContent = sv.text;
+  const c = composerState({ agent: v, prompt: agentPrompt().value, share: shareTab() ? activeTab : null, selection: outgoingSelection() });
   const btn = $("agentSend") as HTMLButtonElement;
   btn.textContent = c.label;
   btn.disabled = !c.canSend || agentSending;
@@ -182,15 +196,81 @@ function agentFeed(a: AgentFeedAction) {
 async function readActiveTab(): Promise<SharedTab | null> {
   try {
     const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    activeTabId = t?.id ?? null;
+    reconcileHeldSelection();
     return shareableTab(t);
   } catch {
     return null;
   }
 }
 
+/** AD14: a selection belongs to the tab it was made in; switching tabs drops it. */
+function reconcileHeldSelection() {
+  const r = reconcileSelection(heldSelection, activeTabId);
+  heldSelection = r.selection;
+  if (r.dropped) selectionDropped = true;
+}
+
 async function refreshActiveTab() {
   activeTab = await readActiveTab();
   if (agentsVisible()) renderComposer();
+}
+
+/**
+ * #92: take the context menu's pending intent, if any (AD14). Each window has its own panel, so a panel takes
+ * only intents for a tab in its own window and leaves the rest for theirs. Stale or unusable intents are cleared.
+ */
+async function takeIntent() {
+  try {
+    const raw = (await chrome.storage.session.get(SEND_INTENT_KEY))[SEND_INTENT_KEY];
+    if (raw === undefined) return;
+    const intent = parseIntent(raw, Date.now());
+    const where = intent ? await intentWindow(intent.tabId) : "gone";
+    if (where === "other") return;
+    await chrome.storage.session.remove(SEND_INTENT_KEY);
+    if (!intent || where === "gone") return;
+    pendingIntent = intent;
+  } catch {
+    return;
+  }
+  applyPendingIntent();
+}
+
+async function intentWindow(tabId: number): Promise<"mine" | "other" | "gone"> {
+  const [tab, win] = await Promise.all([chrome.tabs.get(tabId).catch(() => null), chrome.windows.getCurrent()]);
+  if (!tab) return "gone";
+  return tab.windowId === win.id ? "mine" : "other";
+}
+
+/** Apply the intent once the agent list is loaded, so the agent can be checked against it. */
+function applyPendingIntent() {
+  if (!pendingIntent || !agentsLoaded) return;
+  const o = intentOutcome(pendingIntent, agents.map((a) => a.id));
+  pendingIntent = null;
+  if (o.select !== undefined) {
+    selectedAgentId = o.select;
+    agentNotice = o.notice;
+  }
+  heldSelection = o.selection;
+  selectionDropped = false;
+  selectionBox().checked = !!o.selection;
+  // Re-read the active tab rather than trust an earlier read that may predate the right-click.
+  activeTabId = undefined;
+  if (agentsVisible()) {
+    renderAgentsBox();
+    agentPrompt().focus();
+  }
+  void refreshActiveTab();
+}
+
+/** A successful send makes the agent the first entry in the context menu's recent list. */
+async function rememberRecent(agent: { id: string; name: string }) {
+  try {
+    const cur = sanitizeRecent((await chrome.storage.local.get(RECENT_AGENTS_KEY))[RECENT_AGENTS_KEY]);
+    await chrome.storage.local.set({ [RECENT_AGENTS_KEY]: updateRecent(cur, agent) });
+  } catch {
+    /* best effort: the menu just keeps its old list */
+  }
 }
 
 async function refreshAgents() {
@@ -221,6 +301,7 @@ async function refreshAgents() {
     agentNotice = "The selected agent is no longer running.";
   }
   renderAgentsBox();
+  applyPendingIntent();
 }
 
 function selectAgent(el: EventTarget | null) {
@@ -238,9 +319,12 @@ async function sendToSelectedAgent(forceSpawn = false) {
   if (forceSpawn && !spawnInsteadOffered(v)) return;
   const prompt = agentPrompt().value;
   // AD12: title and url are read at Send time, not from the label shown earlier.
-  const share = shareTab() ? await readActiveTab() : null;
+  // AD14: re-check the active tab now too, so a tab switch the panel missed still drops the selection.
+  const current = await readActiveTab();
+  const share = shareTab() ? current : null;
   if (shareTab()) activeTab = share;
-  if (!composerState({ agent: v, prompt, share }).canSend) return renderComposer();
+  const selection = outgoingSelection();
+  if (!composerState({ agent: v, prompt, share, selection }).canSend) return renderComposer();
   const requestId = crypto.randomUUID();
   const route = forceSpawn ? "spawn" : v.route;
   agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route });
@@ -248,7 +332,7 @@ async function sendToSelectedAgent(forceSpawn = false) {
   renderComposer();
   let r: any;
   try {
-    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, forceSpawn }));
+    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, selection, forceSpawn }));
   } catch (e) {
     r = { error: String((e as Error)?.message ?? e) };
   }
@@ -256,7 +340,12 @@ async function sendToSelectedAgent(forceSpawn = false) {
   if (r?.type === "agent.sent") agentFeed({ type: "sent", msg: r });
   else agentFeed({ type: "sent", msg: { requestId, route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
   // Keep the text after a failure so it can be retried.
-  if (r?.type === "agent.sent" && r.state !== "failed") agentPrompt().value = "";
+  if (r?.type === "agent.sent" && r.state !== "failed") {
+    agentPrompt().value = "";
+    // The selection went with this message; the next one starts without it.
+    if (selection) heldSelection = null;
+    void rememberRecent({ id: v.id, name: v.title });
+  }
   renderComposer();
 }
 
@@ -408,6 +497,11 @@ agentPrompt().addEventListener("keydown", (e) => {
   }
 });
 $("agentShareTab").addEventListener("change", renderComposer);
+$("agentSelection").addEventListener("change", renderComposer);
+// #92: an intent written while the panel is already open.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "session" && changes[SEND_INTENT_KEY]?.newValue !== undefined) void takeIntent();
+});
 $("agentSend").addEventListener("click", () => void sendToSelectedAgent());
 $("agentSpawnInstead").addEventListener("click", () => void sendToSelectedAgent(true));
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
@@ -529,6 +623,7 @@ $("unpair").addEventListener("click", () => send({ type: "ui.unpair" }).then(ref
 
 refresh();
 void refreshActiveTab();
+void takeIntent();
 // §5: refresh the agent list every 5 s while the panel is visible.
 setInterval(() => {
   if (!document.hidden) void refreshAgents();

@@ -1,8 +1,10 @@
 // Pure settings model: defaults, validation and migration from the spike's shape.
+import { BEFORE_UNLOAD, ON_SESSION_END } from "@tabagent/protocol";
 import type { PreapprovableCategory, SiteEntry, StoredPolicy } from "./policy";
 
-export type OnSessionEnd = "collapse" | "close" | "keep";
-export type BeforeUnload = "accept" | "dismiss" | "ask-agent";
+/** The enums are shared with settings.change (#106), so an agent can set exactly what the panel can. */
+export type OnSessionEnd = (typeof ON_SESSION_END)[number];
+export type BeforeUnload = (typeof BEFORE_UNLOAD)[number];
 
 /** Editable seeded denylist: password managers, Google sign-in and banks (D32, #12). The Web Store is hard-denied separately. */
 export const SEEDED_DENYLIST = [
@@ -96,7 +98,7 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
       if (v) sites[o] = { ...sites[o], preapproved: { a: true, b: true, c: true, d: true, e: true } };
     }
   }
-  const beforeUnload: BeforeUnload = ["accept", "dismiss", "ask-agent"].includes(r.beforeUnload) ? r.beforeUnload : typeof r.autoAcceptBeforeUnload === "boolean" ? (r.autoAcceptBeforeUnload ? "accept" : "dismiss") : DEFAULTS.beforeUnload;
+  const beforeUnload: BeforeUnload = (BEFORE_UNLOAD as readonly string[]).includes(r.beforeUnload) ? r.beforeUnload : typeof r.autoAcceptBeforeUnload === "boolean" ? (r.autoAcceptBeforeUnload ? "accept" : "dismiss") : DEFAULTS.beforeUnload;
   return {
     port: Number.isInteger(r.port) && r.port > 0 && r.port < 65536 ? r.port : DEFAULTS.port,
     secret: typeof r.secret === "string" && r.secret ? r.secret : null,
@@ -104,7 +106,7 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
     denylist: Array.isArray(r.denylist) ? r.denylist.filter((x: unknown) => typeof x === "string" && x.trim()).map((x: string) => x.trim()) : DEFAULTS.denylist.slice(),
     devAllowSensitive: r.devAllowSensitive === true,
     yolo: r.yolo === true,
-    onSessionEnd: ["collapse", "close", "keep"].includes(r.onSessionEnd) ? r.onSessionEnd : DEFAULTS.onSessionEnd,
+    onSessionEnd: (ON_SESSION_END as readonly string[]).includes(r.onSessionEnd) ? r.onSessionEnd : DEFAULTS.onSessionEnd,
     beforeUnload,
     showOverlay: typeof r.showOverlay === "boolean" ? r.showOverlay : DEFAULTS.showOverlay,
     forceLite: r.forceLite === true,

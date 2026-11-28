@@ -548,6 +548,7 @@ export const AUTH_TOOLS = [
       filled: z.boolean(),
       source: z.enum(CODE_SOURCES),
       submitted: z.boolean(),
+      next: z.enum(["done", "code_required", "handoff_required", "unknown"]),
     }),
     level: "act",
     secret: true,

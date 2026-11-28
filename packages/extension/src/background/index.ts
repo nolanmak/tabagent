@@ -9,6 +9,8 @@ import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, sendToAgent, setAgentsSender, setAgentStatusListener } from "./bridgeAgents";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
+import { menuItemsBuilt, onMenuClick, rebuildMenus, wireContextMenu, type CurrentAgents } from "./contextMenu";
+import { agentRowView } from "../pure/agents";
 import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
@@ -19,6 +21,7 @@ import { broadcast, feedAll, feedPush } from "./feed";
 import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
 import type { PromptInfo } from "./prompts";
 import { policyPrecheck } from "./handlers/policy";
+import { isPanelSender } from "../pure/uiSender";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
@@ -46,6 +49,8 @@ const bridge = createBridgeClient({
   onStatus: (status, error) => {
     broadcast({ type: "status", status, error });
     refreshBadge();
+    // #92: re-validate the menu's recent agents once the bridge can list them.
+    if (status === "connected") void rebuildMenus(currentAgents).catch(() => {});
   },
   protocolVersion: PROTOCOL_VERSION,
   extensionVersion: VERSION,
@@ -165,6 +170,11 @@ export const router = createRouter<Session>({
   captureWorkflowStep: captureAgentStep,
   recordWorkflowStep: recordAgent,
   policySnapshot: policyPrecheck,
+  killAll: async (meta) => {
+    const alreadyPaused = await isPaused();
+    await kill({ caller: meta.label, session: meta.id });
+    return { status: "killed", alreadyPaused };
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -309,7 +319,8 @@ chrome.notifications?.onClicked.addListener((nid) => {
 // ---------------------------------------------------------------------------
 // Kill switch (D12)
 // ---------------------------------------------------------------------------
-async function kill() {
+/** `by` is set when an agent pressed the switch (session.kill_all / `tabagent kill`, #106). */
+async function kill(by?: { caller: string; session: string }) {
   await updateSettings({ paused: true });
   router.abortAll();
   prompts.dropAll("killed");
@@ -320,7 +331,7 @@ async function kill() {
   for (const t of allCdpTabs()) disposeDrivers(t.tabId);
   await detachAll();
   await clearGrants();
-  sendEvent("killed");
+  sendEvent("killed", by ? { source: "agent", ...by } : { source: "user" });
   broadcast({ type: "paused", paused: true });
   refreshBadge();
 }
@@ -333,7 +344,7 @@ async function resume() {
 }
 
 chrome.commands.onCommand.addListener((c) => {
-  if (c === "kill-switch") kill();
+  if (c === "kill-switch") void kill();
 });
 chrome.tabs.onRemoved.addListener((tabId) => void discardCapture(tabId));
 chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -364,7 +375,8 @@ async function uiState() {
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const manualEvent = msg?.type === "workflow.manual_event" && sender.id === chrome.runtime.id && sender.tab?.id != null;
-  if (!manualEvent && (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("")))) return false;
+  // Resume (and every other ui.* message) is reachable only from our own extension pages (#106).
+  if (!manualEvent && !isPanelSender(sender, chrome.runtime.id, chrome.runtime.getURL(""))) return false;
   (async () => {
     if (manualEvent) {
       recordManual(sender.tab!.id!, msg.event);
@@ -471,6 +483,13 @@ chrome.alarms.onAlarm.addListener((a) => {
     });
   }
 });
+// #92: "Send to agent ▸" context menu (AD14: it only writes an intent and opens the panel).
+async function currentAgents(): ReturnType<CurrentAgents> {
+  if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return null;
+  const now = Date.now();
+  return (await listAgents()).agents.map((a) => ({ id: a.id, title: agentRowView(a, now).title }));
+}
+wireContextMenu(currentAgents);
 chrome.runtime.onStartup.addListener(() => bridge.connect());
 chrome.runtime.onInstalled.addListener(() => bridge.connect());
 
@@ -501,5 +520,8 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   debugTabs: async () => Promise.all(allCdpTabs().map(async (t) => ({ tabId: t.tabId, attached: t.attached, children: [...t.children.entries()], inflight: [...t.inflight.keys()].map((k) => [k, t.network.get(k)?.url, t.network.get(k)?.resourceType]), frames: t.attached ? await t.frames().catch((e) => String(e)) : null }))),
   attachedTabs: () => allCdpTabs().filter((t) => t.attached).map((t) => t.tabId),
   runDueSchedules,
+  rebuildMenus: () => rebuildMenus(currentAgents),
+  menuItems: menuItemsBuilt,
+  contextMenuClick: onMenuClick,
 };
 export type { Status };

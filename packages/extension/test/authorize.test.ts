@@ -50,7 +50,7 @@ describe("requirementsFor: levels and tab resolution", () => {
     expect(requirementsFor(reg("nav.goto"), { url: "x" })).toMatchObject({ level: "act", urlSource: "param", needsTab: false, tabOptional: true });
   });
   it("tools with no tab", () => {
-    for (const n of ["downloads.list", "downloads.wait", "session.info", "session.permissions", "session.end", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair", "policy.denylist_change", "policy.site_change"]) expect(requirementsFor(reg(n) ?? { name: n, level: "none" }, {})).toMatchObject({ needsTab: false, level: n.startsWith("policy.") || n === "workflow.review_repair" ? "full" : null });
+    for (const n of ["downloads.list", "downloads.wait", "session.info", "session.permissions", "session.end", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair", "policy.denylist_change", "policy.site_change", "session.kill_all", "settings.get", "settings.change"]) expect(requirementsFor(reg(n) ?? { name: n, level: "none" }, {})).toMatchObject({ needsTab: false, urlSource: "none", level: n.startsWith("policy.") || n === "workflow.review_repair" ? "full" : n === "settings.change" ? "act" : null });
     expect(requirementsFor(reg("downloads.read"), { id: 1 })).toMatchObject({ urlSource: "download" });
   });
   it("cookies.get may target a url param", () => {
@@ -58,7 +58,7 @@ describe("requirementsFor: levels and tab resolution", () => {
   });
   it("every other site-scoped registry tool needs a tab and its registry level", () => {
     for (const t of TOOLS as unknown as ToolLike[]) {
-      if (["tabs", "nav.goto", "downloads.read", "cookies.get", "policy.denylist_change", "policy.site_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair"].includes(t.name) || t.name.startsWith("downloads.") || t.name.startsWith("session.")) continue;
+      if (["tabs", "nav.goto", "downloads.read", "cookies.get", "policy.denylist_change", "policy.site_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair"].includes(t.name) || t.name.startsWith("downloads.") || t.name.startsWith("session.") || t.name.startsWith("settings.")) continue;
       const r = requirementsFor(t, {});
       expect(r.needsTab).toBe(true);
       expect(r.level).toBe(t.level === "none" ? null : t.level);

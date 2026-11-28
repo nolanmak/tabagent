@@ -408,3 +408,92 @@ describe("policy.site_change through the router (#104)", () => {
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ policySnapshot: "deny-snap" }));
   });
 });
+
+describe("session.kill_all through the router (#106)", () => {
+  const killWorld = (over: Partial<RouterDeps<{ tabs: number[] }>> = {}) => {
+    const getSession = vi.fn(async () => ({ tabs: [1] }));
+    const killAll = vi.fn(async () => ({ status: "killed" as const, alreadyPaused: false }));
+    const w = world({ getSession, killAll, ...over });
+    return { ...w, getSession, killAll: (over.killAll as typeof killAll) ?? killAll };
+  };
+
+  it("stops everything with no prompt, no token-cap check and no session", async () => {
+    const w = killWorld();
+    const r = await w.router.handle({ ...cmd("session.kill_all"), session: { ...meta, cap: "read" as any, sites: ["only.example"] } });
+    expect(r).toMatchObject({ ok: true, result: { status: "killed", alreadyPaused: false }, audit: { tool: "session.kill_all", outcome: "ok" } });
+    expect(w.killAll).toHaveBeenCalledTimes(1);
+    expect(w.killAll).toHaveBeenCalledWith(expect.objectContaining({ label: "agent" }));
+    expect(w.authorize).not.toHaveBeenCalled();
+    expect(w.getSession).not.toHaveBeenCalled();
+  });
+
+  it("still answers when agents are already stopped (idempotent), instead of KILLED", async () => {
+    const killAll = vi.fn(async () => ({ status: "killed" as const, alreadyPaused: true }));
+    const w = killWorld({ isPaused: () => true, killAll });
+    const r = await w.router.handle(cmd("session.kill_all"));
+    expect(r).toMatchObject({ ok: true, result: { alreadyPaused: true } });
+  });
+
+  it("is not aborted by its own kill: other in-flight commands end KILLED, kill_all returns ok", async () => {
+    const ref: { router?: ReturnType<typeof createRouter<{ tabs: number[] }>> } = {};
+    const killAll = vi.fn(async () => {
+      ref.router!.abortAll();
+      return { status: "killed" as const, alreadyPaused: false };
+    });
+    const w = killWorld({ killAll });
+    const router = (ref.router = w.router);
+    const pending = router.handle(cmd("nav.wait", { tabId: 1, for: "text", value: "x" }, "long"));
+    await new Promise((r) => setTimeout(r, 5));
+    const k = await router.handle(cmd("session.kill_all", {}, "kill"));
+    expect(k.ok).toBe(true);
+    expect((await pending).error?.code).toBe("KILLED");
+    expect(router.inflightCount()).toBe(0);
+  });
+
+  it("an extension without the kill hook answers UNSUPPORTED", async () => {
+    const w = world();
+    expect((await w.router.handle(cmd("session.kill_all"))).error?.code).toBe("UNSUPPORTED");
+  });
+
+  it("after a kill every other tool, including settings.get and settings.change, is KILLED", async () => {
+    const w = world({ isPaused: () => true });
+    for (const [tool, p] of [["settings.get", {}], ["settings.change", { changes: { showOverlay: true } }], ["page.snapshot", { tabId: 1 }]] as const) {
+      expect((await w.router.handle(cmd(tool, p))).error?.code, tool).toBe("KILLED");
+    }
+  });
+});
+
+describe("settings.get / settings.change through the router (#105, #106)", () => {
+  const snapshot = { denylist: [], sites: {} };
+  const settingsWorld = (over: Partial<RouterDeps<{ tabs: number[] }>> = {}) => {
+    const get = vi.fn(async () => snapshot);
+    const change = vi.fn(async (c: any) => ({ status: "applied", applied: Object.keys(c.p.changes) }));
+    const w = world({ handler: (n) => (n === "settings.get" ? get : n === "settings.change" ? change : undefined), ...over });
+    return { ...w, get, change };
+  };
+
+  it("settings.get needs no tab, no prompt and works for a read-only token", async () => {
+    const w = settingsWorld();
+    const r = await w.router.handle({ ...cmd("settings.get"), session: { ...meta, cap: "read" as any } });
+    expect(r).toMatchObject({ ok: true, result: snapshot });
+    expect(w.authorize).toHaveBeenCalledWith(expect.objectContaining({ tool: "settings.get", level: null, url: "" }));
+    expect(w.authorize.mock.calls[0][0].sensitive).toBeUndefined();
+  });
+
+  it("settings.change has no prompt but needs an act-capable token", async () => {
+    const w = settingsWorld();
+    const ok = await w.router.handle(cmd("settings.change", { changes: { showOverlay: false } }));
+    expect(ok.ok).toBe(true);
+    expect(w.authorize.mock.calls[0][0]).toMatchObject({ level: "act", url: "" });
+    expect(w.authorize.mock.calls[0][0].sensitive).toBeUndefined();
+    const denied = await w.router.handle({ ...cmd("settings.change", { changes: { showOverlay: false } }, "c2"), session: { ...meta, cap: "read" as any } });
+    expect(denied.error?.code).toBe("PERMISSION_DENIED");
+    expect(w.change).toHaveBeenCalledTimes(1);
+  });
+
+  it("the audit record carries the requested change", async () => {
+    const w = settingsWorld();
+    const r = await w.router.handle(cmd("settings.change", { changes: { onSessionEnd: "keep", liteSites: ["a.example"] } }));
+    expect(r.audit).toMatchObject({ tool: "settings.change", outcome: "ok", params: { changes: { onSessionEnd: "keep", liteSites: ["a.example"] } } });
+  });
+});

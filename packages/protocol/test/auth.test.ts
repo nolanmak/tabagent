@@ -89,7 +89,7 @@ describe("DA1 registry: secret tools", () => {
         ],
       }).success,
     ).toBe(true);
-    expect(getTool("auth.code")!.result.safeParse({ filled: true, source: "totp", submitted: false }).success).toBe(true);
+    expect(getTool("auth.code")!.result.safeParse({ filled: true, source: "totp", submitted: false, next: "unknown" }).success).toBe(true);
   });
   it("no auth tool result has page content (nothing to wrap)", () => {
     for (const t of AUTH_TOOLS) expect(t.pageContent).toEqual([]);

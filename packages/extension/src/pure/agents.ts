@@ -143,23 +143,30 @@ export interface ComposerState {
 const FIELD_WORDS = { prompt: "message", title: "tab title", url: "tab URL", selection: "selection" } as const;
 const n = (x: number) => x.toLocaleString("en-US");
 
-export function composerState(c: { agent: AgentRowView | null; prompt: string; share: SharedTab | null }): ComposerState {
+/** `selection` is the selection that would be sent (only with a shared tab), or null. */
+export function composerState(c: { agent: AgentRowView | null; prompt: string; share: SharedTab | null; selection?: string | null }): ComposerState {
   if (!c.agent) return { canSend: false, label: "Send", note: "Select an agent above." };
   const label = c.agent.actionLabel;
   if (!c.agent.sendable) return { canSend: false, label, note: c.agent.reason ?? "" };
   // AD13: pre-check; never truncate.
-  const over = agentSendOverLimit({ prompt: c.prompt, title: c.share?.title, url: c.share?.url });
+  const over = agentSendOverLimit({ prompt: c.prompt, title: c.share?.title, url: c.share?.url, selection: c.share ? (c.selection ?? undefined) : undefined });
   if (over) {
-    const tail = over.field === "prompt" ? "" : " Untick Share this tab to send without it.";
+    const tail = over.field === "prompt" ? "" : over.field === "selection" ? " Untick Include selection to send without it." : " Untick Share this tab to send without it.";
     return { canSend: false, label, note: `The ${FIELD_WORDS[over.field]} is ${n(over.length)} characters; the limit is ${n(over.limit)}.${tail}` };
   }
   if (!c.prompt.trim()) return { canSend: false, label, note: "" };
   return { canSend: true, label, note: "" };
 }
 
-export function buildAgentSend(c: { requestId: string; agentId: string; prompt: string; share: SharedTab | null; forceSpawn?: boolean }) {
+/**
+ * The selection rides with the tab (AD12): the bridge composes it into the page paragraph, never alone.
+ * `forceSpawn` is "Start new session instead" (§7).
+ */
+export function buildAgentSend(c: { requestId: string; agentId: string; prompt: string; share: SharedTab | null; selection?: string | null; forceSpawn?: boolean }) {
   const base = { type: "ui.agent_send" as const, requestId: c.requestId, agentId: c.agentId, prompt: c.prompt, ...(c.forceSpawn ? { forceSpawn: true as const } : {}) };
-  return c.share ? { ...base, includeTab: true, tabId: c.share.tabId, title: c.share.title, url: c.share.url } : { ...base, includeTab: false };
+  if (!c.share) return { ...base, includeTab: false };
+  const tab = { ...base, includeTab: true, tabId: c.share.tabId, title: c.share.title, url: c.share.url };
+  return c.selection ? { ...tab, selection: c.selection } : tab;
 }
 
 // ---------------------------------------------------------------------------

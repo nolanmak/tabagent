@@ -25,9 +25,6 @@ describe("applyLevel (#118)", () => {
   });
 
   it.each([
-    ["https://secure.chase.com", "never signs in"],
-    ["https://www.paypal.com", "never signs in"],
-    ["https://app.mercury.com", "never signs in"],
     ["https://my.1password.com", "never lets agents open"],
     ["https://passwords.google.com", "never lets agents open"],
     ["https://mail.google.com", "never lets agents open"],
@@ -40,6 +37,10 @@ describe("applyLevel (#118)", () => {
     expect(r.entry.preapproved).toEqual(all);
     expect(r.note).toContain(why);
     expect(r.note).toContain(new URL(origin).hostname);
+  });
+
+  it.each(["https://secure.chase.com", "https://app.mercury.com"])("full on bank %s off the denylist turns sign-in on (#101)", (origin) => {
+    expect(applyLevel(undefined, "full", origin, ctx).entry.auth).toBe(true);
   });
 
   it("full on a hard-limited host leaves an existing explicit auth value alone", () => {
