@@ -93,7 +93,9 @@
     <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
     <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option></select>
     <button type="submit">Add</button>
+    <span class="muted small">full also turns on sign-in and pre-approvals</span>
   </form>
+  <p id="siteLevelNote" class="muted small" role="status" hidden></p>
   <h3>Denylist</h3>
   <p class="muted small">Host globs, one per line. Browser pages and the Web Store are always blocked.</p>
   <textarea id="denylist" rows="5"></textarea>

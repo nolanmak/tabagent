@@ -200,6 +200,8 @@ export class BitwardenProvider implements BridgeProvider {
           this.o.event?.("bitwarden.restore_failed", {});
           return;
         }
+        // Bitwarden says the saved session is dead (another `bw lock` or `bw unlock` ran in this data dir).
+        this.o.event?.("bitwarden.restore_rejected", { state });
       }
     }
     await this.o.keyStore?.clear().catch(() => {});
