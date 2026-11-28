@@ -11,7 +11,7 @@ const SKILL = join(__dirname, "../skill/SKILL.md");
 
 describe("CLI commands", () => {
   it("tools lists a profile; bad profile fails", () => {
-    expect(toolsCommand("core").out.at(-1)).toMatch(/^13 tools/);
+    expect(toolsCommand("core").out.at(-1)).toMatch(/^15 tools/);
     expect(toolsCommand("nope").code).toBe(1);
   });
   it("token create/list/revoke", () => {
