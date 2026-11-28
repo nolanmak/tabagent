@@ -1,10 +1,12 @@
 // Send to agent, bridge side (docs/specs/agent-inbox.md). Handles the extension's agents.* / agent.*
 // messages. Only the paired /ext socket reaches this (the daemon checks); there is no REST route (AD2).
-import { agentSendOverLimit, AgentSendSchema, AgentsListSchema, type Agent, type AgentSend, type AgentSent, type BridgeToExt } from "@tabagent/protocol";
+import { agentSendOverLimit, AgentSendSchema, AgentsListSchema, type Agent, type AgentRoute, type AgentSend, type AgentSent, type BridgeToExt } from "@tabagent/protocol";
 import { agentSendAudit } from "./audit";
 import { composeAgentMessage } from "./compose";
-import { parseAgentId } from "./discovery";
+import { parseAgentId, type AgentBase, type AgentLink } from "./discovery";
 import { AgentDiscovery, type DiscoveryOpts } from "./discovery-service";
+import { HoldQueue, type HeldMessage } from "./hold";
+import { InboxRegistry, profileCanDriveTab, type InboxStream } from "./inbox";
 import { QUEUE_ADD_TIMEOUT_MS, queueAdd, QueueWatcher } from "./queue";
 import { chooseRoute } from "./route";
 import { runSpawn, SPAWN_TIMEOUT_MS } from "./spawn";
@@ -18,6 +20,18 @@ export interface AgentsOpts extends DiscoveryOpts {
   queueTimeoutMs?: number;
   queuePollMs?: number;
   queueWatchMs?: number;
+  /** AD8 piggyback TTL; default $TABAGENT_HOLD_TTL_MS, else 30 min (e2e shortens it). */
+  holdTtlMs?: number;
+  holdMax?: number;
+}
+
+/** One piggybacked message waiting for its session's next successful tool result (AD8). */
+export interface Held extends HeldMessage {
+  req: AgentSend;
+  agent: Agent;
+  /** The inbox key (restKey) and bridge session it is held for. P2b releases the granted tab on expiry. */
+  key: string;
+  sessionId: string;
 }
 
 type Send = (m: BridgeToExt) => void;
@@ -25,12 +39,60 @@ type Reply = Omit<AgentSent, "type" | "requestId">;
 
 const WHO = { caller: "side panel" };
 
+const envTtl = () => {
+  const n = Number(process.env.TABAGENT_HOLD_TTL_MS);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
+
 export class AgentsBridge {
   readonly discovery: AgentDiscovery;
+  /** AD4/AD5: the `GET /v1/inbox` streams, keyed by restKey. */
+  readonly inbox: InboxRegistry;
+  /** AD8: messages held per linked session. */
+  readonly held: HoldQueue<Held>;
   private watchers = new Set<QueueWatcher>();
 
   constructor(private o: AgentsOpts = {}) {
-    this.discovery = new AgentDiscovery(o);
+    this.inbox = new InboxRegistry({ now: o.now, onClosed: (key) => this.held.drop(key, "The agent's TabAgent connection closed") });
+    this.held = new HoldQueue<Held>({ max: o.holdMax, ttlMs: o.holdTtlMs ?? envTtl(), now: o.now, onExpire: (m, reason) => this.report(m, "expired", reason) });
+    this.discovery = new AgentDiscovery({ ...o, linkOf: (a) => this.linkOf(a) });
+  }
+
+  /** AD4: a Claude agent is linked when a live stream registered its pid. Codex is never linked in v1. */
+  private streamFor(a: Pick<AgentBase, "vendor" | "pid">): InboxStream | undefined {
+    return a.vendor === "claude" && a.pid ? this.inbox.byAgentPid(a.pid) : undefined;
+  }
+
+  private linkOf(a: AgentBase): AgentLink | null {
+    const s = this.streamFor(a);
+    return s ? { canDriveTab: profileCanDriveTab(s.profile), channels: s.channels } : null;
+  }
+
+  /** AD8: everything held for this session, to attach to a successful tool result. */
+  takeHeld(key: string): Held[] {
+    return this.held.take(key);
+  }
+
+  /** The response carrying these was written (AD7 `delivered`). */
+  delivered(items: Held[]) {
+    for (const m of items) this.report(m, "delivered");
+  }
+
+  /** The response carrying these was never written: hold them again, keeping their TTL. */
+  restoreHeld(key: string, items: Held[]) {
+    if (this.inbox.get(key)) this.held.restore(key, items);
+    else for (const m of items) this.report(m, "expired", "The agent's TabAgent connection closed");
+  }
+
+  /** The proxy ended its session (AD7: session end expires held messages). */
+  onSessionEnd(key: string) {
+    this.held.drop(key, "The agent's TabAgent session ended");
+  }
+
+  /** A later state for a held message: agent.status to the current extension socket, plus audit (AD7, AD15). */
+  private report(m: Held, state: "delivered" | "expired", detail?: string) {
+    this.o.sendToExt?.({ type: "agent.status", requestId: m.requestId, state, ...(detail ? { detail } : {}) });
+    this.o.audit?.event("agent.send", agentSendAudit(m.req, m.agent, { route: "piggyback", state }), WHO);
   }
 
   /** Returns true when the message was an agents.* / agent.* message (handled or dropped). */
@@ -50,6 +112,8 @@ export class AgentsBridge {
   /** Stop every queue watcher (daemon shutdown). */
   stop() {
     for (const w of [...this.watchers]) w.stop();
+    this.held.stop();
+    this.inbox.closeAll();
   }
 
   private onList(msg: unknown, send: Send) {
@@ -86,16 +150,27 @@ export class AgentsBridge {
   private async deliver(req: AgentSend, agent: Agent | null): Promise<Reply> {
     // 1. Fresh re-resolution (AD3).
     if (!agent) return { route: "none", state: "failed", code: "AGENT_GONE", detail: "That agent is no longer running" };
-    // 2. Route (AD6). P1 ships queue and spawn; nothing is linked yet, so channel/piggyback cannot come up.
-    const route = chooseRoute({ vendor: agent.vendor, status: agent.status, linked: agent.linked });
-    if (route !== "queue" && route !== "spawn") return { route: "none", state: "failed", code: "NO_ROUTE", detail: agent.status === "error" ? `This agent cannot take messages (${agent.statusLabel ?? "error"})` : "No way to deliver to this agent" };
+    // 2. Route (AD6), from the fresh link. The channel route is P3 (#93), so it is never enabled here.
+    const stream = this.streamFor(agent);
+    const route: AgentRoute = chooseRoute({ vendor: agent.vendor, status: agent.status, linked: agent.linked && !!stream, channels: stream?.channels }, { forceSpawn: req.forceSpawn });
+    if (route !== "queue" && route !== "spawn" && route !== "piggyback") return { route: "none", state: "failed", code: "NO_ROUTE", detail: agent.status === "error" ? `This agent cannot take messages (${agent.statusLabel ?? "error"})` : "No way to deliver to this agent" };
     // 3. Limits (AD13). The kill switch (AD17) is enforced by the worker, which knows the paused state.
     const over = agentSendOverLimit(req);
     if (over) return { route, state: "failed", code: "TOO_LARGE", detail: `The ${over.field} is ${over.length} characters; the limit is ${over.limit}` };
-    // 4. Tab grant: P2a. 5. Compose: in P1 always the no-tab template.
-    const text = composeAgentMessage(req, { grant: null });
+    // 4. Tab grant (AD11) is P2b (#97): it fills this in for canDriveTab targets; until then no grant.
+    const grant = await this.tabGrant(req, agent, route);
+    // 5. Compose (AD12).
+    const text = composeAgentMessage(req, { grant });
     // 6. Deliver.
+    if (route === "piggyback") {
+      const s = stream!;
+      const held: Held = { requestId: req.requestId, text, req, agent, key: s.key, sessionId: s.sessionId };
+      if (this.held.hold(s.key, held) === "full") return { route, state: "failed", code: "QUEUE_FULL", detail: `This agent already has ${this.held.max} messages waiting for its next browser action` };
+      return { route, state: "held" };
+    }
     if (route === "spawn") {
+      // §6: choosing a new session drops anything still held for this agent.
+      if (stream) this.held.drop(stream.key, "Replaced by a new session");
       const r = await runSpawn(this.discovery.claudeBin, text, agent.cwd, this.o.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS);
       return r.state === "started" ? { route, state: "started", detail: r.detail } : { route, state: "failed", code: r.code, detail: r.detail };
     }
@@ -120,6 +195,14 @@ export class AgentsBridge {
     );
     this.watchers.add(w);
     return { route, state: "queued" };
+  }
+
+  /**
+   * AD11 hook for P2b (#97): for a canDriveTab target with includeTab, send agent.grant and wait for
+   * agent.granted, returning `{tabId}` on success. P2a never grants, so linked agents get the no-tab template.
+   */
+  private async tabGrant(_req: AgentSend, _agent: Agent, _route: AgentRoute): Promise<{ tabId: number } | null> {
+    return null;
   }
 
   private finish(send: Send, req: { requestId: string; agentId: string }, agent: Agent | null, out: Reply) {

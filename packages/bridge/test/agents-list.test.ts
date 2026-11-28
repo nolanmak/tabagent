@@ -150,7 +150,8 @@ describe("agents.list over the extension socket", () => {
     claude.agents([claudeRecord(10, 1000)]);
     const disc = new AgentDiscovery({ claudeBin: claude.bin, codexSocket: join(codex.dir, "missing.sock") });
     const [a, b] = await Promise.all([disc.list(), disc.list()]);
-    expect(a).toBe(b);
+    // Links are applied per call (AD4), so the lists are equal, not identical; one run is what matters.
+    expect(a).toEqual(b);
     expect(claude.calls()).toHaveLength(1);
   });
 
