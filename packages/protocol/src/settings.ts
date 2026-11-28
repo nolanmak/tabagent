@@ -34,11 +34,12 @@ export type PreferenceChanges = { [K in PreferenceKey]?: z.infer<(typeof PREFERE
 /** Params schema for settings.change: unknown keys pass validation so the handler can answer with a hint. */
 export const PREFERENCE_CHANGES = z.looseObject(Object.fromEntries(PREFERENCE_KEYS.map((k) => [k, PREFERENCE_SCHEMA[k].optional()])) as { [K in PreferenceKey]: z.ZodOptional<(typeof PREFERENCE_SCHEMA)[K]> });
 
-const MODE_HINT = "It widens what agents may do, so only the user can turn it on in the TabAgent side panel (an approval-gated policy.mode_change is planned, #109).";
+const MODE_HINT = "Request policy.mode_change: turning it off applies at once; turning it on needs the user's approval in the TabAgent side panel.";
 /** Settings that exist but are not preferences, and where an agent should go instead. */
 const PROTECTED: Record<string, { code: "PERMISSION_DENIED"; hint: string }> = {
   yolo: { code: "PERMISSION_DENIED", hint: MODE_HINT },
   devAllowSensitive: { code: "PERMISSION_DENIED", hint: MODE_HINT },
+  yoloExpiresAt: { code: "PERMISSION_DENIED", hint: MODE_HINT },
   denylist: { code: "PERMISSION_DENIED", hint: "Request policy.denylist_change; the user approves it in the side panel." },
   sites: { code: "PERMISSION_DENIED", hint: "Request policy.site_change for one origin; the user approves it in the side panel." },
   paused: { code: "PERMISSION_DENIED", hint: "Stop agents with session.kill_all. Resume is panel-only: ask the user to press Resume in the TabAgent side panel." },
@@ -80,6 +81,8 @@ export const SETTINGS_SNAPSHOT = z.object({
     }),
   ),
   yolo: z.boolean(),
+  /** Epoch ms when YOLO switches itself off (policy.mode_change durationMin); absent = no expiry. */
+  yoloExpiresAt: z.number().optional(),
   devAllowSensitive: z.boolean(),
   onSessionEnd: z.enum(ON_SESSION_END),
   beforeUnload: z.enum(BEFORE_UNLOAD),

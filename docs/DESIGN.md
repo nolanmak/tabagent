@@ -142,7 +142,8 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
 - Extension `chrome.storage.local`: per-origin site entries (policy, lite mode,
   pre-approvals, sign-in on/off and "always" accounts), denylist edits, session-end behaviour (default collapse and
   keep), `beforeunload` policy (default accept), on-page border (default on),
-  `devAllowSensitive` (default off).
+  `devAllowSensitive` (default off), YOLO (default off) and its optional expiry
+  timestamp `yoloExpiresAt`.
 
 ## Sessions and tabs (D8–D10, D12)
 
@@ -442,6 +443,18 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   p has no "Always" button, cannot be pre-approved, and is not skipped by YOLO
   or `devAllowSensitive`. Turning things off goes through the same prompt, so
   there is one code path.
+- **YOLO and developer mode (#109).** `policy.mode_change {yolo?,
+  devAllowSensitive?, durationMin?, reason}` is the exception: `requirementsFor`
+  drops category p when the request turns nothing on (pure
+  `modeChangeNeedsApproval`), so turning off runs without a prompt but still
+  needs a `full` token and is audited. Turning on is a category p prompt with
+  a snapshot of both modes and the expiry; the handler fails closed without a
+  matching snapshot. `durationMin` (1–1440, yolo only) stores `yoloExpiresAt`;
+  `getSettings()` switches an expired YOLO off on read (so a restart or late
+  alarm cannot extend it), a `chrome.alarms` alarm follows the stored value,
+  and the expiry sends a `yolo.expired` audit event (queued while the bridge
+  is offline) and a `settings` broadcast so the side panel, which counts down
+  the time left, refreshes.
 - **Agent-readable settings and preferences (#105, #106).** `settings.get`
   (level none) returns an allowlisted snapshot: denylist, sites (policy,
   effective sign-in, lite, pre-approved categories, a count of "always"

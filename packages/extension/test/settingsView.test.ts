@@ -90,6 +90,11 @@ describe("settingsSnapshot (#105)", () => {
     expect(AUTH_DENY_HOSTS).not.toContain("evil.example");
   });
 
+  it("reports when YOLO switches itself off, and only then (#109)", () => {
+    expect(settingsSnapshot(migrateSettings({ yolo: true, yoloExpiresAt: 1_700_000_000_000 }))).toMatchObject({ yolo: true, yoloExpiresAt: 1_700_000_000_000 });
+    expect("yoloExpiresAt" in settingsSnapshot(migrateSettings({ yolo: true }))).toBe(false);
+  });
+
   it("defaults round-trip", () => {
     const snap = settingsSnapshot(DEFAULTS);
     expect(snap).toMatchObject({ sites: {}, yolo: false, onSessionEnd: "collapse", beforeUnload: "accept", showOverlay: true, forceLite: false, liteSites: [] });

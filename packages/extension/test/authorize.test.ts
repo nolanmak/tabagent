@@ -50,15 +50,24 @@ describe("requirementsFor: levels and tab resolution", () => {
     expect(requirementsFor(reg("nav.goto"), { url: "x" })).toMatchObject({ level: "act", urlSource: "param", needsTab: false, tabOptional: true });
   });
   it("tools with no tab", () => {
-    for (const n of ["downloads.list", "downloads.wait", "session.info", "session.permissions", "session.end", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair", "workflow.edit_draft", "policy.denylist_change", "policy.site_change", "session.kill_all", "settings.get", "settings.change"]) expect(requirementsFor(reg(n) ?? { name: n, level: "none" }, {})).toMatchObject({ needsTab: false, urlSource: "none", level: n.startsWith("policy.") || n === "workflow.review_repair" ? "full" : n === "settings.change" ? "act" : null });
+    for (const n of ["downloads.list", "downloads.wait", "session.info", "session.permissions", "session.end", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair", "workflow.edit_draft", "policy.denylist_change", "policy.site_change", "policy.mode_change", "session.kill_all", "settings.get", "settings.change"]) expect(requirementsFor(reg(n) ?? { name: n, level: "none" }, {})).toMatchObject({ needsTab: false, urlSource: "none", level: n.startsWith("policy.") || n === "workflow.review_repair" ? "full" : n === "settings.change" ? "act" : null });
     expect(requirementsFor(reg("downloads.read"), { id: 1 })).toMatchObject({ urlSource: "download" });
+  });
+  it("policy.mode_change is category p only when it turns something on (#109)", () => {
+    const t = reg("policy.mode_change");
+    for (const p of [{ yolo: true }, { devAllowSensitive: true }, { yolo: false, devAllowSensitive: true }, { yolo: true, durationMin: 5 }]) expect(requirementsFor(t, p), JSON.stringify(p)).toMatchObject({ level: "full", sensitive: "p", needsTab: false });
+    for (const p of [{ yolo: false }, { devAllowSensitive: false }, { yolo: false, devAllowSensitive: false }]) {
+      const r = requirementsFor(t, p);
+      expect(r, JSON.stringify(p)).toMatchObject({ level: "full", needsTab: false, urlSource: "none" });
+      expect(r.sensitive, JSON.stringify(p)).toBeUndefined();
+    }
   });
   it("cookies.get may target a url param", () => {
     expect(requirementsFor(reg("cookies.get"), {})).toMatchObject({ level: "full", urlSource: "tab-or-param", needsTab: true });
   });
   it("every other site-scoped registry tool needs a tab and its registry level", () => {
     for (const t of TOOLS as unknown as ToolLike[]) {
-      if (["tabs", "nav.goto", "downloads.read", "cookies.get", "policy.denylist_change", "policy.site_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair", "workflow.edit_draft"].includes(t.name) || t.name.startsWith("downloads.") || t.name.startsWith("session.") || t.name.startsWith("settings.")) continue;
+      if (["tabs", "nav.goto", "downloads.read", "cookies.get", "policy.denylist_change", "policy.site_change", "policy.mode_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair", "workflow.edit_draft"].includes(t.name) || t.name.startsWith("downloads.") || t.name.startsWith("session.") || t.name.startsWith("settings.")) continue;
       const r = requirementsFor(t, {});
       expect(r.needsTab).toBe(true);
       expect(r.level).toBe(t.level === "none" ? null : t.level);
