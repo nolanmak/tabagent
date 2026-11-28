@@ -86,6 +86,25 @@ describe("InboxClient", () => {
     expect(seen.acks[0].headers.authorization).toBe("Bearer sek");
   });
 
+  it("a push that onPush refuses (throws) is never acked, and later pushes still are (AD9 channel timeout)", async () => {
+    const logs: string[] = [];
+    const { port, seen } = await fakeBridge((res) => res.write(`event: message\ndata: {"msgId":"bad","kind":"x"}\n\nevent: message\ndata: {"msgId":"ok","kind":"channel"}\n\n`));
+    client = new InboxClient({
+      port,
+      token: "sek",
+      headers: hdrs,
+      ensureDaemon: async () => true,
+      log: (m) => logs.push(m),
+      onPush: async (m) => {
+        if (m.kind !== "channel") throw new Error("unknown push kind");
+      },
+    });
+    client.start();
+    await until(() => seen.acks.length === 1);
+    expect(seen.acks.map((a) => a.body)).toEqual([{ msgId: "ok" }]);
+    expect(logs.some((l) => l.includes("push bad failed: unknown push kind"))).toBe(true);
+  });
+
   it("a push without a msgId is ignored (no ack)", async () => {
     const pushes: unknown[] = [];
     const { port, seen } = await fakeBridge((res) => res.write(`event: message\ndata: {"content":"x"}\n\nevent: message\ndata: not json\n\n`));

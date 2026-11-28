@@ -14,8 +14,10 @@ import {
   getTool,
   HelloSchema,
   INBOX_ACK_PATH,
+  INBOX_EVENT_PATH,
   INBOX_PATH,
   InboxAckSchema,
+  InboxEventSchema,
   normalizeHello,
   PROTOCOL_VERSION,
   ResultEnvelopeSchema,
@@ -714,6 +716,14 @@ export class Daemon {
       const a = InboxAckSchema.safeParse(body);
       if (!a.success) return this.err(res, "BAD_REQUEST", "Expected {msgId}");
       if (!this.agents.inbox.ack(this.restKey(req, who, url), a.data.msgId)) return this.err(res, "NOT_FOUND", "No unacked push with that msgId for this session");
+      return this.sendJson(res, 200, { ok: true });
+    }
+    if (path === INBOX_EVENT_PATH && req.method === "POST") {
+      // AD9: the proxy ignored a channel permission-relay method. Audit only; nothing is relayed.
+      const e = InboxEventSchema.safeParse(body);
+      if (!e.success) return this.err(res, "BAD_REQUEST", 'Expected {event: "channel.permission_ignored", method}');
+      const meta = this.restMeta(req, who, url);
+      this.audit.event("agent.channel_permission_ignored", { method: e.data.method, session: meta.id }, { caller: meta.label, session: meta.id });
       return this.sendJson(res, 200, { ok: true });
     }
     if (path === "/v1/session/end" && req.method === "POST") {

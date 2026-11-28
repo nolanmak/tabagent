@@ -56,7 +56,8 @@ describe("channel push (AD9, spike §2)", () => {
     await channelPushHandler(server, true)({ msgId: "m1", kind: "channel", content: "[TabAgent: message from the user via the side panel]\nhi" });
     await until(() => got.length === 1);
     expect(CHANNEL_NOTIFICATION).toBe("notifications/claude/channel");
-    expect(got[0]).toEqual({ method: CHANNEL_NOTIFICATION, params: { content: "[TabAgent: message from the user via the side panel]\nhi", meta: { source: "tabagent" } } });
+    // The exact wire shape the P0 spike verified.
+    expect(got[0]).toEqual({ jsonrpc: "2.0", method: CHANNEL_NOTIFICATION, params: { content: "[TabAgent: message from the user via the side panel]\nhi", meta: { source: "tabagent" } } });
   });
   it("refuses (throws, so the proxy never acks) when channels were not declared", async () => {
     const { server, got } = await connect();
