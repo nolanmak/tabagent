@@ -102,8 +102,12 @@ describe("codex status map (AD10)", () => {
 describe("route choice (AD6)", () => {
   const T = (vendor: "claude" | "codex", extra: Partial<{ status: "busy" | "idle" | "error"; linked: boolean; channels: boolean }> = {}) => ({ vendor, status: "idle" as const, linked: false, ...extra });
   it.each([
-    ["linked claude with channels, channel route enabled", T("claude", { linked: true, channels: true }), { channelEnabled: true }, "channel"],
-    ["linked claude with channels, channel route not enabled", T("claude", { linked: true, channels: true }), {}, "piggyback"],
+    ["linked claude with channels (P3 ships it: on by default)", T("claude", { linked: true, channels: true }), {}, "channel"],
+    ["linked claude with channels, busy (the push runs after the current turn)", T("claude", { linked: true, channels: true, status: "busy" }), {}, "channel"],
+    ["linked claude with channels, channel route switched off", T("claude", { linked: true, channels: true }), { channelEnabled: false }, "piggyback"],
+    ["linked claude with channels, user chose Start new session", T("claude", { linked: true, channels: true }), { forceSpawn: true }, "spawn"],
+    ["unlinked claude claiming channels (no live stream)", T("claude", { channels: true }), {}, "spawn"],
+    ["linked codex with channels (Claude only)", T("codex", { linked: true, channels: true }), {}, "piggyback"],
     ["linked claude", T("claude", { linked: true }), {}, "piggyback"],
     ["linked claude, user chose Start new session", T("claude", { linked: true }), { forceSpawn: true }, "spawn"],
     ["codex idle", T("codex"), {}, "queue"],

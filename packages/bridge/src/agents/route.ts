@@ -11,7 +11,7 @@ export interface RouteTarget {
 }
 
 export interface RouteOpts {
-  /** AD9/P3: the channel route ships. False until then. */
+  /** AD9: the channel route (P3, shipped after the P0 spike confirmed it). Default true; false forces the fallback. */
   channelEnabled?: boolean;
   /** The user pressed the explicit "Start a new session" button (Claude only). The only way to spawn (#137). */
   forceSpawn?: boolean;
@@ -19,7 +19,7 @@ export interface RouteOpts {
 
 export function chooseRoute(t: RouteTarget, o: RouteOpts = {}): AgentRoute {
   if (o.forceSpawn) return t.vendor === "claude" ? "spawn" : "none";
-  if (t.linked && t.vendor === "claude" && t.channels && o.channelEnabled) return "channel";
+  if (t.linked && t.vendor === "claude" && t.channels && o.channelEnabled !== false) return "channel";
   if (t.linked) return "piggyback";
   // AD10: a Codex thread in systemError is listed but not sendable.
   if (t.vendor === "codex") return t.status === "error" ? "none" : "queue";

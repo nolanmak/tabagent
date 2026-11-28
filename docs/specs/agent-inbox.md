@@ -49,7 +49,7 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   - Panel→worker: `ui.agents_list`, `ui.agent_send`.
   - Worker→bridge, on the paired WS: `agents.list` → `agents.listed`; `agent.send` → `agent.sent`.
   - Bridge→extension: `agent.grant` → `agent.granted` (AD11) and the event `agent.status` (AD7).
-  - Bridge→proxy: `GET /v1/inbox` (SSE).
+  - Bridge→proxy: `GET /v1/inbox` (SSE). Proxy→bridge: `POST /v1/inbox/ack`, and `POST /v1/inbox/event` (AD9 audit only).
   - The P3 reply tool is `panel.reply`, not `inbox.reply`.
   - *Why:* each name has one direction and one owner. "inbox" is internal only.
 - **AD2. WebSocket only for the panel. No REST discovery or send route.** There is no `GET /v1/agents` and no REST send. *Why:* every local agent holds the bridge secret (DESIGN D1/D3), so a REST route would let any agent list its siblings and inject prompts into them. That would bypass the user-initiated control. A CLI listing is a non-goal (§12).
@@ -109,6 +109,12 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   - **P0 confirmed it** (spike §2): pushes land as a user turn when idle and queue behind the current turn when busy. The notification is `{method: "notifications/claude/channel", params: {content, meta: {source: "tabagent"}}}`. Launching needs `--dangerously-load-development-channels server:tabagent` plus a one-time "local development" confirmation dialog. Claude does not advertise channel support in `initialize`, so argv is the only signal.
   - Channels can be silently dropped: by org policy, on third-party providers, on a protocol revision, or when the server is not in the flag list. That is why the state is only `sent`.
   - The proxy never declares any permission-relay capability. If `channel/permission_request` arrives anyway, it ignores it and logs it to the audit.
+  - **Minimum Claude Code version: 2.1.332** (the version P0 verified; `CHANNEL_MIN_CLAUDE_VERSION`).
+  - **As built (P3, #93):**
+    - *Detection* (`agents/channels.ts`, pure): `ps -ww -o args= -p <agentPid>` is split shell-style. After `--channels` or `--dangerously-load-development-channels` (or their `=` form), the following tokens that consist only of `server:`/`plugin:` entries (comma or space separated) are the entry list; the list stops at the first other token, and nothing after a bare `--` counts. A match is `server:<name>` or `plugin:<name>@<marketplace>`. `<name>` defaults to `tabagent`; `TABAGENT_CHANNEL_NAME` in the proxy's environment overrides it when the user gave TabAgent another MCP config key. No agent pid, a failing `ps` or no match means `0`.
+    - *Capability:* decided before the stdio proxy connects (`buildMcpServer({channels})`), so it never changes mid-session.
+    - *Push/ack:* the bridge pushes `{msgId, kind: "channel", content}` on the agent's inbox stream and waits up to 5 s (`CHANNEL_ACK_TIMEOUT_MS`) for `POST /v1/inbox/ack {msgId}`. The proxy writes `notifications/claude/channel` and then acks; it refuses (no ack) an unknown kind or a channel push when it did not declare the capability. Ack → `sent`. No ack in time → `failed` / `CHANNEL_TIMEOUT` (a late ack is refused, so the panel never sees a second state). The stream closes or is replaced first → `failed` / `AGENT_GONE`. Nothing falls back after a push was written, because the agent may already have it; the piggyback fallback is the route choice itself (channels=0 → piggyback).
+    - *Ignored permission requests:* any notification or request whose method starts with `claude/channel/permission` (optionally under `notifications/`) is dropped (requests get method-not-found), logged to stderr, and reported with `POST /v1/inbox/event {event: "channel.permission_ignored", method}`, which the bridge audits as `agent.channel_permission_ignored {method, session}`. That endpoint accepts nothing else.
 - **AD10. Codex discovery and queue** (transport confirmed in spike §4).
   - The bridge connects with JSON-RPC over WebSocket to the control socket: `ws+unix://~/.codex/app-server-control/app-server-control.sock:/`. It sends `initialize {clientInfo: {name: "tabagent", version}}`, then the `initialized` notification. Discovery: `thread/loaded/list`, then `thread/read {threadId}` for each thread. The bridge never starts the daemon. If the socket is missing or refused, there are no Codex entries and `sources.codex = "unavailable"`. Only threads hosted by the daemon are discoverable; threads hosted by the Codex desktop app, the IDE or a plain TUI process are not (non-goal).
   - Status map: `active` → busy; `idle` → idle; `notLoaded` → not listed; `systemError` → listed but not sendable. `waitingOnApproval`/`waitingOnUserInput` → busy, with that label.
@@ -221,7 +227,7 @@ The bridge **always** replies, including on failure. The worker times out after 
 - **AR1. A secret holder can open an inbox stream under another session's key and read pushed messages.** *Compensating:* the bridge secret already grants full browser control under the DESIGN D1 trust model, so this adds no new power. Streams are bound to `restKey`, and one replaces the other, so a hijacked stream makes the real proxy reconnect visibly. *Ends when:* per-session inbox tokens are issued at registration (no schema change needed).
 - **AR2. Piggyback and channel text may not be obeyed.** *Compensating:* the states never claim the agent read or acted on a message, and there is an `INSTRUCTIONS` line plus framing. *Ends when:* the P0 spike and real use show it is reliable, or the route is dropped.
 - **AR3. Audit is best effort.** This matches every other audit event (DESIGN D20).
-- **AR4. Channels rely on an undocumented, experimental Claude Code surface.** *Compensating:* gated by AD9; a minimum version is recorded by P0; the route falls back to piggyback.
+- **AR4. Channels rely on an undocumented, experimental Claude Code surface.** *Compensating:* gated by AD9; the minimum version recorded by P0 is Claude Code 2.1.332; the route falls back to piggyback.
 
 ## 10. Build order (each stage has a testable exit)
 

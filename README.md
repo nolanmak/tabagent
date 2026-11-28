@@ -59,6 +59,29 @@ The default `core` profile keeps the tool list small (13 tools). Add more with
 `npx -y @nolmak/tabagent mcp --profile forms,data` (`forms`, `data`, `dev`, `full`, `auth`). Sign-in tools live in `auth`. Shell-only agents can
 use `tabagent <tool> --json '{…}'`.
 
+### Instant delivery to Claude Code (experimental)
+
+The side panel's **Agents** section sends a message to a running agent. By default a linked Claude
+Code session gets it on its **next browser action** (attached to its next TabAgent tool result). To
+have it arrive **instantly**, as a new user turn, launch Claude Code (2.1.332 or later) with TabAgent
+loaded as a development channel:
+
+```bash
+claude --dangerously-load-development-channels server:tabagent
+```
+
+Claude Code shows a one-time "local development" confirmation; accept it. An idle session acts on the
+message right away; a busy one runs it after the current turn. The panel then lists the agent as
+"instant" and the send ends at `sent`: TabAgent saw its proxy write the message, but Claude Code
+gives no receipt, so TabAgent never claims more. Without the flag, delivery falls back to the next
+browser action. TabAgent never relays Claude's tool-permission prompts over the channel.
+
+`server:tabagent` must match the name you gave TabAgent in `claude mcp add`. If you used another
+name (say `browser`), launch with `server:browser` and set `TABAGENT_CHANNEL_NAME=browser` in the
+server's environment (`claude mcp add browser -e TABAGENT_CHANNEL_NAME=browser -- npx -y @nolmak/tabagent mcp`).
+Channels are an undocumented Claude Code surface and may be dropped by org policy, third-party
+providers or a future release.
+
 ## Docs
 
 - [Tool reference](docs/tools.md) (generated from the registry)

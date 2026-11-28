@@ -37,7 +37,9 @@ Code with channels enabled:
 claude --dangerously-load-development-channels server:tabagent
 ```
 
-Channels are optional and experimental. Without them messages still arrive, just on the next tool call.
+Channels are optional and experimental; see
+[Instant delivery to Claude Code](../README.md#instant-delivery-to-claude-code-experimental) for the
+details. Without them messages still arrive, just on the next tool call.
 
 Codex threads hosted by the Codex app-server do not need linking; their messages are queued.
 

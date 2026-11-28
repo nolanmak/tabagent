@@ -80,6 +80,7 @@ export const AGENT_SEND_CODES = [
   "SPAWN_FAILED",
   "QUEUE_FAILED",
   "QUEUE_FULL",
+  "CHANNEL_TIMEOUT",
   "BAD_REQUEST",
   "NO_EXTENSION",
   "TIMEOUT",
@@ -150,6 +151,8 @@ export type AgentStatusEvent = z.infer<typeof AgentStatusSchema>;
 /** `GET` opens the SSE stream (same bearer auth as REST); `POST {msgId}` acks one push. */
 export const INBOX_PATH = "/v1/inbox";
 export const INBOX_ACK_PATH = "/v1/inbox/ack";
+/** `POST` one proxy-side audit event (AD9: an ignored channel permission request). */
+export const INBOX_EVENT_PATH = "/v1/inbox/event";
 
 /**
  * Registration headers the proxy sends on `GET /v1/inbox` (AD4). `x-tabagent-session` is the same value
@@ -171,3 +174,8 @@ export const PIGGYBACK_LIMITS = { maxHeld: 3, ttlMs: 30 * 60_000 } as const;
 export const InboxPushSchema = z.object({ msgId: z.string().min(1) }).passthrough();
 export type InboxPush = z.infer<typeof InboxPushSchema>;
 export const InboxAckSchema = z.object({ msgId: z.string().min(1).max(200) });
+/** AD9: the proxy ignored a channel permission-relay method; the bridge audits it. Nothing else is accepted. */
+export const InboxEventSchema = z.object({ event: z.literal("channel.permission_ignored"), method: z.string().min(1).max(200) });
+
+/** AD9: how long the bridge waits for the proxy to ack a channel push before reporting CHANNEL_TIMEOUT. */
+export const CHANNEL_ACK_TIMEOUT_MS = 5_000;
