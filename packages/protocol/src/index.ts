@@ -11,6 +11,7 @@ export * from "./captcha";
 export * from "./handoff";
 export * from "./settings";
 export * from "./approvals";
+export * from "./tasks";
 
 // ---------------------------------------------------------------------------
 // Site policy helpers (shared by extension engine + bridge token limits)

@@ -10,6 +10,7 @@ import { renderCli } from "./format";
 import { handoffTimeoutMs, validateWebhookUrl, writeHandoffConfig } from "./handoff/config";
 import { installSkill, skillTargets, uninstallSkill } from "./skill";
 import { createToken, parseSites, revokeToken, setAutoCaptcha } from "./tokens";
+import { auditFiles, taskLogFromFiles } from "./tasks";
 import { BRIDGE_VERSION } from "./version";
 
 export interface Out {
@@ -80,6 +81,67 @@ export function auditTail(n: number): Out {
   const p = auditPath();
   if (!existsSync(p)) return ok(["No audit log yet."]);
   return ok(readFileSync(p, "utf8").trim().split("\n").filter(Boolean).slice(-n).map(formatAuditLine));
+}
+
+// ---------------------------------------------------------------------------
+// #158: tabagent tasks
+// ---------------------------------------------------------------------------
+const SINCE_UNITS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/** "7d", "24h", "30m" -> ms; undefined when malformed. */
+export function parseSince(s: string): number | undefined {
+  const m = /^(\d+)([mhd])$/.exec(s.trim());
+  return m ? Number(m[1]) * SINCE_UNITS[m[2]] : undefined;
+}
+
+function dur(ms: number | undefined): string {
+  if (ms === undefined || !Number.isFinite(ms)) return "-";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = Math.round(ms / 100) / 10;
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${Math.floor(s % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/**
+ * List timed tasks from the audit log (and its rotations). Text by default; --json prints one task per line
+ * with its calls. `show <taskId>` prints one task's call timeline.
+ */
+export function tasksCommand(rest: string[], f: Flags, now = Date.now(), path = auditPath()): Out {
+  const sinceArg = String(f.since ?? "7d");
+  const since = parseSince(sinceArg);
+  if (since === undefined) return fail(`Bad --since "${sinceArg}"; use e.g. 30m, 24h or 7d`);
+  const log = taskLogFromFiles(auditFiles(path));
+  if (rest[0] === "show") {
+    const t = rest[1] ? log.get(rest[1]) : undefined;
+    if (!t) return fail(rest[1] ? `No task ${rest[1]} in the audit log` : "Usage: tabagent tasks show <taskId>");
+    if (f.json) return ok([JSON.stringify(t)]);
+    let prev = t.startedAt;
+    const lines = t.calls.map((c) => {
+      const gap = c.ts - prev;
+      prev = Math.max(prev, c.ts + (c.durationMs ?? 0));
+      return `  +${dur(c.ts - t.startedAt).padEnd(7)} ${(c.action ? `${c.tool}(${c.action})` : c.tool).padEnd(18)} ${c.outcome.padEnd(6)} ${dur(c.durationMs).padStart(7)}${gap >= 1000 ? `  (waited ${dur(gap)})` : ""}  ${c.origin ?? "-"}${c.errorCode ? `  ${c.errorCode}` : ""}`;
+    });
+    const total = t.durationMs ?? now - t.startedAt;
+    return ok([
+      `${t.goal ?? "(untitled task)"}  [${t.taskId}]`,
+      `${new Date(t.startedAt).toISOString()}  ${t.outcome ?? "running"}  total ${dur(total)}  in browser ${dur(t.browserMs)}  ${t.callCount} calls  ${t.caller ?? ""}`,
+      ...(t.note ? [`note: ${t.note}`] : []),
+      ...lines,
+      ...(t.callCount > t.calls.length ? [`  …and ${t.callCount - t.calls.length} more calls`] : []),
+    ]);
+  }
+  if (rest[0] && rest[0] !== "list") return fail("Usage: tabagent tasks [list] [--since 7d] [-n 20] [--json] | show <taskId> [--json]");
+  const n = Number(f.n ?? 20);
+  const tasks = log.list().filter((t) => t.startedAt >= now - since).slice(0, Number.isInteger(n) && n > 0 ? n : 20);
+  if (f.json) return ok(tasks.map((t) => JSON.stringify(t)));
+  if (!tasks.length) return ok([`No tasks in the last ${sinceArg}.`]);
+  return ok(
+    tasks.map((t) => {
+      const total = t.durationMs ?? now - t.startedAt;
+      return `${new Date(t.startedAt).toISOString().replace("T", " ").slice(0, 19)}  ${dur(total).padStart(7)}  ${String(t.callCount).padStart(3)} calls  ${(t.outcome ?? "running").padEnd(9)} ${(t.caller ?? "").padEnd(14)} ${t.goal ?? "(untitled)"}  ${t.taskId}`;
+    }),
+  );
 }
 
 export function skillCommand(rest: string[], f: Flags, src: string): Out {
@@ -165,7 +227,12 @@ export function configCommand(rest: string[]): Out {
     writeFileSync(configPath(), JSON.stringify(raw, null, 2), { mode: 0o600 });
     return ok([`Port set to ${b}. Also set it in the extension side panel when pairing.`]);
   }
-  return fail("Usage: tabagent config [show] | add-upload-dir <dir> | set port <n>");
+  if (sub === "set" && a === "task-idle" && b && Number.isInteger(Number(b)) && Number(b) >= 1 && Number(b) <= 1440) {
+    cfg.taskIdleMin = Number(b);
+    saveConfig(cfg);
+    return ok([`Implicit tasks now end after ${b} idle minute${b === "1" ? "" : "s"}. The running bridge picks this up on its next request.`]);
+  }
+  return fail("Usage: tabagent config [show] | add-upload-dir <dir> | set port <n> | set task-idle <minutes>");
 }
 
 /** D30 CLI output for a tool response: screenshots are written to a file and the path printed. */
@@ -247,6 +314,8 @@ Usage:
   tabagent captcha enable [capsolver|2captcha|vision] [--fallback vision] [--base-url URL --model M]
   tabagent captcha disable [provider] | status [--check]   CAPTCHA solving (key read from stdin or env)
   tabagent audit tail [-n 50] [--follow]
+  tabagent tasks [--since 7d] [-n 20] [--json]   Timed tasks from the audit log (--json: one task per line)
+  tabagent tasks show <taskId> [--json]          One task's calls with durations and waits
   tabagent settings show [--json]      Denylist, site policies, YOLO and preferences (never secrets)
   tabagent kill                        Stop every agent now (resume only from the side panel)
   tabagent approve [<n> once|always|deny]   List or answer pending prompts with Touch ID (macOS)
@@ -255,7 +324,7 @@ Usage:
                                        Point Claude Code's tabagent MCP server at the latest TabAgent
   tabagent setup codex [--profile P] [--dry-run] [--local]   The same for Codex
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
-  tabagent config [show] | add-upload-dir <dir> | set port <n>
+  tabagent config [show] | add-upload-dir <dir> | set port <n> | set task-idle <minutes>
   tabagent config auth.sms on|off      SMS/iMessage one-time codes for auth.code (macOS)
   tabagent config handoff.remote on|off        Phone page for auth.handoff on the Tailscale address
   tabagent config handoff.webhook <url>|off    POST a notice with the link when a handoff starts

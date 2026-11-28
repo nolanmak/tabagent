@@ -121,6 +121,8 @@ const LEVELS: Record<string, string> = {
   "auth.confirm_link": "act",
   "auth.handoff": "read",
   "captcha.solve": "act",
+  "task.start": "none",
+  "task.end": "none",
 };
 
 describe("D16 level table", () => {
@@ -176,7 +178,7 @@ describe("D18 static sensitivity", () => {
   });
 });
 
-const CORE = ["tabs", "nav.goto", "nav.wait", "page.snapshot", "page.screenshot", "act.click", "act.type", "act.press", "act.select", "form.fill", "extract.table", "page.markdown", "dialog.handle"];
+const CORE = ["tabs", "nav.goto", "nav.wait", "page.snapshot", "page.screenshot", "act.click", "act.type", "act.press", "act.select", "form.fill", "extract.table", "page.markdown", "dialog.handle", "task.start", "task.end"];
 const D29: Record<string, string[]> = {
   core: CORE,
   forms: [...CORE, "form.describe", "form.blockers", "form.submit", "act.fill", "act.check", "act.upload"],
@@ -188,8 +190,8 @@ const D29: Record<string, string[]> = {
 };
 
 describe("D29 profiles", () => {
-  it("core has 13 tools and excludes form.describe", () => {
-    expect(toolsForProfiles("core")).toHaveLength(13);
+  it("core has 15 tools and excludes form.describe", () => {
+    expect(toolsForProfiles("core")).toHaveLength(15);
     expect(names(toolsForProfiles("core"))).not.toContain("form.describe");
   });
   it.each(Object.entries(D29))("%s lists exactly the D29 tools", (p, want) => {

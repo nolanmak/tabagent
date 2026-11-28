@@ -20,6 +20,8 @@ TabAgent controls the user's **real Chrome profile**, with their logins, cookies
 3. Act with refs: `act.click {ref}`, `act.type {ref, text, submit}`, `act.select {ref, values}`, `act.press {key}`.
 4. Read the result: `snapshotDiff` (what changed), `navigation`, `dialogs`, `downloads`. The diff is usually enough; re-snapshot after a navigation.
 
+Wrap each user request in `task.start {goal}` … `task.end {outcome}` (success, failed or abandoned) so the user sees it timed in the side panel.
+
 ## Refs
 
 - A ref only works on the tab and page it came from. `REF_STALE`: take a new `page.snapshot`.

@@ -111,7 +111,7 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     const c = new Client({ name: "second", version: "1" });
     await c.connect(t);
     const { tools } = await c.listTools();
-    expect(tools).toHaveLength(13);
+    expect(tools).toHaveLength(15);
     const r: any = await c.callTool({ name: "tabs", arguments: { action: "list" } });
     expect(r.content[0].text).toMatch(/NO_EXTENSION/);
     await c.close();
@@ -164,7 +164,7 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     const { stdout: tail } = await run(process.execPath, [CLI, "audit", "tail", "-n", "3"], { env });
     expect(tail).toMatch(/NO_EXTENSION/);
     const { stdout: tools } = await run(process.execPath, [CLI, "tools", "--profile", "core"], { env });
-    expect(tools).toMatch(/13 tools/);
+    expect(tools).toMatch(/15 tools/);
   });
 });
 
@@ -172,7 +172,7 @@ describe.skipIf(!existsSync(CLI))("tool budget script (#30)", { timeout: 30_000 
   const SCRIPT = join(ROOT, "scripts/tool-budget.mjs");
   it("passes on the real tools/list", async () => {
     const { stdout } = await run(process.execPath, [SCRIPT]);
-    expect(stdout).toMatch(/ok\s+core\s+13 tools/);
+    expect(stdout).toMatch(/ok\s+core\s+15 tools/);
     expect(stdout).toMatch(/ok\s+full/);
     expect(stdout).toMatch(/skill \d+ \/ 1500/);
   });

@@ -415,6 +415,32 @@ button.session-tab.active { color: var(--fg); font-weight: 500; }
 .feed .f-status { font-size: var(--text-2xs); font-weight: 600; text-align: right; white-space: nowrap; line-height: 1.7; }
 .feed .f-status .ms { color: var(--faint); font-weight: 400; margin-left: 4px; }
 
+/* #158 Tasks */
+.tasks { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow: auto; font-size: var(--text-xs); }
+.tasks > li.task { border-top: 1px solid var(--border); padding: 4px 0; }
+.tasks > li.task:first-child { border-top: 0; }
+.tasks > li.empty { border: 0; }
+.task-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; column-gap: 8px; }
+button.task-toggle { display: block; min-width: 0; text-align: left; border: 0; background: none; padding: 2px; font-weight: 400; }
+.task-title { display: block; color: var(--fg); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-meta { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-dur { font: var(--text-xs)/1.4 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--fg); }
+.task-dur.live { color: var(--accent-text); }
+.task-badge { font-size: var(--text-2xs); font-weight: 600; white-space: nowrap; color: var(--muted); }
+.task-badge.running { color: var(--accent-text); } .task-badge.success { color: var(--ok-text); } .task-badge.failed { color: var(--danger-text); } .task-badge.abandoned { color: var(--warn-text); }
+.task-label { display: inline-flex; gap: 2px; }
+.task-label button { min-height: 22px; height: 22px; width: 24px; padding: 0; }
+.task-detail { margin: 4px 2px 2px; }
+.task-split { color: var(--muted); margin: 0 0 4px; }
+.task-timeline { list-style: none; margin: 0; padding: 0; }
+.task-timeline li { display: grid; grid-template-columns: 4.5em minmax(0, 1fr) auto auto 4.5em; column-gap: 6px; padding: 2px 0; font-size: var(--text-2xs); }
+.task-timeline li.empty, .task-timeline li.small { display: block; }
+.tl-at, .tl-dur { color: var(--faint); font-variant-numeric: tabular-nums; }
+.tl-site { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-status { font-weight: 600; }
+.tl-gap { grid-column: 2 / -1; }
+.tl-gap:empty { display: none; }
+
 /* Workflows */
 .toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 0 0 var(--s-2); }
 .toolbar select { flex: 1 1 140px; }

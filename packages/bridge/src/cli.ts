@@ -13,7 +13,7 @@ import { buildMcpServer, channelPushHandler } from "./mcp";
 import { findAgentPid, readPs } from "./agents/ancestry";
 import { channelName, channelsFlag, readArgs } from "./agents/channels";
 import { InboxClient } from "./inbox-client";
-import { approveCommand, auditTail, configCommand, formatAuditLine, helpText, killCommand, settingsCommand, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out, type ToolCall } from "./commands";
+import { approveCommand, auditTail, configCommand, formatAuditLine, helpText, killCommand, settingsCommand, skillCommand, tasksCommand, tokenCommand, toolOutput, toolsCommand, type Out, type ToolCall } from "./commands";
 import { setupCommand } from "./setup";
 import { BRIDGE_VERSION } from "./version";
 import { authCli } from "./auth/cli-entry";
@@ -263,6 +263,9 @@ switch (cmd) {
     break;
   case "audit":
     cmdAudit(pos, f);
+    break;
+  case "tasks":
+    print(tasksCommand(pos, f));
     break;
   case "settings":
     print(await settingsCommand(pos, f, await bridgeCall(f)));
