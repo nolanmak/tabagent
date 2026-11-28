@@ -464,8 +464,9 @@ describe("Bitwarden rememberUnlock (Keychain)", () => {
         return { code: 1, stdout: bad().stdout, stderr: "" };
       },
     };
-    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, remember: () => remember, keyStore, sleep: async () => {} });
-    return { p, ops, calls, stored: () => stored };
+    const events: string[] = [];
+    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, remember: () => remember, keyStore, sleep: async () => {}, event: (e, d) => events.push(`${e}:${(d as { state?: string }).state ?? ""}`) });
+    return { p, ops, calls, events, stored: () => stored };
   }
 
   it("saves on unlock and restores on the next start without locking", async () => {
@@ -520,6 +521,7 @@ describe("Bitwarden rememberUnlock (Keychain)", () => {
     await a.p.startup({});
     expect(a.p.unlocked).toBe(false);
     expect(a.stored()).toBeNull();
+    expect(a.events).toContain("bitwarden.restore_rejected:locked"); // audited, so a lost unlock can be traced
   });
 });
 
