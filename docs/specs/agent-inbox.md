@@ -1,6 +1,6 @@
 # Spec: Send to agent — prompt local Claude Code / Codex sessions from the browser
 
-Status: **audited v3** (2026-11-27). v3 folds in the P0 spike results ([agent-inbox-spike.md](agent-inbox-spike.md)). Spec-interrogation audit: fresh-eyes pass, 38-seam swarm, and
+Status: **audited v3** (2026-11-27), amended by #137 (no surprise spawns, session titles). v3 folds in the P0 spike results ([agent-inbox-spike.md](agent-inbox-spike.md)). Spec-interrogation audit: fresh-eyes pass, 38-seam swarm, and
 a conversation check. Findings and their resolutions are in [agent-inbox-audit.md](agent-inbox-audit.md).
 Epic: see the GitHub issue that links this file. Where this spec and an issue differ, the spec wins
 until it is amended.
@@ -82,8 +82,10 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   1. `channel`: linked, Claude, `channels=1`, and the P0 spike confirmed (AD9).
   2. `piggyback`: linked (any vendor, which means Claude in v1).
   3. `queue`: Codex.
-  4. `spawn`: a Claude agent that is not linked, or that the user explicitly chose "Start new session" for. Claude only.
-  5. `none`: anything else. Send is disabled, and the panel explains why.
+  4. `spawn`: **only** when the send carries `forceSpawn`, which only the explicit "Start a new session in \<folder\>" button sets (#137). Claude only. This check comes first: a `forceSpawn` send spawns even for a linked agent (and drops what it holds, §6).
+  5. `none`: anything else, **including an unlinked Claude agent** (#137). Send is disabled, and the panel explains why.
+
+  *Why (amended by #137):* v3 made `spawn` the default for unlinked Claude agents. In live QA a user picked a session, pressed Send, and the bridge silently started a different background session; the chosen session never got the message. A new session is now always a separate, explicit action, and `chooseRoute` enforces it on the bridge: `agent.send` without `forceSpawn` never spawns.
 
   `delivery` in `agents.listed` is the route the bridge **would** pick now. `agent.sent.route` is the route it **did** use. Both use this one enum.
 - **AD7. Delivery states are what the bridge can observe. They are never inferred.**
@@ -172,8 +174,11 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   - Codex app-server (AD10).
   - Registered inbox streams (AD4).
 - **Response:** `{agents: Agent[], sources: {claude: "ok"|"unavailable", codex: "ok"|"unavailable"}}`. A failed source never fails the call.
-- **`Agent` fields:** `{id, vendor: "claude"|"codex", name, cwd, startedAt, pid?, status: "busy"|"idle"|"error", statusLabel?, linked: boolean, canDriveTab: boolean, delivery: Route}`.
-  - `name` comes from the vendor record. If it is missing, the panel shows `cwd` basename · age.
+- **`Agent` fields:** `{id, vendor: "claude"|"codex", name, title?, cwd, startedAt, pid?, status: "busy"|"idle"|"error", statusLabel?, linked: boolean, canDriveTab: boolean, delivery: Route}`.
+  - `name` comes from the vendor record. Claude's names are auto-generated (`<cwd basename>-<hex>`) and not useful on their own.
+  - `title` (#137) is the readable label. Claude: the **last** `custom-title` entry (`customTitle`, the user's `/rename`) in the session transcript, else the last `ai-title` (`aiTitle`), else `name`. Codex: the thread name. Omitted when there is none; the panel then shows `cwd` basename · age.
+  - The transcript is `<projects>/<slug>/<sessionId>.jsonl`, where `<projects>` is `$TABAGENT_CLAUDE_PROJECTS_DIR`, else `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`, and `<slug>` is the cwd with every non-alphanumeric character replaced by `-` (verified against claude 2.1.x). If that file is missing (Claude hashes slugs over 200 characters), the bridge looks for `<sessionId>.jsonl` in every project folder. The `sessionId` is used only to find the file; it is never sent on the wire (AD3).
+  - The bridge reads only the last 256 KB of the transcript and parses only lines whose `type` is `custom-title` or `ai-title`. It never reads message content. Claude repeats title entries through the transcript, so the tail normally has one; if not, the title falls back to `name`. Results are cached per file by size and mtime.
 - **Unlinked streams:** a registered stream that matches no discovered agent (for example Cursor or Claude Desktop) is **not listed** in v1.
 - **Cache:** the bridge caches the list for 5 s, for display only. A send always re-resolves (AD3).
 - **Refresh:** the panel asks when it opens and every 5 s while visible.
@@ -192,21 +197,21 @@ Sequence: worker → bridge `agent.send`. Then:
 
 The bridge **always** replies, including on failure. The worker times out after 20 s, with `failed` / `TIMEOUT`.
 
-`spawn` details: `execFile("claude", ["--bg", text], {cwd: agent.cwd, timeout: 30000})`. Parse `backgrounded · <shortId>` from stdout and return it in `detail` with an `attach` hint. If the cwd no longer exists, the result is `failed` / `NO_CWD`. If stdout or stderr contains `Workspace not trusted`, the result is `failed` / `WORKSPACE_UNTRUSTED`, with the CLI message as the detail. Claude refuses `--bg` in folders whose trust prompt was never accepted, including home and folders used only with `--dangerously-skip-permissions` (spike §5). Spawn uses the no-tab template, because the new session has no TabAgent session yet, and it uses Claude's default permission mode. Choosing spawn for an agent that already has a `held` message drops that held message (`expired`).
+`spawn` details: `execFile("claude", ["--bg", text], {cwd: agent.cwd, timeout: 30000})`. Spawn runs only for a send with `forceSpawn` (AD6). Parse `backgrounded · <shortId>` from stdout and return it in `detail` with the folder it runs in and an `attach` hint. If the cwd no longer exists, the result is `failed` / `NO_CWD`. If stdout or stderr contains `Workspace not trusted`, the result is `failed` / `WORKSPACE_UNTRUSTED`, with the CLI message as the detail. Claude refuses `--bg` in folders whose trust prompt was never accepted, including home and folders used only with `--dangerously-skip-permissions` (spike §5). Spawn uses the no-tab template, because the new session has no TabAgent session yet, and it uses Claude's default permission mode. Choosing spawn for an agent that already has a `held` message drops that held message (`expired`).
 
 ## 7. UI
 
 - **Agents section** (new), separate from **Sessions**. Sessions keeps its current role, and its empty text becomes "No sessions."
 - **Each agent row:**
-  - vendor icon, name, cwd basename, age, pid
-  - busy/idle label
+  - vendor icon and `title` (§5) as the primary label; cwd basename · age · pid · busy/idle as secondary text
   - badges: **linked** and **can drive tab**
-  - the route as words: "instant (channel)", "on its next browser action", "queued (Codex)", "starts a new session"
+  - the route as words: "instant (channel)", "on its next browser action", "queued (Codex)"
+  - an unlinked Claude agent (#137) says **Not connected — can't message this session**, with a short link **Connect it: update TabAgent and restart this session** to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
+- **Order and grouping (#137):** linked agents first, then the most recently started. Agents that are not connected **and** have no real title (no title, or a title equal to the vendor's auto name) are collapsed under an **N other sessions** disclosure, which opens when one of them is selected.
 - **Composer:** prompt box; "Share this tab" (on), which shows the tab title; "Include selection" (on when a selection exists, disabled when none); **Send**.
-  - For `spawn` targets the button reads **Start new session**.
-  - For `none` targets the button is disabled, with the reason shown.
-  - For agents in a piggyback state there is a secondary **Start new session instead** action.
-- **Feed:** one line per send, keyed by `requestId` and updated by `agent.status`. It shows route, state and the grant result. The text is rendered with the existing `esc()`.
+  - **Send** never spawns. For `none` targets (including unlinked Claude agents) it is disabled, with the reason shown.
+  - For every Claude agent with a cwd there is a separate secondary button, **Start a new session in \<folder\>** (with "instead" appended for a linked agent). It is the only control that sets `forceSpawn` (AD6). The limits (AD13) apply to it too.
+- **Feed:** one line per send, keyed by `requestId` and updated by `agent.status`. It shows route, state and the grant result. A new session's line is named "New session in \<folder\>" and its detail names the full folder and the `claude attach <id>` command. The text is rendered with the existing `esc()`.
 - **Context menu:** "Send to agent ▸" lists up to 5 recently sent-to agents (ids stored in `chrome.storage.local`, re-validated against the current list) plus "Choose…". See AD14. An unknown id opens the panel with nothing selected and a notice.
 
 ## 8. Security summary

@@ -85,6 +85,7 @@ providers or a future release.
 ## Docs
 
 - [Tool reference](docs/tools.md) (generated from the registry)
+- [Send to agent](docs/send-to-agent.md): message your Claude Code and Codex sessions from the side panel, and [connect a session](docs/send-to-agent.md#connect-a-session)
 - [Security model](docs/SECURITY.md)
 - [Lite mode (no debugger) support matrix](docs/lite-mode.md)
 - [Design](docs/DESIGN.md)

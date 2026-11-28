@@ -8,14 +8,17 @@ import {
   agentRowHtml,
   agentRowView,
   buildAgentSend,
+  agentListHtml,
   composerState,
+  CONNECT_DOCS_URL,
   cwdBasename,
+  groupAgents,
   formatAge,
   ROUTE_WORDS,
+  sendTarget,
   shareableTab,
   shareTabLabel,
   sourcesNotes,
-  spawnInsteadOffered,
   type AgentFeedEntry,
 } from "../src/pure/agents";
 
@@ -30,7 +33,7 @@ const agent = (over: Partial<Agent> = {}): Agent => ({
   status: "idle",
   linked: false,
   canDriveTab: false,
-  delivery: "spawn",
+  delivery: "none",
   ...over,
 });
 
@@ -65,25 +68,54 @@ describe("agent rows (§7)", () => {
     });
   });
 
-  it("a spawn-route Claude row: name, cwd basename, age, pid, idle, Start new session", () => {
+  it("#137: an unlinked Claude row says it is not connected, links the connect docs, and offers a new session in its folder", () => {
     const v = agentRowView(agent(), NOW);
-    expect(v).toMatchObject({ id: "claude:4242:1", vendorLabel: "Claude", title: "fix-tests", cwdBase: "tabagent", age: "5m", pid: 4242, status: "idle", routeWords: "starts a new session", sendable: true, actionLabel: "Start new session", badges: [] });
-    expect(v.reason).toBeUndefined();
+    expect(v).toMatchObject({ id: "claude:4242:1", vendorLabel: "Claude", title: "fix-tests", cwdBase: "tabagent", age: "5m", pid: 4242, status: "idle", sendable: false, notConnected: true, actionLabel: "Send", spawnLabel: "Start a new session in tabagent", badges: [] });
+    expect(v.reason).toBe("Not connected — can't message this session");
+    expect(v.routeWords).toBe("Not connected — can't message this session");
+    const html = agentRowHtml(v, false);
+    expect(html).toContain("Not connected — can&#39;t message this session");
+    expect(html).toContain("Connect it: update TabAgent and restart this session");
+    expect(html).toContain(`href="${CONNECT_DOCS_URL}"`);
+    expect(html).toContain('target="_blank"');
+    expect(html).not.toContain("starts a new session");
+  });
+
+  it("#137: an older bridge that still lists unlinked Claude as spawn is treated the same (never a surprise spawn)", () => {
+    expect(agentRowView(agent({ delivery: "spawn" }), NOW)).toMatchObject({ sendable: false, notConnected: true, spawnLabel: "Start a new session in tabagent" });
+  });
+
+  it("#137: the title is the primary label; cwd basename · age · pid is secondary", () => {
+    const v = agentRowView(agent({ name: "nolanmakatche-22", title: "Pending user input check" }), NOW);
+    expect(v).toMatchObject({ title: "Pending user input check", titled: true });
+    const html = agentRowHtml(v, false);
+    expect(html).toContain("<b>Pending user input check</b>");
+    expect(html).toContain("tabagent · 5m · pid 4242");
+    expect(html).not.toContain("nolanmakatche-22");
+    // A title that is only the vendor's auto name is not a real title.
+    expect(agentRowView(agent({ name: "nolanmakatche-22", title: "nolanmakatche-22" }), NOW)).toMatchObject({ title: "nolanmakatche-22", titled: false });
+    expect(agentRowView(agent({ name: "x-1", title: undefined }), NOW)).toMatchObject({ title: "x-1", titled: false });
+  });
+
+  it("a linked Claude row is sendable (piggyback) and still offers a new session instead; no cwd means no spawn", () => {
+    expect(agentRowView(agent({ linked: true, delivery: "piggyback" }), NOW)).toMatchObject({ sendable: true, notConnected: false, actionLabel: "Send", spawnLabel: "Start a new session in tabagent instead" });
+    expect(agentRowView(agent({ cwd: "" }), NOW).spawnLabel).toBeUndefined();
   });
 
   it("a queue-route Codex row with no name falls back to cwd basename · age, and uses statusLabel", () => {
     const v = agentRowView(agent({ id: "codex:t1", vendor: "codex", name: null, cwd: "/work/cx", pid: undefined, status: "busy", statusLabel: "waitingOnApproval", delivery: "queue" }), NOW);
-    expect(v).toMatchObject({ vendorLabel: "Codex", title: "cx · 5m", status: "waitingOnApproval", routeWords: "queued (Codex)", sendable: true, actionLabel: "Send" });
+    expect(v).toMatchObject({ vendorLabel: "Codex", title: "cx · 5m", status: "waitingOnApproval", routeWords: "queued (Codex)", sendable: true, notConnected: false, actionLabel: "Send" });
     expect(v.pid).toBeUndefined();
+    expect(v.spawnLabel).toBeUndefined();
   });
 
   it("an empty name also falls back", () => {
     expect(agentRowView(agent({ name: "  " }), NOW).title).toBe("tabagent · 5m");
   });
 
-  it("a none-route row is not sendable and says why", () => {
-    expect(agentRowView(agent({ vendor: "codex", status: "error", statusLabel: "systemError", delivery: "none" }), NOW)).toMatchObject({ sendable: false, actionLabel: "Send", reason: "This agent cannot take messages (systemError)" });
-    expect(agentRowView(agent({ status: "idle", delivery: "none" }), NOW).reason).toBe("No way to deliver to this agent");
+  it("a none-route row that is not an unlinked Claude session is not sendable and says why", () => {
+    expect(agentRowView(agent({ vendor: "codex", status: "error", statusLabel: "systemError", delivery: "none" }), NOW)).toMatchObject({ sendable: false, notConnected: false, actionLabel: "Send", reason: "This agent cannot take messages (systemError)" });
+    expect(agentRowView(agent({ vendor: "codex", status: "idle", delivery: "none" }), NOW).reason).toBe("No way to deliver to this agent");
   });
 
   it("shows linked and can-drive-tab badges when true", () => {
@@ -100,11 +132,37 @@ describe("agent rows (§7)", () => {
     expect(html).toContain('data-agent-id="claude:&quot;1"');
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain("pid 4242");
-    const none = agentRowHtml(agentRowView(agent({ delivery: "none" }), NOW), false);
+    const none = agentRowHtml(agentRowView(agent({ vendor: "codex", delivery: "none" }), NOW), false);
     expect(none).toContain('aria-selected="false"');
     expect(none).toContain("agent-none");
     expect(none).toContain("No way to deliver to this agent");
     expect(agentRowHtml(agentRowView(agent({ linked: true, canDriveTab: true }), NOW), false)).toContain("can drive tab");
+  });
+
+  it("#137: sorts linked first, then most recent; collapses not-connected untitled sessions", () => {
+    const rows = [
+      agent({ id: "claude:1:1", name: "old-untitled", startedAt: NOW - 9_000 }),
+      agent({ id: "claude:2:2", name: "n-2", title: "Titled but not connected", startedAt: NOW - 1_000 }),
+      agent({ id: "claude:3:3", name: "linked-old", linked: true, delivery: "piggyback", startedAt: NOW - 99_000 }),
+      agent({ id: "codex:t", vendor: "codex", name: null, delivery: "queue", startedAt: NOW - 500 }),
+      agent({ id: "claude:4:4", name: "new-untitled", startedAt: NOW - 100 }),
+    ].map((a) => agentRowView(a, NOW));
+    const g = groupAgents(rows);
+    expect(g.main.map((v) => v.id)).toEqual(["claude:3:3", "codex:t", "claude:2:2"]);
+    expect(g.other.map((v) => v.id)).toEqual(["claude:4:4", "claude:1:1"]);
+  });
+
+  it("#137: list HTML puts collapsed sessions under an 'N other sessions' disclosure, open when asked or when one is selected", () => {
+    const rows = [agent({ id: "claude:1:1", title: "Real work" }), agent({ id: "claude:2:2", name: "a-1" }), agent({ id: "claude:3:3", name: "b-2" })].map((a) => agentRowView(a, NOW));
+    const closed = agentListHtml(rows, null, false);
+    expect(closed).toContain("2 other sessions");
+    expect(closed).toContain('data-agent-id="claude:2:2"');
+    expect(closed).not.toMatch(/<details[^>]* open/);
+    expect(agentListHtml(rows, null, true)).toMatch(/<details[^>]* open/);
+    expect(agentListHtml(rows, "claude:3:3", false)).toMatch(/<details[^>]* open/);
+    expect(agentListHtml(rows.slice(0, 2), null, false)).toContain("1 other session<");
+    expect(agentListHtml(rows.slice(0, 1), null, false)).not.toContain("<details");
+    expect(agentListHtml([], null, false)).toBe("");
   });
 
   it("sources notes name each unavailable source", () => {
@@ -116,33 +174,47 @@ describe("agent rows (§7)", () => {
 });
 
 describe("composer (§7, AD13)", () => {
-  const spawn = agentRowView(agent(), NOW);
-  const queue = agentRowView(agent({ vendor: "codex", delivery: "queue" }), NOW);
-  const none = agentRowView(agent({ delivery: "none" }), NOW);
+  const unlinked = agentRowView(agent(), NOW);
+  const linked = agentRowView(agent({ linked: true, delivery: "piggyback" }), NOW);
+  const queue = agentRowView(agent({ id: "codex:t", vendor: "codex", delivery: "queue" }), NOW);
+  const none = agentRowView(agent({ id: "codex:t", vendor: "codex", status: "error", statusLabel: "systemError", delivery: "none" }), NOW);
+  const off = { spawnLabel: null, canSpawn: false };
 
   it("needs an agent and a prompt", () => {
-    expect(composerState({ agent: null, prompt: "hi", share: null })).toEqual({ canSend: false, label: "Send", note: "Select an agent above." });
-    expect(composerState({ agent: queue, prompt: "   ", share: null })).toEqual({ canSend: false, label: "Send", note: "" });
+    expect(composerState({ agent: null, prompt: "hi", share: null })).toEqual({ canSend: false, label: "Send", note: "Select an agent above.", ...off });
+    expect(composerState({ agent: queue, prompt: "   ", share: null })).toEqual({ canSend: false, label: "Send", note: "", ...off });
   });
 
-  it("labels spawn targets Start new session and others Send", () => {
-    expect(composerState({ agent: spawn, prompt: "go", share: null })).toEqual({ canSend: true, label: "Start new session", note: "" });
-    expect(composerState({ agent: queue, prompt: "go", share: null })).toEqual({ canSend: true, label: "Send", note: "" });
+  it("Codex and linked targets: Send as before", () => {
+    expect(composerState({ agent: queue, prompt: "go", share: null })).toEqual({ canSend: true, label: "Send", note: "", ...off });
+    expect(composerState({ agent: linked, prompt: "go", share: null })).toEqual({ canSend: true, label: "Send", note: "", spawnLabel: "Start a new session in tabagent instead", canSpawn: true });
+  });
+
+  it("#137: unlinked Claude: Send is disabled; the separate Start a new session button is the only way to spawn", () => {
+    expect(composerState({ agent: unlinked, prompt: "go", share: null })).toEqual({
+      canSend: false,
+      label: "Send",
+      note: "This session is not connected to TabAgent, so it can't get messages. You can start a new session in tabagent instead.",
+      spawnLabel: "Start a new session in tabagent",
+      canSpawn: true,
+    });
+    expect(composerState({ agent: unlinked, prompt: "  ", share: null })).toMatchObject({ canSend: false, canSpawn: false });
   });
 
   it("disables none targets with the reason", () => {
-    expect(composerState({ agent: none, prompt: "go", share: null })).toEqual({ canSend: false, label: "Send", note: "No way to deliver to this agent" });
+    expect(composerState({ agent: none, prompt: "go", share: null })).toEqual({ canSend: false, label: "Send", note: "This agent cannot take messages (systemError)", ...off });
   });
 
-  it("blocks an over-limit prompt and shows the limit, without truncating", () => {
+  it("blocks an over-limit prompt and shows the limit, without truncating (both buttons)", () => {
     const prompt = "x".repeat(AGENT_LIMITS.prompt + 1);
-    expect(composerState({ agent: queue, prompt, share: null })).toEqual({ canSend: false, label: "Send", note: "The message is 8,001 characters; the limit is 8,000." });
+    expect(composerState({ agent: queue, prompt, share: null })).toEqual({ canSend: false, label: "Send", note: "The message is 8,001 characters; the limit is 8,000.", ...off });
     expect(composerState({ agent: queue, prompt: "x".repeat(AGENT_LIMITS.prompt), share: null }).canSend).toBe(true);
+    expect(composerState({ agent: unlinked, prompt, share: null })).toMatchObject({ canSend: false, canSpawn: false, note: "The message is 8,001 characters; the limit is 8,000." });
   });
 
   it("blocks an over-limit shared title or URL and says to untick sharing", () => {
     const title = "t".repeat(AGENT_LIMITS.title + 1);
-    expect(composerState({ agent: queue, prompt: "go", share: { tabId: 1, title, url: "https://a.test/" } })).toEqual({ canSend: false, label: "Send", note: "The tab title is 501 characters; the limit is 500. Untick Share this tab to send without it." });
+    expect(composerState({ agent: queue, prompt: "go", share: { tabId: 1, title, url: "https://a.test/" } })).toEqual({ canSend: false, label: "Send", note: "The tab title is 501 characters; the limit is 500. Untick Share this tab to send without it.", ...off });
     const url = "https://a.test/" + "u".repeat(AGENT_LIMITS.url);
     expect(composerState({ agent: queue, prompt: "go", share: { tabId: 1, title: "ok", url } }).note).toContain("The tab URL is");
   });
@@ -161,6 +233,18 @@ describe("shareable tab and the send message", () => {
   it("builds ui.agent_send with the tab fields only when a tab is shared", () => {
     expect(buildAgentSend({ requestId: "r1", agentId: "codex:t", prompt: "hi", share: { tabId: 3, title: "T", url: "https://a.test/" } })).toEqual({ type: "ui.agent_send", requestId: "r1", agentId: "codex:t", prompt: "hi", includeTab: true, tabId: 3, title: "T", url: "https://a.test/" });
     expect(buildAgentSend({ requestId: "r2", agentId: "codex:t", prompt: "hi", share: null })).toEqual({ type: "ui.agent_send", requestId: "r2", agentId: "codex:t", prompt: "hi", includeTab: false });
+  });
+
+  it("#137: a new session's feed line names its folder and the spawn route; a plain send names the agent", () => {
+    const v = agentRowView(agent({ title: "Pending user input check" }), NOW);
+    expect(sendTarget(v, true)).toEqual({ agentName: "New session in tabagent", route: "spawn" });
+    expect(sendTarget(v, false)).toEqual({ agentName: "Pending user input check", route: "none" });
+  });
+
+  it("#137: forceSpawn is sent only for the explicit Start a new session button", () => {
+    expect(buildAgentSend({ requestId: "r3", agentId: "claude:1:1", prompt: "hi", share: null, forceSpawn: true })).toEqual({ type: "ui.agent_send", requestId: "r3", agentId: "claude:1:1", prompt: "hi", includeTab: false, forceSpawn: true });
+    expect(buildAgentSend({ requestId: "r4", agentId: "claude:1:1", prompt: "hi", share: null, forceSpawn: false })).not.toHaveProperty("forceSpawn");
+    expect(buildAgentSend({ requestId: "r5", agentId: "claude:1:1", prompt: "hi", share: null })).not.toHaveProperty("forceSpawn");
   });
 });
 
@@ -235,12 +319,10 @@ describe("tab grant in the panel (P2b, AD11, §7)", () => {
     expect(shareTabLabel(null)).toBe("Share this tab's title and link");
   });
 
-  it("'Start new session instead' is offered only for sendable piggyback/channel Claude targets", () => {
-    expect(spawnInsteadOffered(agentRowView(agent({ linked: true, canDriveTab: true, delivery: "piggyback" }), NOW))).toBe(true);
-    expect(spawnInsteadOffered(agentRowView(agent({ linked: true, delivery: "channel" }), NOW))).toBe(true);
-    expect(spawnInsteadOffered(agentRowView(agent(), NOW))).toBe(false);
-    expect(spawnInsteadOffered(agentRowView(agent({ vendor: "codex", delivery: "queue" }), NOW))).toBe(false);
-    expect(spawnInsteadOffered(null)).toBe(false);
+  it("'Start a new session in <folder> instead' is offered for linked piggyback/channel Claude targets, never for Codex", () => {
+    expect(agentRowView(agent({ linked: true, canDriveTab: true, delivery: "piggyback" }), NOW).spawnLabel).toBe("Start a new session in tabagent instead");
+    expect(agentRowView(agent({ linked: true, delivery: "channel" }), NOW).spawnLabel).toBe("Start a new session in tabagent instead");
+    expect(agentRowView(agent({ vendor: "codex", delivery: "queue" }), NOW).spawnLabel).toBeUndefined();
   });
 
   it("buildAgentSend adds forceSpawn only when asked", () => {

@@ -21,6 +21,11 @@ export const AgentSchema = z.object({
   vendor: z.enum(AGENT_VENDORS),
   /** From the vendor record; null when it has none (the panel then shows cwd basename and age). */
   name: z.string().nullable(),
+  /**
+   * #137: the readable label. Claude: the session's last `custom-title`, else its last `ai-title` (from the
+   * transcript), else `name`. Codex: the thread name. Absent when there is none (older bridges never send it).
+   */
+  title: z.string().optional(),
   cwd: z.string(),
   /** Epoch ms. */
   startedAt: z.number(),
@@ -111,8 +116,9 @@ export const AgentSendSchema = z.object({
   url: z.string().optional(),
   selection: z.string().optional(),
   /**
-   * The user chose "Start new session instead" (§7) for an agent that would otherwise get the message
-   * piggybacked: route `spawn` (Claude only, AD6), and any message still held for that agent expires.
+   * The user pressed the explicit "Start a new session in <folder>" button (§7, #137): route `spawn`
+   * (Claude only, AD6), and any message still held for that agent expires. Without it the bridge never
+   * spawns: an unlinked Claude session gets `none` / NO_ROUTE.
    */
   forceSpawn: z.boolean().optional(),
 });

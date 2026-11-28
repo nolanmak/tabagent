@@ -27,24 +27,32 @@ test("side panel never scrolls horizontally with long content", async ({ h }) =>
     delivery: "spawn",
     ...over,
   });
-  const rows = agentRowHtml(agentRowView(longAgent(), now), true) + agentRowHtml(agentRowView(longAgent({ id: "codex:t", vendor: "codex", name: null, delivery: "none", status: "error" }), now), false);
+  const rows =
+    agentRowHtml(agentRowView(longAgent({ title: `A readable session title that goes on and on ${"z".repeat(90)}` }), now), true) +
+    agentRowHtml(agentRowView(longAgent({ id: "claude:2:2", linked: false, canDriveTab: false, delivery: "none" }), now), false) +
+    agentRowHtml(agentRowView(longAgent({ id: "codex:t", vendor: "codex", name: null, delivery: "none", status: "error" }), now), false);
+  const spawnLabel = agentRowView(longAgent({ linked: false, delivery: "none" }), now).spawnLabel!;
   const feed = agentFeedLineHtml({ requestId: "r", ts: now, agentName: longAgent().name!, vendor: "claude", route: "spawn", state: "failed", code: "WORKSPACE_UNTRUSTED", detail: `Workspace not trusted. Run claude in ${longAgent().cwd} once and accept the trust prompt.` });
   // The renderers' own markup for a handoff row and a capture-tab option, filled with long text.
   await panel.evaluate(
-    ({ long, rows, feed }) => {
+    ({ long, rows, feed, spawnLabel }) => {
       document.getElementById("handoffBox")!.hidden = false;
       document.getElementById("handoffs")!.innerHTML = `<li><span><b>claude-code-with-a-very-long-client-name</b> · ${long}<br><span class="muted small">${long}</span></span><span><button>Cancel</button> <button class="primary">Done</button></span></li>`;
       document.getElementById("manualCaptureTab")!.innerHTML = `<option>A very long tab title ${long}</option>`;
       document.getElementById("agentsBox")!.hidden = false;
       document.getElementById("agents")!.innerHTML = rows;
       document.getElementById("agentFeed")!.innerHTML = feed;
+      // #137: the secondary Start a new session button, labelled with a long folder name.
+      const spawn = document.getElementById("agentSpawn")!;
+      spawn.hidden = false;
+      spawn.textContent = spawnLabel;
       document.getElementById("agentTabTitle")!.textContent = `A very long tab title ${long}`;
       // The selection preview (#92) is truncated in display, but must also wrap an unbroken run.
       document.getElementById("agentSelectionPreview")!.textContent = `“${long.slice(0, 79)}…”`;
       document.getElementById("agentComposerNote")!.textContent = "The tab URL is 2,001 characters; the limit is 2,000. Untick Share this tab to send without it.";
       document.querySelectorAll("details").forEach((d) => ((d as HTMLDetailsElement).open = true));
     },
-    { long: LONG, rows, feed },
+    { long: LONG, rows, feed, spawnLabel },
   );
   // The Sites search toolbar (#117), with a long query, a count and the clear button showing.
   await panel.getByLabel("Search sites").fill(LONG);

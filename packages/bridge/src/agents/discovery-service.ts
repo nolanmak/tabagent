@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import type { Agent, AgentSources } from "@tabagent/protocol";
 import { CodexRpc, defaultCodexSocket, loadedThreadIds, readThread } from "./codex";
 import { codexThreadToAgent, mergeAgents, parseAgentId, parseClaudeAgents, toAgent, type AgentBase, type LinkOf } from "./discovery";
+import { pickTitle, TitleReader } from "./titles";
 
 export interface DiscoveryOpts {
   /** `claude` executable; default $TABAGENT_CLAUDE_BIN, else `claude` on PATH. */
@@ -16,6 +17,8 @@ export interface DiscoveryOpts {
   now?: () => number;
   /** AD4: live inbox link for an agent, applied on every list and resolve (never cached). */
   linkOf?: LinkOf;
+  /** #137: Claude transcripts, for session titles; default $TABAGENT_CLAUDE_PROJECTS_DIR, else ~/.claude/projects. */
+  claudeProjectsDir?: string;
 }
 
 export interface AgentList {
@@ -45,6 +48,7 @@ export class AgentDiscovery {
   private cache: { at: number; value: SourceLists } | null = null;
   private inflight: Promise<SourceLists> | null = null;
   linkOf: LinkOf;
+  private titles: TitleReader;
 
   constructor(o: DiscoveryOpts = {}) {
     this.claudeBin = o.claudeBin ?? defaultClaudeBin();
@@ -54,6 +58,7 @@ export class AgentDiscovery {
     this.cacheMs = o.cacheMs ?? 5_000;
     this.now = o.now ?? Date.now;
     this.linkOf = o.linkOf ?? (() => null);
+    this.titles = new TitleReader({ projectsDir: o.claudeProjectsDir });
   }
 
   /** Cached for display only; concurrent callers share one run. A send never uses this (AD3). */
@@ -120,12 +125,18 @@ export class AgentDiscovery {
       execFile(this.claudeBin, ["agents", "--json"], { timeout: this.claudeTimeoutMs, maxBuffer: CLAUDE_MAX_BUFFER, windowsHide: true }, (err, stdout) => {
         if (err) return reject(err);
         try {
-          resolve(parseClaudeAgents(String(stdout)));
+          resolve(parseClaudeAgents(String(stdout)).map((a) => this.withTitle(a)));
         } catch (e) {
           reject(e);
         }
       });
     });
+  }
+
+  /** #137: the transcript title (custom, else ai), else the vendor name. A read failure only drops the title. */
+  private withTitle(a: AgentBase): AgentBase {
+    const title = pickTitle(this.titles.titles(a.cwd, a.sessionId), a.name);
+    return title ? { ...a, title } : a;
   }
 
   /** thread/loaded/list, then thread/read per thread. A failing read drops only that thread. */

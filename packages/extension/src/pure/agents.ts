@@ -33,6 +33,11 @@ export function formatAge(ms: number): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+/** #137: the docs section that explains how to connect a session so it can be messaged. */
+export const CONNECT_DOCS_URL = "https://github.com/nolanmak/tabagent/blob/main/docs/send-to-agent.md#connect-a-session";
+export const NOT_CONNECTED = "Not connected — can't message this session";
+export const CONNECT_HINT = "Connect it: update TabAgent and restart this session";
+
 /** Why a `none` agent cannot be sent to; matches the bridge's NO_ROUTE detail. */
 function noneReason(a: Agent): string {
   return a.status === "error" ? `This agent cannot take messages (${a.statusLabel ?? "error"})` : "No way to deliver to this agent";
@@ -42,19 +47,27 @@ export interface AgentRowView {
   id: string;
   vendor: AgentVendor;
   vendorLabel: string;
-  /** The vendor name, or `cwd basename · age` when it has none (§5). */
+  /** Primary label (#137): the session title, else the vendor name, else `cwd basename · age` (§5). */
   title: string;
+  /** A real title (a rename or a generated one), not just the vendor's auto name. */
+  titled: boolean;
   cwd: string;
   cwdBase: string;
   age: string;
+  startedAt: number;
   pid?: number;
   /** busy/idle, or the vendor's statusLabel when present. */
   status: string;
   route: AgentRoute;
   routeWords: string;
+  linked: boolean;
   sendable: boolean;
-  /** §7: "Start new session" for spawn targets. */
+  /** #137: an unlinked Claude session. It cannot be messaged; only an explicit new session is offered. */
+  notConnected: boolean;
+  /** The primary button's label. Always "Send": a spawn is never the primary action (#137). */
   actionLabel: string;
+  /** #137: label of the separate "Start a new session in <folder>" button (Claude with a cwd), else unset. */
+  spawnLabel?: string;
   /** Set when not sendable. */
   reason?: string;
   badges: string[];
@@ -65,25 +78,34 @@ export interface AgentRowView {
 export function agentRowView(a: Agent, now: number): AgentRowView {
   const cwdBase = cwdBasename(a.cwd);
   const age = formatAge(now - a.startedAt);
-  const sendable = a.delivery !== "none";
+  // An older bridge still lists unlinked Claude as `spawn`; treat it the same, so Send never spawns.
+  const notConnected = a.vendor === "claude" && !a.linked && (a.delivery === "none" || a.delivery === "spawn");
+  const sendable = !notConnected && a.delivery !== "none" && a.delivery !== "spawn";
   const badges: string[] = [];
   if (a.linked) badges.push("linked");
   if (a.canDriveTab) badges.push("can drive tab");
+  const title = a.title?.trim() || a.name?.trim() || `${cwdBase} · ${age}`;
+  const reason = notConnected ? NOT_CONNECTED : sendable ? undefined : noneReason(a);
   return {
     id: a.id,
     vendor: a.vendor,
     vendorLabel: VENDOR_LABEL[a.vendor],
-    title: a.name?.trim() ? a.name : `${cwdBase} · ${age}`,
+    title,
+    titled: !!a.title?.trim() && a.title.trim() !== a.name?.trim(),
     cwd: a.cwd,
     cwdBase,
     age,
+    startedAt: a.startedAt,
     pid: a.pid,
     status: a.statusLabel || a.status,
     route: a.delivery,
-    routeWords: ROUTE_WORDS[a.delivery],
+    routeWords: notConnected ? NOT_CONNECTED : ROUTE_WORDS[a.delivery],
+    linked: a.linked,
     sendable,
-    actionLabel: a.delivery === "spawn" ? "Start new session" : "Send",
-    reason: sendable ? undefined : noneReason(a),
+    notConnected,
+    actionLabel: "Send",
+    spawnLabel: a.vendor === "claude" && a.cwd ? `Start a new session in ${cwdBase}${a.linked ? " instead" : ""}` : undefined,
+    reason,
     badges,
     canDriveTab: a.canDriveTab,
   };
@@ -94,17 +116,36 @@ export function shareTabLabel(v: AgentRowView | null): string {
   return v?.canDriveTab && (v.route === "piggyback" || v.route === "channel") ? "Share this tab (agent can use it)" : "Share this tab's title and link";
 }
 
-/** §7: agents in a piggyback (or channel) state also offer "Start new session instead" (forceSpawn, Claude only). */
-export function spawnInsteadOffered(v: AgentRowView | null): boolean {
-  return !!v && v.vendor === "claude" && (v.route === "piggyback" || v.route === "channel");
-}
-
 /** One clickable row (a listbox option). Every agent-supplied string goes through esc(). */
 export function agentRowHtml(v: AgentRowView, selected: boolean): string {
   const meta = [v.cwdBase, v.age, v.pid != null ? `pid ${v.pid}` : null, v.status].filter((x) => x != null).map(esc).join(" · ");
   const badges = v.badges.map((b) => `<span class="badge">${esc(b)}</span>`).join("");
-  const route = v.sendable ? `<span class="agent-route">${esc(v.routeWords)}</span>` : `<span class="err">${esc(v.reason)}</span>`;
+  const route = v.sendable
+    ? `<span class="agent-route">${esc(v.routeWords)}</span>`
+    : v.notConnected
+      ? `<span class="err">${esc(NOT_CONNECTED)}</span><br><a class="connect-hint" href="${esc(CONNECT_DOCS_URL)}" target="_blank" rel="noopener noreferrer">${esc(CONNECT_HINT)}</a>`
+      : `<span class="err">${esc(v.reason)}</span>`;
   return `<li class="agent${v.sendable ? "" : " agent-none"}${selected ? " selected" : ""}" role="option" tabindex="0" aria-selected="${selected}" data-agent-id="${esc(v.id)}" title="${esc(v.cwd)}"><span><span class="vendor vendor-${esc(v.vendor)}">${esc(v.vendorLabel)}</span> <b>${esc(v.title)}</b>${badges}<br><span class="muted small">${meta}</span><br><span class="small">${route}</span></span></li>`;
+}
+
+/**
+ * #137: linked agents first, then the most recently started. Sessions that cannot be messaged and have no
+ * real title go in `other`, shown collapsed, so the list stays short.
+ */
+export function groupAgents(views: AgentRowView[]): { main: AgentRowView[]; other: AgentRowView[] } {
+  const sorted = views.slice().sort((a, b) => Number(b.linked) - Number(a.linked) || b.startedAt - a.startedAt);
+  const collapsed = (v: AgentRowView) => v.notConnected && !v.titled;
+  return { main: sorted.filter((v) => !collapsed(v)), other: sorted.filter(collapsed) };
+}
+
+/** The list's rows; collapsed sessions sit under an "N other sessions" disclosure, open when asked or selected. */
+export function agentListHtml(views: AgentRowView[], selectedId: string | null, otherOpen: boolean): string {
+  const { main, other } = groupAgents(views);
+  const rows = main.map((v) => agentRowHtml(v, v.id === selectedId)).join("");
+  if (!other.length) return rows;
+  const open = otherOpen || other.some((v) => v.id === selectedId);
+  const label = `${other.length} other session${other.length === 1 ? "" : "s"}`;
+  return `${rows}<li class="agents-other"><details${open ? " open" : ""}><summary>${label}</summary><ul class="list agents" role="group">${other.map((v) => agentRowHtml(v, v.id === selectedId)).join("")}</ul></details></li>`;
 }
 
 /** A source that could not be read is a muted note, never an error (§5). */
@@ -138,6 +179,9 @@ export interface ComposerState {
   label: string;
   /** Why Send is disabled, or "". */
   note: string;
+  /** #137: label of the separate Start a new session button, or null when it is hidden. */
+  spawnLabel: string | null;
+  canSpawn: boolean;
 }
 
 const FIELD_WORDS = { prompt: "message", title: "tab title", url: "tab URL", selection: "selection" } as const;
@@ -145,22 +189,30 @@ const n = (x: number) => x.toLocaleString("en-US");
 
 /** `selection` is the selection that would be sent (only with a shared tab), or null. */
 export function composerState(c: { agent: AgentRowView | null; prompt: string; share: SharedTab | null; selection?: string | null }): ComposerState {
-  if (!c.agent) return { canSend: false, label: "Send", note: "Select an agent above." };
-  const label = c.agent.actionLabel;
-  if (!c.agent.sendable) return { canSend: false, label, note: c.agent.reason ?? "" };
-  // AD13: pre-check; never truncate.
+  if (!c.agent) return { canSend: false, label: "Send", note: "Select an agent above.", spawnLabel: null, canSpawn: false };
+  const v = c.agent;
+  const spawnLabel = v.spawnLabel ?? null;
+  // AD13: pre-check; never truncate. The limits apply to a new session too.
   const over = agentSendOverLimit({ prompt: c.prompt, title: c.share?.title, url: c.share?.url, selection: c.share ? (c.selection ?? undefined) : undefined });
+  const ready = !over && !!c.prompt.trim();
+  let note = "";
   if (over) {
     const tail = over.field === "prompt" ? "" : over.field === "selection" ? " Untick Include selection to send without it." : " Untick Share this tab to send without it.";
-    return { canSend: false, label, note: `The ${FIELD_WORDS[over.field]} is ${n(over.length)} characters; the limit is ${n(over.limit)}.${tail}` };
-  }
-  if (!c.prompt.trim()) return { canSend: false, label, note: "" };
-  return { canSend: true, label, note: "" };
+    note = `The ${FIELD_WORDS[over.field]} is ${n(over.length)} characters; the limit is ${n(over.limit)}.${tail}`;
+  } else if (v.notConnected) {
+    note = `This session is not connected to TabAgent, so it can't get messages.${spawnLabel ? ` You can start a new session in ${v.cwdBase} instead.` : ""}`;
+  } else if (!v.sendable) note = v.reason ?? "";
+  return { canSend: v.sendable && ready, label: v.actionLabel, note, spawnLabel, canSpawn: !!spawnLabel && ready };
+}
+
+/** The feed line's name and route for a send. A new session is named by its folder, not the agent (#137). */
+export function sendTarget(v: AgentRowView, forceSpawn: boolean): { agentName: string; route: AgentRoute } {
+  return forceSpawn ? { agentName: `New session in ${v.cwdBase}`, route: "spawn" } : { agentName: v.title, route: v.route };
 }
 
 /**
  * The selection rides with the tab (AD12): the bridge composes it into the page paragraph, never alone.
- * `forceSpawn` is "Start new session instead" (§7).
+ * `forceSpawn` only from the explicit Start a new session button (#137); it is omitted otherwise.
  */
 export function buildAgentSend(c: { requestId: string; agentId: string; prompt: string; share: SharedTab | null; selection?: string | null; forceSpawn?: boolean }) {
   const base = { type: "ui.agent_send" as const, requestId: c.requestId, agentId: c.agentId, prompt: c.prompt, ...(c.forceSpawn ? { forceSpawn: true as const } : {}) };

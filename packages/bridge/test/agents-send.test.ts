@@ -148,11 +148,24 @@ describe("queue route (Codex, AD10)", () => {
 });
 
 describe("spawn route (claude --bg, §6)", () => {
+  it("#137: a plain send to an unlinked Claude session never spawns: failed NO_ROUTE, claude --bg never runs", async () => {
+    claude.set("bg.out", "backgrounded · 0badc0de\n");
+    await boot();
+    const r = await send({ requestId: "r-plain", agentId: "claude:10:1000", prompt: "Hello there" });
+    expect(r).toMatchObject({ requestId: "r-plain", route: "none", state: "failed", code: "NO_ROUTE" });
+    expect(r.detail).toContain("not connected to TabAgent");
+    expect(claude.read("bg.text")).toBeNull();
+    expect(claude.calls().some((c) => c.startsWith("--bg"))).toBe(false);
+    expect(await send({ agentId: "claude:10:1000", forceSpawn: false })).toMatchObject({ route: "none", code: "NO_ROUTE" });
+    expect(claude.read("bg.text")).toBeNull();
+    expect(auditEvents()[0].data).toMatchObject({ requestId: "r-plain", route: "none", state: "failed" });
+  });
+
   it("started with the parsed id; argv is --bg <composed text>; cwd is the agent's cwd", async () => {
     claude.set("bg.out", "Starting…\nbackgrounded · 0badc0de\nclaude attach 0badc0de\n");
     await boot();
-    const r = await send({ requestId: "r-sp", agentId: "claude:10:1000", prompt: "Summarise", ...page });
-    expect(r).toEqual({ type: "agent.sent", requestId: "r-sp", route: "spawn", state: "started", detail: "Started background session 0badc0de. Attach with: claude attach 0badc0de" });
+    const r = await send({ requestId: "r-sp", agentId: "claude:10:1000", forceSpawn: true, prompt: "Summarise", ...page });
+    expect(r).toEqual({ type: "agent.sent", requestId: "r-sp", route: "spawn", state: "started", detail: `Started background session 0badc0de in ${claude.dir}. Attach with: claude attach 0badc0de` });
     const text = claude.read("bg.text")!;
     expect(text.startsWith("[TabAgent: message from the user via the side panel]\nSummarise\n\nThe user was looking at this page")).toBe(true);
     expect(realpathSync(claude.read("bg.cwd")!.trim())).toBe(realpathSync(claude.dir));
@@ -163,7 +176,7 @@ describe("spawn route (claude --bg, §6)", () => {
     claude.set("bg.err", "Workspace not trusted. Run `claude` in /x once and accept the trust prompt, then retry.\n");
     claude.set("bg.exit", 1);
     await boot();
-    expect(await send({ agentId: "claude:10:1000" })).toMatchObject({
+    expect(await send({ agentId: "claude:10:1000", forceSpawn: true })).toMatchObject({
       route: "spawn",
       state: "failed",
       code: "WORKSPACE_UNTRUSTED",
@@ -175,19 +188,19 @@ describe("spawn route (claude --bg, §6)", () => {
     claude.set("bg.err", "kaboom\n");
     claude.set("bg.exit", 2);
     await boot();
-    expect(await send({ agentId: "claude:10:1000" })).toMatchObject({ route: "spawn", state: "failed", code: "SPAWN_FAILED", detail: "kaboom" });
+    expect(await send({ agentId: "claude:10:1000", forceSpawn: true })).toMatchObject({ route: "spawn", state: "failed", code: "SPAWN_FAILED", detail: "kaboom" });
   });
 
   it("spawn timeout -> failed SPAWN_FAILED", async () => {
     claude.set("bg.sleep", 3);
     await boot({ spawnTimeoutMs: 300 });
-    expect(await send({ agentId: "claude:10:1000" })).toMatchObject({ route: "spawn", state: "failed", code: "SPAWN_FAILED" });
+    expect(await send({ agentId: "claude:10:1000", forceSpawn: true })).toMatchObject({ route: "spawn", state: "failed", code: "SPAWN_FAILED" });
   });
 
   it("the agent's cwd no longer exists -> failed NO_CWD", async () => {
     claude.agents([claudeRecord(10, 1000, { cwd: join(claude.dir, "deleted") })]);
     await boot();
-    expect(await send({ agentId: "claude:10:1000" })).toMatchObject({ route: "spawn", state: "failed", code: "NO_CWD" });
+    expect(await send({ agentId: "claude:10:1000", forceSpawn: true })).toMatchObject({ route: "spawn", state: "failed", code: "NO_CWD" });
     expect(claude.read("bg.text")).toBeNull();
   });
 

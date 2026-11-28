@@ -169,13 +169,13 @@ test("P2b tab grant: Send with the tab attaches it with no prompt, site policy s
       .toMatchObject({ linked: true, canDriveTab: true, delivery: "piggyback" });
     await watchStatus(w);
 
-    // 0. The composer is truthful about what this target gets, and offers "Start new session instead".
+    // 0. The composer is truthful about what this target gets, and offers "Start a new session in <folder> instead".
     const p = await h.openPanel();
     opened.push(p);
     await expect(p.locator("#agentShareLabel")).toHaveText("Share this tab's title and link");
     await p.locator(`#agents [data-agent-id="${agentId}"]`).click({ timeout: 15_000 });
     await expect(p.locator("#agentShareLabel")).toHaveText("Share this tab (agent can use it)");
-    await expect(p.locator("#agentSpawnInstead")).toBeVisible();
+    await expect(p.locator("#agentSpawn")).toHaveText(/^Start a new session in .* instead$/);
     await p.close();
 
     // 1. Send with the tab: the grant attaches it to the agent's group, with no attach (f) prompt.

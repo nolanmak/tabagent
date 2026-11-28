@@ -161,7 +161,7 @@ describe("GET /v1/inbox (AD4, AD5)", () => {
     expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: true, canDriveTab: true, delivery: "piggyback" });
     s.close();
     await until(() => d.agents.inbox.size === 0);
-    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: false, canDriveTab: false, delivery: "spawn" });
+    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: false, canDriveTab: false, delivery: "none" });
   });
   it("no agent pid header -> registered but links nothing (e.g. Cursor); unlinked streams are not listed", async () => {
     await boot();
@@ -262,8 +262,11 @@ describe("piggyback route (AD6, AD7, AD8)", () => {
     await send({ requestId: "g1" });
     s.close();
     expect(await status("g1")).toMatchObject({ state: "expired" });
+    // #137: once unlinked, a plain send never spawns; only an explicit forceSpawn does.
     claude.set("bg.out", "backgrounded · 0badc0de\n");
-    expect(await send({ requestId: "g2" })).toMatchObject({ route: "spawn", state: "started" });
+    expect(await send({ requestId: "g2" })).toMatchObject({ route: "none", state: "failed", code: "NO_ROUTE" });
+    expect(claude.read("bg.text")).toBeNull();
+    expect(await send({ requestId: "g3", forceSpawn: true })).toMatchObject({ route: "spawn", state: "started" });
   });
   it("a replaced stream keeps the held messages (same key)", async () => {
     await boot();
@@ -376,7 +379,7 @@ describe("tab grant on Send (AD11, AD12, AD15, §6 step 4)", () => {
     await send({ requestId: "ng1", includeTab: false });
     await send({ requestId: "ng2", includeTab: true, title: "Docs", url: "https://docs.test/a" });
     claude.set("bg.out", "backgrounded · 0badc0de\n");
-    expect(await send({ requestId: "ng3", ...page, agentId: "claude:77:1000" })).toMatchObject({ route: "spawn", state: "started" });
+    expect(await send({ requestId: "ng3", ...page, agentId: "claude:77:1000", forceSpawn: true })).toMatchObject({ route: "spawn", state: "started" });
     expect(claude.read("bg.text")).toContain(NO_TAB);
     expect(ext.msgs.some((m) => m.type === "agent.grant")).toBe(false);
     expect((await audits("ng1"))[0].grant).toBeUndefined();
