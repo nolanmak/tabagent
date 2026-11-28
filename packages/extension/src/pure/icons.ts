@@ -13,6 +13,7 @@ const PATHS = {
   wrench: '<path d="M10 2.8a3 3 0 0 0-3.4 3.9L2.8 10.5l2.7 2.7 3.8-3.8A3 3 0 0 0 13.2 6l-1.8 1.8-2-.6-.6-2z"/>',
   reply: '<path d="M3.5 3v4.5A2.5 2.5 0 0 0 6 10h7M10 7l3 3-3 3"/>',
   chevron: '<path d="m6 4 4 4-4 4"/>',
+  chevronDown: '<path d="m4 6 4 4 4-4"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -169,6 +169,19 @@ test("design screenshots", async () => {
     await shoot(chat, "chat", false);
     await chat.setViewportSize({ width: 420, height: 800 });
     await shoot(chat, "chat-narrow", false);
+    // #159: the header's session picker open on a narrow window (the rail is hidden).
+    await chat.locator("#pickerBtn").click();
+    await expect(chat.locator("#pickerList")).toBeVisible();
+    await shoot(chat, "chat-narrow-picker", false);
+    await chat.keyboard.press("Escape");
+    // #159: ↑ in the empty composer brings back the last message sent from this page.
+    await chat.locator("#input").fill("Also run the cart tests");
+    await chat.locator("#input").press("Enter");
+    await expect(chat.locator("#pending .pending")).toBeVisible();
+    await chat.locator("#input").press("ArrowUp");
+    await expect(chat.locator("#editBanner")).toBeVisible();
+    await shoot(chat, "chat-narrow-edit", false);
+    await chat.locator("#input").press("Escape");
     // A Remote Control only session: the not-connected card instead of the composer.
     const rc = await open(`${EXT}/chat.html?agent=${encodeURIComponent(`claude:4301:${rcStart}`)}`, 1100, 800);
     await expect(rc.locator("#card")).toContainText("isn't connected", { timeout: 15_000 });

@@ -14,6 +14,14 @@ the same version (see [docs/release.md](docs/release.md)).
   grants and has an "always allow texted/emailed codes" toggle
   ([#131](https://github.com/nolanmak/tabagent/issues/131)).
 
+### Agents
+
+- Chat page and panel polish: on narrow windows the header title opens a session picker; ↑ in an
+  empty message box edits the last message sent from the page; keyboard focus stays on the same
+  session when the list refreshes; Quick send for a connected session only offers Send; and
+  **Working…** clears as soon as the agent's final reply arrives
+  ([#159](https://github.com/nolanmak/tabagent/issues/159)).
+
 ## 0.2.0 (2026-11-27)
 
 `PROTOCOL_VERSION` is unchanged (1): every wire change since 0.1.0 is additive, so a 0.1.0 extension

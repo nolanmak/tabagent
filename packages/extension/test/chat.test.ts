@@ -2,7 +2,7 @@
 // safe Markdown and chat-tab reuse. Pure view logic.
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentEntry } from "@tabagent/protocol";
-import { atBottom, CHAT_MAX_ENTRIES, findSpawnedAgent, isHomeFolder, spawnFailureText, chatHeaderView, chatItemHtml, chatItems, chatReducer, composerMode, historyErrorText, initialChat, notConnectedCardHtml, pendingHtml, recentWebTabs, toolLine, type ChatState } from "../src/pure/chat";
+import { atBottom, CHAT_MAX_ENTRIES, CHAT_SENT_MAX, findSpawnedAgent, isHomeFolder, spawnFailureText, chatHeaderView, editBannerHtml, initialRecall, lastSent, recallReducer, shownBusy, turnSettled, chatItemHtml, chatItems, chatReducer, composerMode, historyErrorText, initialChat, notConnectedCardHtml, pendingHtml, recentWebTabs, toolLine, type ChatState } from "../src/pure/chat";
 import { chatAgentOf, findChatTab } from "../src/pure/chatTabs";
 import { renderMarkdown } from "../src/pure/markdown";
 
@@ -229,6 +229,125 @@ describe("renderMarkdown (escape first)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// #159: the busy indicator clears when the turn's final entry lands
+// ---------------------------------------------------------------------------
+
+const call = (uuid: string, id: string, name = "Bash"): AgentEntry => ({ uuid, ts: 3, role: "tool", tool: { name, summary: "npm test", id } });
+const result = (uuid: string, id: string): AgentEntry => ({ uuid, ts: 4, role: "tool", tool: { name: "Bash", summary: "ok", id, result: true } });
+
+describe("turnSettled", () => {
+  it("is true when the last entry is assistant text and no tool call is waiting for its result", () => {
+    expect(turnSettled([user("u", "go"), call("c", "t1"), result("r", "t1"), asst("a", "Done.")])).toBe(true);
+    expect(turnSettled([asst("a", "Hi")])).toBe(true);
+  });
+
+  it("is false while a tool call is pending, after a user message, or with nothing to go on", () => {
+    expect(turnSettled([user("u", "go"), asst("a", "Running it"), call("c", "t1")])).toBe(false);
+    expect(turnSettled([user("u", "go"), call("c", "t1"), asst("a", "still waiting on t1")])).toBe(false);
+    expect(turnSettled([asst("a", "Done."), user("u", "next")])).toBe(false);
+    expect(turnSettled([call("c", "t1"), result("r", "t1")])).toBe(false);
+    expect(turnSettled([])).toBe(false);
+    // An assistant entry with no text (a bare tool_use message) does not end the turn.
+    expect(turnSettled([{ uuid: "e", ts: 1, role: "assistant" }])).toBe(false);
+  });
+
+  it("only looks at the current turn: a result for an older page's call does not count as pending", () => {
+    expect(turnSettled([result("r", "old"), asst("a", "Done.")])).toBe(true);
+    expect(turnSettled([call("c0", "t0"), user("u", "go"), asst("a", "Done.")])).toBe(true);
+  });
+});
+
+describe("chatReducer turnDone", () => {
+  it("follows history and live entries, and a send from this page starts a new turn", () => {
+    let s = chatReducer(initialChat(), { type: "history", entries: [user("u", "go")], hasMore: false });
+    expect(s.turnDone).toBe(false);
+    s = chatReducer(s, { type: "entries", entries: [call("c", "t1")] });
+    expect(s.turnDone).toBe(false);
+    s = chatReducer(s, { type: "entries", entries: [result("r", "t1"), asst("a", "Done.")] });
+    expect(s.turnDone).toBe(true);
+    s = chatReducer(s, { type: "sending", requestId: "q", text: "more", ts: 9 });
+    expect(s.turnDone).toBe(false);
+    s = chatReducer(s, { type: "entries", entries: [user("u2", "more", true), asst("a2", "Sure.")] });
+    expect(s.turnDone).toBe(true);
+    // The user typing in the terminal starts another turn.
+    expect(chatReducer(s, { type: "entries", entries: [user("u3", "from terminal")] }).turnDone).toBe(false);
+    // A page that opens on a finished turn knows it at once.
+    expect(chatReducer(initialChat(), { type: "history", entries: [user("u", "go"), asst("a", "Done.")], hasMore: false }).turnDone).toBe(true);
+    // Older pages do not change it.
+    expect(chatReducer(s, { type: "history", entries: [user("o", "old")], hasMore: false, older: true }).turnDone).toBe(true);
+  });
+});
+
+describe("shownBusy and the header", () => {
+  it("busy only while the agent says so and the turn has not visibly ended", () => {
+    expect(shownBusy(true, false)).toBe(true);
+    expect(shownBusy(true, true)).toBe(false);
+    expect(shownBusy(false, false)).toBe(false);
+  });
+
+  it("chatHeaderView drops Working… once the turn is done, even if the polled status lags", () => {
+    expect(chatHeaderView(agent({ status: "busy" }), Date.now(), { turnDone: true })).toMatchObject({ busy: false, statusText: "Idle" });
+    expect(chatHeaderView(agent({ status: "busy" }), Date.now(), { turnDone: false })).toMatchObject({ busy: true, statusText: "Working…" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #159: ↑ in an empty composer edits the last message sent from this page
+// ---------------------------------------------------------------------------
+
+describe("sent history", () => {
+  it("remembers what this page sent (capped), newest last", () => {
+    let s = initialChat();
+    expect(lastSent(s)).toBeNull();
+    s = chatReducer(s, { type: "sending", requestId: "a", text: "first", ts: 1 });
+    s = chatReducer(s, { type: "sending", requestId: "b", text: "second", ts: 2 });
+    expect(lastSent(s)).toBe("second");
+    for (let i = 0; i < CHAT_SENT_MAX + 5; i++) s = chatReducer(s, { type: "sending", requestId: `r${i}`, text: `m${i}`, ts: i });
+    expect(s.sent).toHaveLength(CHAT_SENT_MAX);
+    expect(lastSent(s)).toBe(`m${CHAT_SENT_MAX + 4}`);
+    // A history reload keeps it (it is this page's own record, not the transcript's).
+    expect(lastSent(chatReducer(s, { type: "history", entries: [], hasMore: false }))).toBe(`m${CHAT_SENT_MAX + 4}`);
+  });
+});
+
+describe("recallReducer", () => {
+  const key = (k: string, value: string, o: { modified?: boolean; composing?: boolean; last?: string | null } = {}) => ({ type: "key" as const, key: k, value, modified: !!o.modified, composing: !!o.composing, lastSent: o.last === undefined ? "Run the tests" : o.last });
+
+  it("↑ in an empty composer puts the last sent message back and enters edit mode", () => {
+    expect(recallReducer(initialRecall, key("ArrowUp", ""))).toEqual({ state: { editing: true }, value: "Run the tests", handled: true });
+  });
+
+  it("↑ does nothing with text in the composer, with a modifier, while composing, or with nothing sent", () => {
+    expect(recallReducer(initialRecall, key("ArrowUp", "draft"))).toEqual({ state: initialRecall, handled: false });
+    expect(recallReducer(initialRecall, key("ArrowUp", "", { modified: true })).handled).toBe(false);
+    expect(recallReducer(initialRecall, key("ArrowUp", "", { composing: true })).handled).toBe(false);
+    expect(recallReducer(initialRecall, key("ArrowUp", "", { last: null })).handled).toBe(false);
+  });
+
+  it("Esc while editing cancels: the composer empties and edit mode ends; Esc otherwise is not handled", () => {
+    expect(recallReducer({ editing: true }, key("Escape", "Run the tests, edited"))).toEqual({ state: initialRecall, value: "", handled: true });
+    expect(recallReducer(initialRecall, key("Escape", "draft"))).toEqual({ state: initialRecall, handled: false });
+    expect(recallReducer({ editing: true }, key("Escape", "x", { composing: true })).handled).toBe(false);
+  });
+
+  it("other keys pass through; sending ends edit mode (it is a new message, not a rewrite)", () => {
+    expect(recallReducer({ editing: true }, key("a", "x"))).toEqual({ state: { editing: true }, handled: false });
+    expect(recallReducer({ editing: true }, { type: "sent" })).toEqual({ state: initialRecall, handled: false });
+  });
+
+  it("clearing the composer by hand ends edit mode; typing keeps it", () => {
+    expect(recallReducer({ editing: true }, { type: "input", value: "" })).toEqual({ state: initialRecall, handled: false });
+    expect(recallReducer({ editing: true }, { type: "input", value: "Run the tests now" })).toEqual({ state: { editing: true }, handled: false });
+  });
+
+  it("the edit banner says what is happening and how to cancel", () => {
+    const html = editBannerHtml();
+    expect(html).toContain("Editing your last message");
+    expect(html).toContain("<kbd>Esc</kbd> to cancel");
+    expect(html).toContain("<svg");
+  });
+});
 
 describe("starting a session from the chat window (user-reported bugs)", () => {
   it("knows a home folder, where Claude Code refuses background sessions", () => {

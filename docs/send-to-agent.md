@@ -30,13 +30,18 @@ Clicking a session opens `chat.html` in a new tab (or switches to it if it is al
   load first; **Load earlier messages** goes further back.
 - **Live replies.** New entries appear within about a second of Claude Code writing them. If you have
   scrolled up, a **New messages ↓** button appears instead of the page jumping. While the agent is
-  working the header says **Working…** and a typing indicator shows at the bottom.
+  working the header says **Working…** and a typing indicator shows at the bottom; it clears as soon as
+  the agent's final reply for the turn arrives.
+- **Switching sessions.** Wide windows list every session in a rail on the left. On narrow windows the
+  session title in the header is a button that opens the same list (arrow keys, **Enter** to switch,
+  **Esc** to close).
 - **Sending.** Type in the box at the bottom. **Enter** sends, **Shift+Enter** starts a new line.
   **Share a tab** optionally includes one of your open tabs (its title and link; a session that can use
   the browser also gets the tab itself). Your message shows at once as *Sending…*, then *Sent · waiting
   for the agent* (instant) or *Waiting for its next browser action*, and it settles into the
   conversation once the agent has received it. A message that could not be sent stays, with **Edit and
-  resend**.
+  resend**. With the box empty, **↑** puts the last message you sent from this page back in the box to
+  edit; sending it sends a new message (the earlier one stays as it was), and **Esc** cancels.
 - **Not connected.** The message box is replaced by a card. If the session runs with Remote Control,
   **Open in Claude** is the main button. The card also explains how to connect the session to TabAgent,
   and offers **Start a new session in \<folder\>**.
@@ -101,8 +106,9 @@ Codex threads hosted by the Codex app-server do not need linking; their messages
 
 ## Start a new session instead
 
-For a Claude Code session, Quick send and the chat page's not-connected card have a separate **Start a
-new session in \<folder\>** button. It never runs when you press Send. It starts a new background session (`claude --bg`) in that
-session's folder with your message as its first prompt. The feed line says where it started and how to
+For a Claude Code session that is not connected, the chat page's card has a separate **Start a new
+session in \<folder\>** button (connected sessions only offer **Send**, and Send never starts one). It
+starts a new background session (`claude --bg`) in that session's folder with your message as its first
+prompt. The feed line says where it started and how to
 attach to it, for example `claude attach 1a2b3c4d`. Claude Code refuses to start a background session in
 a folder whose trust prompt you have never accepted; run `claude` there once first.

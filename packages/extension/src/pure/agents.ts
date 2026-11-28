@@ -89,7 +89,7 @@ export interface AgentRowView {
   notConnected: boolean;
   /** The primary button's label. Always "Send": a spawn is never the primary action (#137). */
   actionLabel: string;
-  /** #137: label of the separate "Start a new session in <folder>" button (Claude with a cwd), else unset. */
+  /** #137/#159: label of the separate "Start a new session in <folder>" button (not-connected Claude with a cwd), else unset. */
   spawnLabel?: string;
   /** Set when not sendable. */
   reason?: string;
@@ -132,7 +132,8 @@ export function agentRowView(a: Agent, now: number): AgentRowView {
     sendable,
     notConnected,
     actionLabel: "Send",
-    spawnLabel: a.vendor === "claude" && a.cwd ? `Start a new session in ${cwdBase}${a.linked ? " instead" : ""}` : undefined,
+    // #159: the chat page's copy. Only a session that can't be messaged offers a new one; a connected one is Send.
+    spawnLabel: notConnected && a.cwd ? `Start a new session in ${cwdBase}` : undefined,
     reason,
     badges,
     canDriveTab: a.canDriveTab,
