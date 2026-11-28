@@ -110,6 +110,12 @@ export interface RouterDeps<S = unknown> {
    * prompt) and snapshot the state the prompt is shown against, so a stale approval is rejected.
    */
   policySnapshot?(tool: string, params: Record<string, unknown>): Promise<string | undefined>;
+  /**
+   * session.kill_all (#106): engage the kill switch. Stopping can only make things safer, so it runs
+   * with no session, no prompt and no token-cap check, and answers even when already paused. There is
+   * deliberately no resume counterpart: resuming is panel-only.
+   */
+  killAll?(meta: SessionMetaLike): Promise<{ status: "killed"; alreadyPaused: boolean }>;
   now?(): number;
 }
 
@@ -237,6 +243,13 @@ export function createRouter<S>(deps: RouterDeps<S>) {
       toolName = tool.name;
       params = deps.validate(tool, cmd.params);
       if (tool.name === "tabs") action = String(params.action);
+      if (tool.name === "session.kill_all") {
+        if (!deps.killAll) throw new RouterError("UNSUPPORTED", "This extension version has no session.kill_all; use the kill switch in the side panel");
+        // Not in flight: the kill aborts every in-flight command, and this one must still answer.
+        inflight.delete(cmd.id);
+        setInflight();
+        return await finish(true, await deps.killAll(cmd.session));
+      }
       if (await deps.isPaused()) throw new RouterError("KILLED", "The user stopped all agents with the TabAgent kill switch", "Ask the user to press Resume in the TabAgent side panel.");
 
       const req: Requirements = requirementsFor(tool, params);

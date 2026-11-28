@@ -366,7 +366,7 @@ describe("auth.code", () => {
     const pg = codePage();
     const e = fakeEnv({ accounts: [GH("abc", "n@gmail.com", { hasTotp: true })], secrets: { totp: "123456" } });
     const r = await authCode(e.env, pg.page, {}, newMemory());
-    expect(r).toEqual({ filled: true, source: "totp", submitted: true });
+    expect(r).toMatchObject({ filled: true, source: "totp", submitted: true, next: expect.any(String) });
     expect(pg.values.get("e1")).toBe("123456");
     expect(e.calls.secret).toEqual(["1password:abc:totp"]);
   });
@@ -928,7 +928,35 @@ describe("auth.code on a post-sign-up confirm page (#113)", () => {
     const mem = newMemory();
     mem.lastLogin.set(5, 1_000_000 - 30_000); // the sign-up just ran on this tab
     const r = await authCode(e.env, pg.page, { source: "email", from: "github.com" }, mem);
-    expect(r).toEqual({ filled: true, source: "email", submitted: true });
+    expect(r).toMatchObject({ filled: true, source: "email", submitted: true, next: expect.any(String) });
     expect(pg.values.get("e1")).toBe("604213");
+  });
+});
+
+
+describe("auth.code reports next (#79 live QA)", () => {
+  it("after submitting a code onto a Google security interstitial, next is handoff_required", async () => {
+    const G = "https://accounts.google.com";
+    const pg = fakePage([
+      { url: `${G}/v3/signin/challenge/ipp/verify`, fields: fields({ autocomplete: "one-time-code" }) },
+      { url: `${G}/u/0/signin/suspiciousactivity`, fields: [] },
+    ]);
+    const e = fakeEnv({ enabled: [G], sms: async () => "123456", codeSources: [{ name: "sms", state: "available" }] });
+    const r = await authCode(e.env, pg.page, { source: "sms" }, newMemory());
+    expect(r).toMatchObject({ filled: true, submitted: true, next: "handoff_required" });
+  });
+  it("after submitting a code that lands back on the site, next is done", async () => {
+    const pg = fakePage([
+      { url: "https://github.com/2fa", fields: fields({ autocomplete: "one-time-code" }) },
+      { url: "https://github.com/", fields: fields({ name: "q", label: "Search" }) },
+    ]);
+    const e = fakeEnv({ email: async () => "123456" });
+    const r = await authCode(e.env, pg.page, { source: "email" }, newMemory());
+    expect(r.next).toBe("done");
+  });
+  it("without submit, next is unknown", async () => {
+    const pg = fakePage([{ url: "https://github.com/2fa", fields: fields({ autocomplete: "one-time-code" }) }]);
+    const r = await authCode(fakeEnv({ email: async () => "123456" }).env, pg.page, { source: "email", submit: false }, newMemory());
+    expect(r.next).toBe("unknown");
   });
 });

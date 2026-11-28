@@ -220,9 +220,10 @@ export function resolve(state: PolicyState, req: PolicyRequest): Decision {
 }
 
 /**
- * Sign-in is never automated on banking / password-manager hosts, even if the user edits the denylist (M6).
- * accounts.google.com is not here (#81): Google sign-in is unlockable by the user, who must remove it from the
- * seeded denylist and enable sign-in for that origin. Google account pages stay in VAULT_DENY_HOSTS (DA12).
+ * Sign-in is never automated on password-manager hosts, even if the user edits the denylist (M6).
+ * Banks and accounts.google.com are not here (#81, #100): their sign-in is unlockable by the user, who must
+ * remove the host from the seeded denylist and enable sign-in for that origin; every sign-in still asks
+ * unless the user ticked "always" for that account. Google account pages stay in VAULT_DENY_HOSTS (DA12).
  */
 /** Origins where sign-in is on unless the user turned it off (#79). The denylist still gates them. */
 export const AUTH_DEFAULT_ON_ORIGINS = ["https://accounts.google.com"];
@@ -231,7 +232,7 @@ export function authEnabled(e: { auth?: boolean } | undefined, origin: string, y
   return e?.auth ?? (yolo || AUTH_DEFAULT_ON_ORIGINS.includes(origin));
 }
 
-export const AUTH_DENY_HOSTS = ["*.chase.com", "*.bankofamerica.com", "*.wellsfargo.com", "*.citi.com", "*.capitalone.com", "*.mercury.com", "*.paypal.com", "*.1password.com", "*.lastpass.com", "*.bitwarden.com", "*.dashlane.com", "*.keepersecurity.com"];
+export const AUTH_DENY_HOSTS = ["*.1password.com", "*.lastpass.com", "*.bitwarden.com", "*.dashlane.com", "*.keepersecurity.com"];
 
 /** Sign-in can never be automated for this URL's host: AUTH_DENY_HOSTS, vault hosts or the user's denylist. */
 export function authHostBlocked(url: string, denylist: readonly string[]): boolean {

@@ -41,6 +41,8 @@ test("side panel never scrolls horizontally with long content", async ({ h }) =>
       document.getElementById("agents")!.innerHTML = rows;
       document.getElementById("agentFeed")!.innerHTML = feed;
       document.getElementById("agentTabTitle")!.textContent = `A very long tab title ${long}`;
+      // The selection preview (#92) is truncated in display, but must also wrap an unbroken run.
+      document.getElementById("agentSelectionPreview")!.textContent = `“${long.slice(0, 79)}…”`;
       document.getElementById("agentComposerNote")!.textContent = "The tab URL is 2,001 characters; the limit is 2,000. Untick Share this tab to send without it.";
       document.querySelectorAll("details").forEach((d) => ((d as HTMLDetailsElement).open = true));
     },

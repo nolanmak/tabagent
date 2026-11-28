@@ -46,12 +46,15 @@ describe("site change validation (#104)", () => {
   });
 
   it.each([
-    ["https://www.chase.com", /never signs in/i],
     ["https://my.1password.com", /never signs in|password/i],
   ])("refuses an automated-sign-in-blocked host %s", (origin, msg) => {
     const e = code(() => checkSiteChange(state({}, []), origin, { auth: true }));
     expect(e.code).toBe("PERMISSION_DENIED");
     expect(e.message).toMatch(msg);
+  });
+
+  it("lets a bank off the denylist be requested (#101)", () => {
+    expect(() => checkSiteChange(state({}, []), "https://www.chase.com", { auth: true })).not.toThrow();
   });
 
   it.each(["https://passwords.google.com", "https://mail.google.com", "https://vault.bitwarden.eu"])("refuses the vault host %s whatever the change", (origin) => {

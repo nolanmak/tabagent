@@ -201,10 +201,19 @@ describe("auth category g (M6)", () => {
     const st = applySensitiveAnswer(on(), A, "a", "always");
     expect(resolve({ ...st, devAllowSensitive: true }, req({ sensitive: "g", accountId: "x" })).decision).toBe("ask");
   });
-  it("banking hosts stay denied for auth even when enabled and removed from the denylist", () => {
-    const o = "https://www.chase.com";
+  it("banking sign-in (#100): asks once removed from the denylist and enabled; refused otherwise", () => {
+    const o = "https://app.mercury.com";
+    const on = base({ denylist: [], sites: { [o]: { policy: "full", auth: true } } });
+    expect(resolve(on, req({ url: `${o}/login`, sensitive: "g", accountId: "x" })).decision).toBe("ask");
+    const listed = base({ denylist: ["*.mercury.com"], sites: { [o]: { policy: "full", auth: true } } });
+    expect(resolve(listed, req({ url: `${o}/login`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
+    const off = base({ denylist: [], sites: { [o]: { policy: "full" } } });
+    expect(resolve(off, req({ url: `${o}/login`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("not enabled") });
+  });
+  it("password-manager hosts stay denied for auth even when enabled and removed from the denylist", () => {
+    const o = "https://my.1password.com";
     const st = base({ denylist: [], sites: { [o]: { policy: "full", auth: true } } });
-    expect(resolve(st, req({ url: `${o}/login`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("never signs in") });
+    expect(resolve(st, req({ url: `${o}/signin`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny" });
   });
   it("Google sign-in (#81): allowed once not denylisted, enabled and policy act; refused otherwise", () => {
     const o = "https://accounts.google.com";

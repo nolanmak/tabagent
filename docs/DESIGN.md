@@ -173,7 +173,8 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
   state: in-flight commands abort with `KILLED`, pending prompts drop, the
   debugger detaches from every tab and allow-once grants clear. Tab groups and
   stored policies stay. Every later command returns `KILLED` until the user
-  clicks Resume. Kill and resume reach the bridge as audit events.
+  clicks Resume. Kill and resume reach the bridge as audit events. Agents can
+  kill (`session.kill_all`, `tabagent kill`) but never resume (#106).
 
 ## Protocol (D13–D15, D30)
 
@@ -418,8 +419,8 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   backstop.
 - **Denylist.** `chrome://`, extension pages, the Web Store, and a seeded,
   user-editable list (password managers, banking, Google sign-in) are refused.
-  Banking and password-manager hosts are also hard-blocked for the auth tools;
-  Google sign-in is not (the user can unlock it, #79).
+  Password-manager hosts are also hard-blocked for the auth tools; Google and
+  banking sign-in are not (the user can unlock them, #79, #100).
 - **Agent-requested policy changes (category p, #67, #104).** MCP never writes
   extension settings. A `full`-level caller can only *request* an exact change,
   and the extension applies it after a visible one-time approval in the side
@@ -434,13 +435,23 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   is on by default (#110), that stores an explicit `auth: false`). Before the prompt, the
   router asks the extension to check the request and snapshot the state it will
   be shown against. A site change on a hard-denied, never-reachable (vault),
-  banking/password-manager (auth-blocked) or denylisted host is refused there
+  password-manager (auth-blocked) or denylisted host is refused there
   without a prompt; the denylisted case hints to request a denylist change
   first. After approval the handler re-reads settings and refuses with
   `BAD_REQUEST` if the snapshot no longer matches (a stale approval). Category
   p has no "Always" button, cannot be pre-approved, and is not skipped by YOLO
   or `devAllowSensitive`. Turning things off goes through the same prompt, so
   there is one code path.
+- **Agent-readable settings and preferences (#105, #106).** `settings.get`
+  (level none) returns an allowlisted snapshot: denylist, sites (policy,
+  effective sign-in, lite, pre-approved categories, a count of "always"
+  accounts), YOLO, `devAllowSensitive`, preferences and the hard lists; never
+  the secret, tokens or account ids. `settings.change` (level act, no prompt,
+  audited) writes only `PREFERENCE_SCHEMA` keys from `packages/protocol` (the
+  same enums the settings model normalises with); escalating or unknown keys
+  are refused with a hint. `session.kill_all` / `tabagent kill` run the kill
+  switch before the paused check, session lookup and authorize, so it works
+  with no session and when already paused. Resume has no tool or bridge route.
 - **Visibility (D40).** Badge states: off, connected, acting, needs approval,
   paused. A coloured tab group per session; an on-page border (default on) and
   target highlights. Overlay elements carry `data-tabagent-overlay`, have

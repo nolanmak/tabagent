@@ -5,6 +5,7 @@ import { TabAgentError } from "./errors";
 import { TIMEOUTS } from "./messages";
 import { AUTH_TOOLS, OPT_IN_GROUPS } from "./auth";
 import { CAPTCHA_TOOLS } from "./captcha";
+import { PREFERENCE_CHANGES, SETTINGS_SNAPSHOT } from "./settings";
 
 export type Level = "read" | "act" | "full";
 /** "none" = not site-scoped (no origin is involved). */
@@ -24,7 +25,7 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   r: "Accepting a proposed workflow repair",
 };
 
-export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth" | "policy" | "workflow";
+export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth" | "policy" | "settings" | "workflow";
 export type Profile = "core" | "forms" | "data" | "dev" | "full" | "auth";
 export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full", "auth"];
 
@@ -839,6 +840,43 @@ export const TOOLS = [
     params: z.object({}),
     result: empty,
     level: "none",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "session.kill_all",
+    group: "session",
+    description: "Stop every agent now (the kill switch). Needs no session or approval. Only the user can resume, in the side panel.",
+    params: z.object({}),
+    result: loose({ status: z.literal("killed"), alreadyPaused: z.boolean() }),
+    level: "none",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  // ---------------- settings ----------------
+  def({
+    name: "settings.get",
+    group: "settings",
+    description: "Read-only TabAgent settings: denylist, per-site policy/sign-in/lite, YOLO, preferences and hard-blocked hosts. Never secrets.",
+    params: z.object({}),
+    result: SETTINGS_SNAPSHOT,
+    level: "none",
+    pageContent: [],
+    profiles: [],
+    lite: "supported",
+    handledBy: "extension",
+  }),
+  def({
+    name: "settings.change",
+    group: "settings",
+    description: "Change display/cleanup preferences only (the keys in changes). Never yolo, denylist or sites. No approval; audited.",
+    params: z.object({ changes: PREFERENCE_CHANGES }),
+    result: loose({ status: z.literal("applied"), applied: z.array(z.object({ key: z.string(), from: z.unknown(), to: z.unknown() })) }),
+    level: "act",
     pageContent: [],
     profiles: [],
     lite: "supported",

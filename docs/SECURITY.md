@@ -181,10 +181,11 @@ applies at once. Sign-ups (`auth.signup`) still ask every time. YOLO does not tu
 
 ### Google sign-in (#79)
 
-TabAgent never signs in on banking and password-manager hosts, whatever the settings. Google sign-in
-(`accounts.google.com`) is different: it is off by default because the host is on the seeded denylist,
-and the user turns it on by removing it from the denylist. Sign-in for `https://accounts.google.com`
-is then on by default; the user can untick it in the side panel to keep it off. Every `auth.login` there still asks for consent unless
+TabAgent never signs in on password-manager hosts, whatever the settings. Google sign-in
+(`accounts.google.com`) and banking sign-in (#100, the banks on the seeded denylist) are different: they are
+off by default because the hosts are on the seeded denylist, and the user turns them on by removing the host
+from the denylist. Sign-in for `https://accounts.google.com` (and every origin under YOLO, #110) is then on by
+default; for a bank outside YOLO the user must also enable sign-in for that origin. Every `auth.login` there still asks for consent unless
 the user ticked "always" for that account. Google account, password and mail pages stay never reachable
 (below). Accepted risk: clicks on Google's account chooser or an OAuth consent screen ("Allow") need only
 the site policy, not the sign-in consent, so an agent with `act` on `accounts.google.com` can grant an app
@@ -211,6 +212,19 @@ A site change is refused before any prompt for: browser and Web Store pages, the
 hosts below, the banking and password-manager hosts where TabAgent never signs in, and any host on the
 denylist (the agent is told to request a denylist change first). Removing a bank from the denylist
 never lets TabAgent sign in there.
+
+### Settings agents can read and change (#105, #106)
+
+`settings.get` lets any caller read the denylist, each saved site's policy, sign-in and lite mode,
+YOLO, `devAllowSensitive`, the preferences below and the built-in hard lists. It is built field by
+field from an allowlist: it never returns the pairing secret, bridge tokens or saved-account ids
+(only how many accounts are set to "always").
+
+`settings.change` sets only preferences that do not widen what an agent can do: `showOverlay`,
+`beforeUnload`, `onSessionEnd`, `forceLite` and `liteSites`. It needs no approval but an `act`-capable
+token, and each call is in the audit log. Anything else is refused with a pointer: YOLO and
+`devAllowSensitive` stay panel-only (#109), and the denylist and sites go through the approval-gated
+policy tools above.
 
 ### Never reachable
 
@@ -247,6 +261,11 @@ kill and resume are logged as events.
 `KILLED`, pending prompts are dropped, the debugger detaches from every tab and allow-once grants
 are cleared. Every later command returns `KILLED` until you click Resume, so a looping agent cannot
 get around it by opening a new session.
+
+Agents and scripts can also press it: `session.kill_all` and `tabagent kill` need no session, token
+level or approval, because stopping can only make things safer (#106). Resume cannot be reached from
+the bridge: there is no tool or REST route for it, and the extension accepts it only from its own
+side panel.
 
 ## What TabAgent does not protect against
 
