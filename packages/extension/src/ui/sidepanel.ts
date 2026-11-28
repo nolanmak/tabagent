@@ -4,6 +4,7 @@ import type { Agent, AgentSources } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
+import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
 import { filterSites } from "../pure/siteFilter";
 import { applyLevel } from "../pure/siteLevel";
@@ -91,9 +92,17 @@ function renderSessions() {
     ul.innerHTML = `<li class="muted">No sessions.</li>`;
     return;
   }
-  ul.innerHTML = state.sessions
-    .map((s: any) => `<li><span><span class="dot g-${esc(s.color)}"></span><b>${esc(s.label)}</b> <span class="muted">${s.tabs} tab${s.tabs === 1 ? "" : "s"} · ${esc(s.cap)}</span></span><button data-end="${esc(s.id)}">End</button></li>`)
-    .join("");
+  ul.innerHTML = (state.sessions as SessionView[]).map(sessionRowHtml).join("");
+}
+
+let sessionsNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+/** A short-lived message under the Sessions list, e.g. "Tab closed" (#133). */
+function sessionsNotice(text: string) {
+  const el = $("sessionsNotice");
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(sessionsNoticeTimer);
+  sessionsNoticeTimer = setTimeout(() => (el.hidden = true), 4000);
 }
 
 function feedLine(e: FeedEntry) {
@@ -476,9 +485,16 @@ $("handoffs").addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest("button");
   if (b?.dataset.handoff) send({ type: "ui.handoff", tabId: Number(b.dataset.tab), result: b.dataset.handoff }).then(refresh);
 });
-$("sessions").addEventListener("click", (e) => {
+$("sessions").addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("button");
-  if (b?.dataset.end) send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
+  if (b?.dataset.end) return send({ type: "ui.endSession", id: b.dataset.end }).then(refresh);
+  if (b?.dataset.viewTab) {
+    const res = await send({ type: "ui.focusTab", tabId: Number(b.dataset.viewTab) });
+    if (res?.error) {
+      sessionsNotice(res.error);
+      void refresh();
+    }
+  }
 });
 $("agents").addEventListener("click", (e) => selectAgent(e.target));
 $("agents").addEventListener("keydown", (e) => {

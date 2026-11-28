@@ -318,6 +318,8 @@ export interface CodeResult {
   filled: boolean;
   source: CodeSourceName;
   submitted: boolean;
+  /** Same meaning as auth.login's next: done, code_required, handoff_required or unknown. */
+  next: Next;
 }
 
 export async function authCode(
@@ -400,14 +402,20 @@ export async function authCode(
         code = null;
       }
       let submitted = false;
+      let next: Next = "unknown";
       if (p.submit !== false) {
         await sameOrigin(page, origin, "form");
         await page.submit(dest[dest.length - 1]);
         submitted = true;
         await page.settle();
+        const after = await readAfter(page).catch(async (e) => {
+          if (await page.closed?.().catch(() => false)) return null;
+          throw e;
+        });
+        next = after === null ? "done" : classifyNext(url0, after);
       }
-      env.event("auth.code", { origin, source, outcome: "filled", submitted });
-      return { filled: true, source, submitted };
+      env.event("auth.code", { origin, source, outcome: "filled", submitted, next });
+      return { filled: true, source, submitted, next };
     } catch (e) {
       lastErr = e;
       const code = (e as TabAgentError)?.code;

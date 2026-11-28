@@ -183,8 +183,8 @@ describe("secret channel (1Password through fake op)", () => {
     await ask({ type: "auth.accounts", commandId: c2.cmd.id, origin: "https://github.com" }, "auth.accounts.result");
     expect(await ask({ ...req, commandId: c2.cmd.id, field: "totp" }, "secret")).toMatchObject({ ok: true, field: "code", value: "864209" });
     expect(await ask({ ...req, commandId: c2.cmd.id, field: "password" }, "secret")).toMatchObject({ ok: false });
-    ext.send(envelope(c2.cmd.id, { filled: true, source: "totp", submitted: true }, "auth.code"));
-    expect(JSON.parse((await c2.resp).text).result).toEqual({ filled: true, source: "totp", submitted: true });
+    ext.send(envelope(c2.cmd.id, { filled: true, source: "totp", submitted: true, next: "done" }, "auth.code"));
+    expect(JSON.parse((await c2.resp).text).result).toEqual({ filled: true, source: "totp", submitted: true, next: "done" });
   });
 
   it("an SMS code request while SMS is off → PERMISSION_DENIED with the config hint; audited as source sms", async () => {
@@ -277,7 +277,7 @@ describe("#37 admin route and Bitwarden through the daemon", () => {
     await ask({ type: "auth.accounts", commandId: c2.cmd.id, origin: "https://github.com" }, "auth.accounts.result");
     const code = await ask({ type: "auth.secret.request", commandId: c2.cmd.id, accountId: `bitwarden:${BW_ID}`, field: "totp" }, "secret");
     expect(code).toMatchObject({ ok: true, field: "code", value: "135246" });
-    ext.send(envelope(c2.cmd.id, { filled: true, source: "totp", submitted: true }, "auth.code"));
+    ext.send(envelope(c2.cmd.id, { filled: true, source: "totp", submitted: true, next: "done" }, "auth.code"));
     const r2 = await c2.resp;
 
     // kill reaches the bridge as an event and drops the key
