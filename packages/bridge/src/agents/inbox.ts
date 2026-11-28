@@ -27,6 +27,9 @@ export interface InboxStream extends InboxInfo {
   openedAt: number;
 }
 
+/** How a pushAndWait ended. */
+export type AckResult = "acked" | "timeout" | "closed" | "no_stream";
+
 export interface InboxOpts {
   now?: () => number;
   newId?: () => string;
@@ -36,8 +39,10 @@ export interface InboxOpts {
 
 export class InboxRegistry {
   private streams = new Map<string, InboxStream>();
-  /** Unacked pushes per key (AD5). P3 turns an ack into the `sent` state. */
+  /** Unacked pushes per key (AD5). */
   private unacked = new Map<string, Set<string>>();
+  /** pushAndWait callers, by msgId (AD7: the channel route is `sent` on the ack). */
+  private waiters = new Map<string, { key: string; done: (r: AckResult) => void }>();
   private now: () => number;
   private newId: () => string;
 
@@ -55,7 +60,12 @@ export class InboxRegistry {
     const old = this.streams.get(key);
     const s: InboxStream = { ...info, key, conn, openedAt: this.now() };
     this.streams.set(key, s);
-    if (old) old.conn.close();
+    if (old) {
+      // The old connection had the unacked pushes; the new one never saw them.
+      this.unacked.delete(key);
+      this.settle(key, "closed");
+      old.conn.close();
+    }
     return s;
   }
 
@@ -65,6 +75,7 @@ export class InboxRegistry {
     if (!s || s.conn !== conn) return false;
     this.streams.delete(key);
     this.unacked.delete(key);
+    this.settle(key, "closed");
     this.o.onClosed?.(key, s);
     return true;
   }
@@ -82,25 +93,60 @@ export class InboxRegistry {
 
   /** Push `{msgId, ...data}` to the key's live stream. null when there is none: nothing is buffered (AD5). */
   push(key: string, data: Record<string, unknown>): string | null {
-    const s = this.streams.get(key);
-    if (!s) return null;
+    if (!this.streams.has(key)) return null;
     const msgId = this.newId();
+    this.write(key, msgId, data);
+    return msgId;
+  }
+
+  private write(key: string, msgId: string, data: Record<string, unknown>) {
     let set = this.unacked.get(key);
     if (!set) this.unacked.set(key, (set = new Set()));
     set.add(msgId);
-    s.conn.write("message", { msgId, ...data });
-    return msgId;
+    this.streams.get(key)!.conn.write("message", { msgId, ...data });
   }
 
   /** The proxy acked a push. Only the key that received it can ack it, and only once. */
   ack(key: string, msgId: string): boolean {
-    return this.unacked.get(key)?.delete(msgId) ?? false;
+    const ok = this.unacked.get(key)?.delete(msgId) ?? false;
+    if (ok) this.waiters.get(msgId)?.done("acked");
+    return ok;
+  }
+
+  /**
+   * Push and wait for the proxy's ack (AD5, AD7 channel route). `no_stream` at once when the key has no live
+   * stream; `closed` when the stream goes away or is replaced first; `timeout` after `timeoutMs`, after which a
+   * late ack is refused.
+   */
+  pushAndWait(key: string, data: Record<string, unknown>, timeoutMs: number): Promise<AckResult> {
+    if (!this.streams.has(key)) return Promise.resolve("no_stream");
+    return new Promise((resolve) => {
+      let msgId = "";
+      const timer = setTimeout(() => {
+        this.unacked.get(key)?.delete(msgId);
+        done("timeout");
+      }, timeoutMs);
+      timer.unref?.();
+      const done = (r: AckResult) => {
+        clearTimeout(timer);
+        this.waiters.delete(msgId);
+        resolve(r);
+      };
+      msgId = this.newId();
+      this.waiters.set(msgId, { key, done });
+      this.write(key, msgId, data);
+    });
+  }
+
+  private settle(key: string, r: AckResult) {
+    for (const w of [...this.waiters.values()]) if (w.key === key) w.done(r);
   }
 
   closeAll() {
     const all = [...this.streams.values()];
     this.streams.clear();
     this.unacked.clear();
+    for (const w of [...this.waiters.values()]) w.done("closed");
     for (const s of all) s.conn.close();
   }
 }

@@ -48,7 +48,7 @@ export interface InboxClientOpts {
   headers: () => Record<string, string>;
   /** D6: bring a daemon back before reconnecting, so the stream re-registers with the new one (AD5). */
   ensureDaemon: () => Promise<unknown>;
-  /** A push from the bridge. It is acked after this returns. P3 (#93) writes channel pushes to the agent here. */
+  /** A push from the bridge. It is acked after this returns, never if it throws. The proxy writes channel pushes to the agent here (AD9). */
   onPush?: (m: InboxPush) => void | Promise<void>;
   log?: (m: string) => void;
   /** Tests. */

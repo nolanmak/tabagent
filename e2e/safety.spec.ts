@@ -223,7 +223,7 @@ test("#105 settings.get and `tabagent settings show` return policy and preferenc
   expect(r.json).toMatchObject({ denylist: before.denylist, yolo: false, devAllowSensitive: false, onSessionEnd: before.onSessionEnd, beforeUnload: before.beforeUnload, showOverlay: before.showOverlay, forceLite: false });
   expect(r.json.sites[h.A]).toEqual({ policy: "full", auth: true, lite: true, alwaysAccounts: 1 });
   expect(r.json.sites[h.B]).toEqual({ policy: "full", auth: false, lite: false });
-  // #101 took banks off the sign-in deny list; password managers stay on it.
+  // Banks became unlockable in #101; password-manager hosts stay hard-denied for sign-in.
   expect(r.json.authDenyHosts).toContain("*.1password.com");
   expect(r.json.authDenyHosts).not.toContain("*.chase.com");
   expect(r.json.vaultDenyHosts).toContain("passwords.google.com");
