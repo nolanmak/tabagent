@@ -1,7 +1,8 @@
 // TabAgent service worker: wires the bridge client, the command router, the
 // permission gate, the kill switch, the badge and the UI API together.
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
-import { AGENTS_FEATURE, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { grantTab, releaseGrantedTab } from "./agentGrant";
 import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
@@ -86,6 +87,20 @@ function onBridgeMessage(msg: any) {
     case "files.resolved":
       onFilesResolved(msg);
       break;
+    case "agent.grant": {
+      // AD11: the only caller of the grant path. A user-initiated Send is the attach consent (no prompt).
+      const g = AgentGrantSchema.safeParse(msg);
+      if (!g.success) break;
+      grantTab(g.data.meta, g.data.tabId)
+        .catch(() => ({ ok: false as const, code: "FAILED" as const }))
+        .then((r) => bridge.send({ type: "agent.granted", requestId: g.data.requestId, ...r }));
+      break;
+    }
+    case "agent.release": {
+      const r = AgentReleaseSchema.safeParse(msg);
+      if (r.success) releaseGrantedTab(r.data.sessionId, r.data.tabId).catch(() => {});
+      break;
+    }
     case "auth.accounts.result":
     case "auth.signup.result":
     case "secret":

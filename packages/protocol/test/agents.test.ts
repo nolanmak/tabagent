@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_DELIVERY_STATES, AGENT_LIMITS, AGENTS_FEATURE, AgentSchema, AgentSendSchema, agentSendOverLimit, AgentSentSchema, AgentStatusSchema, AgentsListedSchema, AgentsListSchema, BridgeToExtSchema, ExtToBridgeSchema, WelcomeSchema } from "@tabagent/protocol";
+import { AGENT_GRANT_CODES, AgentGrantedSchema, AgentGrantSchema, AgentReleaseSchema, AGENT_DELIVERY_STATES, AGENT_LIMITS, AGENTS_FEATURE, AgentSchema, AgentSendSchema, agentSendOverLimit, AgentSentSchema, AgentStatusSchema, AgentsListedSchema, AgentsListSchema, BridgeToExtSchema, ExtToBridgeSchema, WelcomeSchema } from "@tabagent/protocol";
 
 const agent = { id: "claude:1:2", vendor: "claude", name: "x", cwd: "/w", startedAt: 2, pid: 1, status: "idle", linked: false, canDriveTab: false, delivery: "spawn" };
 
@@ -78,5 +78,28 @@ describe("AD13 limits", () => {
   });
   it("the first field over its limit is reported", () => {
     expect(agentSendOverLimit({ prompt: "x".repeat(9000), url: "u".repeat(3000) })!.field).toBe("prompt");
+  });
+});
+
+describe("agent.grant / agent.granted / agent.release (AD1, AD11)", () => {
+  const meta = { id: "mcp:local:100-aaaaaa", label: "claude-code", cap: "full", sites: [] };
+  it("round-trip and route through the unions", () => {
+    const grant = { type: "agent.grant", requestId: "q1", meta, tabId: 7 };
+    expect(AgentGrantSchema.parse(grant)).toEqual(grant);
+    expect(BridgeToExtSchema.parse(grant).type).toBe("agent.grant");
+    const ok = { type: "agent.granted", requestId: "q1", ok: true, added: true };
+    expect(AgentGrantedSchema.parse(ok)).toEqual(ok);
+    expect(ExtToBridgeSchema.parse(ok).type).toBe("agent.granted");
+    for (const code of AGENT_GRANT_CODES) expect(AgentGrantedSchema.parse({ type: "agent.granted", requestId: "q1", ok: false, code }).code).toBe(code);
+    expect(AGENT_GRANT_CODES).toEqual(expect.arrayContaining(["TAB_BUSY", "PERMISSION_DENIED", "NOT_FOUND", "TIMEOUT"]));
+    const rel = { type: "agent.release", sessionId: meta.id, tabId: 7 };
+    expect(AgentReleaseSchema.parse(rel)).toEqual(rel);
+    expect(BridgeToExtSchema.parse(rel).type).toBe("agent.release");
+  });
+  it("rejects a grant without meta or tabId, and unknown refusal codes", () => {
+    expect(AgentGrantSchema.safeParse({ type: "agent.grant", requestId: "q", tabId: 1 }).success).toBe(false);
+    expect(AgentGrantSchema.safeParse({ type: "agent.grant", requestId: "q", meta }).success).toBe(false);
+    expect(AgentGrantSchema.safeParse({ type: "agent.grant", requestId: "q", meta, tabId: 1.5 }).success).toBe(false);
+    expect(AgentGrantedSchema.safeParse({ type: "agent.granted", requestId: "q", ok: false, code: "OOPS" }).success).toBe(false);
   });
 });
