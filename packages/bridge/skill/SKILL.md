@@ -49,6 +49,7 @@ Signing in is part of the job; don't stop and ask the user to sign in first. The
 2. Saved account: `auth.login` fills it from the user's password manager after they approve in the side panel.
 3. SSO button ("Sign in with Google") or an emailed or texted code: click through, then `auth.code {source}` types the code.
 4. Only for a passkey, CAPTCHA or a step no route covers: `auth.handoff {reason}`, then tell the user what to do in the tab.
+5. `Sign-in is not enabled`: request `policy.site_change {origin, changes: {auth: true}, reason}`, then retry.
 
 Sign in with Google (user has removed `accounts.google.com` from the denylist and enabled sign-in there): click the site's Google button (popup: `tabs {action: "select"}` it). On Google, call `auth.status` and pass the chosen id as `auth.login {account}`; call again for the password step. Codes: `auth.code {source}` with sms or totp, never email. When `next` is handoff_required (phone prompt, passkey, CAPTCHA, "not secure", recovery page), `auth.handoff`, then re-snapshot. Never change Google account settings.
 

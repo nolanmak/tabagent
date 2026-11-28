@@ -40,7 +40,9 @@ function promptHtml(p: any) {
           ? "It will be able to click, type and navigate on this site."
           : "It will be able to run scripts and read cookies and storage on this site."
       : p.sensitive
-        ? `${p.sensitive.description} · on ${p.origin}`
+        ? p.sensitive.category === "p"
+          ? p.sensitive.description // policy changes are not tied to the tab's page; the summary names the site
+          : `${p.sensitive.description} · on ${p.origin}`
         : `on ${p.origin}`;
   const isAuth = p.sensitive?.category === "g";
   const oneShot = p.kind === "attach" || p.sensitive?.category === "p" || p.sensitive?.category === "r";

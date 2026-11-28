@@ -54,6 +54,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`downloads.wait`](#downloadswait) | `downloads_wait` | none | — | data | supported | extension |
 | [`downloads.read`](#downloadsread) | `downloads_read` | none | e | data | supported | both |
 | [`policy.denylist_change`](#policydenylist_change) | `policy_denylist_change` | full | p | full only | supported | extension |
+| [`policy.site_change`](#policysite_change) | `policy_site_change` | full | p | full only | supported | extension |
 | [`workflow.capture_start`](#workflowcapture_start) | `workflow_capture_start` | act | — | full only | supported | extension |
 | [`workflow.capture_stop`](#workflowcapture_stop) | `workflow_capture_stop` | act | — | full only | supported | extension |
 | [`workflow.list`](#workflowlist) | `workflow_list` | none | — | full only | supported | extension |
@@ -612,6 +613,18 @@ MCP name `policy_denylist_change` · level full · profiles full only · lite su
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `changes` | object[] | yes |  |
+| `reason` | string | yes |  |
+
+### policy.site_change
+
+Request a change to one exact origin's sign-in (auth), policy ("ask" clears it) or lite mode, e.g. after "Sign-in is not enabled". Always needs a visible approval; YOLO does not bypass it.
+
+MCP name `policy_site_change` · level full · profiles full only · lite supported · sensitive p · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `origin` | string | yes |  |
+| `changes` | object | yes |  |
 | `reason` | string | yes |  |
 
 ## workflow

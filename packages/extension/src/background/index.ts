@@ -16,6 +16,7 @@ import { extraHandlers, fireKilled } from "./handlerRegistry";
 import { broadcast, feedAll, feedPush } from "./feed";
 import { answerPrompt, authorize, clearGrants, holdApproval, onPrompt, pendingPrompts, prompts } from "./permissions";
 import type { PromptInfo } from "./prompts";
+import { policyPrecheck } from "./handlers/policy";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
@@ -142,7 +143,7 @@ export const router = createRouter<Session>({
   onInflight: () => refreshBadge(),
   captureWorkflowStep: captureAgentStep,
   recordWorkflowStep: recordAgent,
-  policySnapshot: async () => (await getSettings()).denylist.map((glob) => glob.trim().toLowerCase()).filter(Boolean).sort().join("\u0000"),
+  policySnapshot: policyPrecheck,
 });
 
 // ---------------------------------------------------------------------------

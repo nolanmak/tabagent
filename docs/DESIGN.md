@@ -138,7 +138,7 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
 - Bridge `config.json` (directory overridable with `TABAGENT_HOME`): port,
   secret, extensionIds, tokens, uploadDirs, maxReadBytes.
 - Extension `chrome.storage.local`: per-origin site entries (policy, lite mode,
-  pre-approvals), denylist edits, session-end behaviour (default collapse and
+  pre-approvals, sign-in on/off and "always" accounts), denylist edits, session-end behaviour (default collapse and
   keep), `beforeunload` policy (default accept), on-page border (default on),
   `devAllowSensitive` (default off).
 
@@ -400,6 +400,23 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   user-editable list (password managers, banking, Google sign-in) are refused.
   Banking and password-manager hosts are also hard-blocked for the auth tools;
   Google sign-in is not (the user can unlock it, #79).
+- **Agent-requested policy changes (category p, #67, #104).** MCP never writes
+  extension settings. A `full`-level caller can only *request* an exact change,
+  and the extension applies it after a visible one-time approval in the side
+  panel. `policy.denylist_change` takes an add/remove list of host globs.
+  `policy.site_change` takes one exact http(s) origin (normalised; wildcards,
+  paths and credentials are rejected) and `changes: {auth?, policy?, lite?}`.
+  `policy: "ask"` removes the stored policy, and `auth: false` also clears the
+  site's "always" accounts, the same as the side panel. Before the prompt, the
+  router asks the extension to check the request and snapshot the state it will
+  be shown against. A site change on a hard-denied, never-reachable (vault),
+  banking/password-manager (auth-blocked) or denylisted host is refused there
+  without a prompt; the denylisted case hints to request a denylist change
+  first. After approval the handler re-reads settings and refuses with
+  `BAD_REQUEST` if the snapshot no longer matches (a stale approval). Category
+  p has no "Always" button, cannot be pre-approved, and is not skipped by YOLO
+  or `devAllowSensitive`. Turning things off goes through the same prompt, so
+  there is one code path.
 - **Visibility (D40).** Badge states: off, connected, acting, needs approval,
   paused. A coloured tab group per session; an on-page border (default on) and
   target highlights. Overlay elements carry `data-tabagent-overlay`, have
