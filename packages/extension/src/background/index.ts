@@ -24,7 +24,7 @@ import { isPanelSender } from "../pure/uiSender";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
 import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
-import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
+import { getSettings, isPaused, onYoloExpired, setSettingsClockOffset, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
 import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
@@ -50,6 +50,7 @@ const bridge = createBridgeClient({
     refreshBadge();
     // #92: re-validate the menu's recent agents once the bridge can list them.
     if (status === "connected") void rebuildMenus(currentAgents).catch(() => {});
+    if (status === "connected") flushQueuedEvents();
   },
   protocolVersion: PROTOCOL_VERSION,
   extensionVersion: VERSION,
@@ -69,6 +70,15 @@ setCaptchaSender((m) => bridge.send(m));
 
 function sendEvent(event: string, data: Record<string, unknown> = {}) {
   bridge.send({ type: "event", event, data });
+}
+
+/** Audit events that must not be lost while the bridge is offline (a YOLO expiry at startup, #109). */
+const queuedEvents: { event: string; data: Record<string, unknown> }[] = [];
+function sendEventQueued(event: string, data: Record<string, unknown>) {
+  if (!bridge.send({ type: "event", event, data })) queuedEvents.push({ event, data });
+}
+function flushQueuedEvents() {
+  while (queuedEvents.length && bridge.send({ type: "event", event: queuedEvents[0].event, data: queuedEvents[0].data })) queuedEvents.shift();
 }
 
 function onBridgeMessage(msg: any) {
@@ -179,12 +189,35 @@ async function refreshBadge() {
 onSessionsChanged(() => refreshBadge());
 
 // Review M1: YOLO / devAllowSensitive toggles are audited and the badge follows, whatever wrote them.
+// #109: the YOLO expiry alarm follows the stored expiry, and an open side panel re-reads the modes.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes.settings) return;
   const before = migrateSettings(changes.settings.oldValue as Record<string, unknown> | undefined);
   const after = migrateSettings(changes.settings.newValue as Record<string, unknown> | undefined);
-  for (const e of settingsAuditEvents(before, after)) sendEvent(e.event, e.data);
+  const events = settingsAuditEvents(before, after);
+  for (const e of events) sendEventQueued(e.event, e.data);
+  const expiryMoved = before.yoloExpiresAt !== after.yoloExpiresAt;
+  if (expiryMoved) void syncYoloAlarm(after);
+  if (events.length || expiryMoved) broadcast({ type: "settings" });
   refreshBadge();
+});
+
+// ---------------------------------------------------------------------------
+// Timed YOLO (#109): policy.mode_change durationMin stores yoloExpiresAt. A chrome.alarms alarm
+// (which survives worker restarts) fires at that time; every settings read also enforces it.
+// ---------------------------------------------------------------------------
+const YOLO_ALARM = "tabagent-yolo-expiry";
+async function syncYoloAlarm(s: { yolo: boolean; yoloExpiresAt: number | null }) {
+  if (s.yolo && s.yoloExpiresAt != null) await chrome.alarms.create(YOLO_ALARM, { when: s.yoloExpiresAt });
+  else await chrome.alarms.clear(YOLO_ALARM);
+}
+/** The alarm handler: a settings read switches an expired YOLO off; then re-arm or clear the alarm. */
+async function checkYoloExpiry() {
+  await syncYoloAlarm(await getSettings());
+}
+onYoloExpired((expiresAt) => {
+  sendEventQueued("yolo.expired", { expiresAt: new Date(expiresAt).toISOString() });
+  broadcast({ type: "settings" });
 });
 
 // ---------------------------------------------------------------------------
@@ -462,6 +495,7 @@ chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() =>
 chrome.alarms.create("tabagent-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "tabagent-reconnect") bridge.tick();
+  if (a.name === YOLO_ALARM) void checkYoloExpiry();
   if (a.name === "tabagent-workflows") {
     void runDueSchedules(new Date(), bridge.connected()).then((runs) => {
       for (const run of runs) sendEvent("workflow.run", { runId: run.id, recipeId: run.recipeId, state: run.state, reason: run.reason ?? "" });
@@ -480,7 +514,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
 
 (async () => {
   await restoreSessions();
-  await getSettings();
+  await checkYoloExpiry();
   refreshBadge();
   bridge.connect();
 })();
@@ -508,5 +542,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   rebuildMenus: () => rebuildMenus(currentAgents),
   menuItems: menuItemsBuilt,
   contextMenuClick: onMenuClick,
+  checkYoloExpiry,
+  advanceClock: (ms: number) => setSettingsClockOffset(ms),
 };
 export type { Status };

@@ -1,5 +1,6 @@
 // What a command needs before its handler may run (D16, D17, D18). Pure.
 import type { Level, SensitiveCategory } from "./policy";
+import { modeChangeNeedsApproval } from "../pure/modeChange";
 
 /** Minimal view of a registry entry (contract §2). */
 export interface ToolLike {
@@ -51,7 +52,7 @@ export interface Requirements {
 }
 
 /** Tools that work without a session tab. */
-const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end", "session.kill_all", "settings.get", "settings.change", "policy.denylist_change", "policy.site_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair"]);
+const NO_TAB = new Set(["tabs", "downloads.list", "downloads.wait", "downloads.read", "session.info", "session.permissions", "session.end", "session.kill_all", "settings.get", "settings.change", "policy.denylist_change", "policy.site_change", "policy.mode_change", "workflow.list", "workflow.unschedule", "workflow.runs", "workflow.review_repair"]);
 
 export function requirementsFor(tool: ToolLike, params: Record<string, unknown>): Requirements {
   const levelOf = (l: Level | "none" | undefined) => (l && l !== "none" ? l : null);
@@ -71,6 +72,8 @@ export function requirementsFor(tool: ToolLike, params: Record<string, unknown>)
   if (sensitive && when && !when.values.includes(String(params[when.param]))) sensitive = undefined;
   // g (auth) needs the account, so the auth handler gates it with requireSensitive(..., "g", ..., {auth}).
   if (sensitive === "g") sensitive = undefined;
+  // #109: turning YOLO / developer mode off only narrows what agents may do, so it needs no approval.
+  if (tool.name === "policy.mode_change" && !modeChangeNeedsApproval(params)) sensitive = undefined;
   if (tool.name === "nav.goto") return { level: level ?? "act", sensitive, urlSource: "param", needsTab: false, tabOptional: true };
   if (tool.name === "downloads.read") return { level: null, sensitive: sensitive ?? "e", urlSource: "download", needsTab: false };
   // Most no-tab tools are level none, but policy mutation / repair review are deliberately

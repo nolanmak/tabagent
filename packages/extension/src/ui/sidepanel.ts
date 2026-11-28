@@ -5,6 +5,7 @@ import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../back
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
+import { formatRemaining } from "../pure/modeChange";
 import { filterSites } from "../pure/siteFilter";
 import { applyLevel } from "../pure/siteLevel";
 import { feedReducer, promptReducer, promptTitle, summarizeParams, type FeedEntry, type PromptView } from "./reducers";
@@ -367,6 +368,14 @@ function renderWorkflows() {
     .join("") || `<li class="muted">No captured recipes yet.</li>`;
 }
 
+/** #109: a timed YOLO (policy.mode_change durationMin) shows the time left; the worker switches it off. */
+function renderYoloExpiry() {
+  const at = state?.settings?.yolo ? state.settings.yoloExpiresAt : null;
+  const el = $("yoloExpiry");
+  el.hidden = typeof at !== "number";
+  el.textContent = typeof at === "number" ? `Switches off automatically in ${formatRemaining(at - Date.now())}.` : "";
+}
+
 function renderSettings() {
   const s = state.settings;
   ($("onSessionEnd") as HTMLSelectElement).value = s.onSessionEnd;
@@ -376,6 +385,7 @@ function renderSettings() {
   ($("devAllowSensitive") as HTMLInputElement).checked = s.devAllowSensitive;
   ($("yolo") as HTMLInputElement).checked = !!s.yolo;
   $("yoloBanner").hidden = !s.yolo;
+  renderYoloExpiry();
   if (document.activeElement !== $("denylist")) ($("denylist") as HTMLTextAreaElement).value = s.denylist.join("\n");
   renderSites();
   $("about").textContent = `v${state.version} · extension id ${state.extensionId}`;
@@ -443,6 +453,7 @@ chrome.runtime.onMessage.addListener((m: any) => {
       break;
     case "status":
     case "paused":
+    case "settings":
       refresh();
       break;
   }
@@ -622,6 +633,7 @@ setInterval(() => {
 }, AGENTS_REFRESH_MS);
 setInterval(() => {
   for (const el of document.querySelectorAll<HTMLElement>(".countdown")) el.textContent = `${Math.max(0, Math.round((Number(el.dataset.expires) - Date.now()) / 1000))}s`;
+  if (state) renderYoloExpiry();
 }, 1000);
 setInterval(() => {
   if (state && state.status !== "connected") refresh();

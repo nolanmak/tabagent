@@ -55,6 +55,7 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`downloads.read`](#downloadsread) | `downloads_read` | none | e | data | supported | both |
 | [`policy.denylist_change`](#policydenylist_change) | `policy_denylist_change` | full | p | full only | supported | extension |
 | [`policy.site_change`](#policysite_change) | `policy_site_change` | full | p | full only | supported | extension |
+| [`policy.mode_change`](#policymode_change) | `policy_mode_change` | full | p | full only | supported | extension |
 | [`workflow.capture_start`](#workflowcapture_start) | `workflow_capture_start` | act | — | full only | supported | extension |
 | [`workflow.capture_stop`](#workflowcapture_stop) | `workflow_capture_stop` | act | — | full only | supported | extension |
 | [`workflow.list`](#workflowlist) | `workflow_list` | none | — | full only | supported | extension |
@@ -630,6 +631,19 @@ MCP name `policy_site_change` · level full · profiles full only · lite suppor
 |---|---|---|---|
 | `origin` | string | yes |  |
 | `changes` | object | yes |  |
+| `reason` | string | yes |  |
+
+### policy.mode_change
+
+Turn YOLO or devAllowSensitive on or off. Off applies at once; on needs a visible approval YOLO cannot bypass. durationMin (yolo: true only) switches YOLO off after that many minutes.
+
+MCP name `policy_mode_change` · level full · profiles full only · lite supported · sensitive p · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `yolo` | boolean |  |  |
+| `devAllowSensitive` | boolean |  |  |
+| `durationMin` | number |  |  |
 | `reason` | string | yes |  |
 
 ## workflow
