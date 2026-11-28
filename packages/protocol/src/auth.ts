@@ -503,6 +503,28 @@ export const AUTH_TOOLS = [
     handledBy: "both",
   },
   {
+    name: "auth.confirm_link",
+    group: "auth",
+    description: "After a sign-up: find the site's confirmation email in Gmail (asks you) and open its one confirmation link in this tab. Never returns the email or link.",
+    params: z.object({
+      tabId,
+      from: z.string().max(253).optional().describe("Sender domain; default: the site's domain"),
+      timeout: z.number().int().positive().max(TIMEOUTS.max).optional().describe("ms to wait for the email, default 60000"),
+    }),
+    result: z.strictObject({
+      followed: z.boolean(),
+      next: z.enum(["done", "code_required", "handoff_required", "unknown"]),
+      /** Nothing followed: no confirmation link on the site's domain, or several. */
+      reason: z.enum(["none", "ambiguous"]).optional(),
+    }),
+    level: "act",
+    secret: true,
+    pageContent: [],
+    profiles: ["auth"],
+    lite: "unsupported",
+    handledBy: "extension",
+  },
+  {
     name: "auth.handoff",
     group: "auth",
     description: "Hand the tab to the user for a human-only step (passkey, CAPTCHA, ID check, phone approval); waits for Done (5 min; 30 with remote handoff on).",
