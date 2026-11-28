@@ -181,7 +181,7 @@ test("panel: lists stub agents, sends to Codex (queued -> delivered), Claude nee
     await expect(claudeRow).toContainText("Readable stub title");
     await expect(claudeRow).not.toContainText("spawn-target");
     await expect(claudeRow).toContainText("Not connected — can't message this session");
-    await expect(claudeRow.getByRole("link", { name: "Connect it: update TabAgent and restart this session" })).toHaveAttribute("href", /send-to-agent\.md#connect-a-session/);
+    await expect(claudeRow.getByRole("link", { name: "Connect it: run tabagent setup claude, then restart this session" })).toHaveAttribute("href", /send-to-agent\.md#connect-a-session/);
     await expect(claudeRow).toContainText("pid 4250");
     // The untitled, not-connected sessions are collapsed under a disclosure.
     await expect(p.locator("#agents details summary")).toHaveText("2 other sessions");

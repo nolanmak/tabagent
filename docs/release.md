@@ -64,8 +64,8 @@ non-interactive shell, wrap it so npm still sees a terminal:
 The tarball can 404 for a few minutes after `+ @nolmak/tabagent@X.Y.Z` while npm stages it.
 
 Running agent sessions keep the `tabagent mcp` they started with. After publishing, restart them; if
-`npx` keeps serving a cached older copy, use `npx -y @nolmak/tabagent@latest mcp` in the MCP config
-(or clear `~/.npm/_npx`). Restart a running `tabagent serve` from the old version too.
+`npx` keeps serving a cached older copy, run `npx -y @nolmak/tabagent@latest setup claude` (and
+`setup codex`) so the MCP entry uses `@latest`, or clear `~/.npm/_npx`. Restart a running `tabagent serve` from the old version too.
 
 ## 5. Web Store
 

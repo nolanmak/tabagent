@@ -21,6 +21,9 @@ restart running agent sessions so their `tabagent mcp` picks up 0.2.0.
   channels is available as an experiment ([#138](https://github.com/nolanmak/tabagent/pull/138)).
   See [docs/send-to-agent.md](docs/send-to-agent.md).
 - Sending a tab grants the linked agent that tab ([#143](https://github.com/nolanmak/tabagent/pull/143)).
+- `tabagent setup claude` and `tabagent setup codex` point an agent's MCP entry at
+  `npx -y @nolmak/tabagent@latest mcp` so sessions always link
+  ([#154](https://github.com/nolanmak/tabagent/pull/154)).
 - Readable session titles, and the panel never spawns a new agent by surprise
   ([#149](https://github.com/nolanmak/tabagent/pull/149)).
 

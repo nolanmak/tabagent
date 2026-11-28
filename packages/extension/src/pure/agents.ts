@@ -36,7 +36,7 @@ export function formatAge(ms: number): string {
 /** #137: the docs section that explains how to connect a session so it can be messaged. */
 export const CONNECT_DOCS_URL = "https://github.com/nolanmak/tabagent/blob/main/docs/send-to-agent.md#connect-a-session";
 export const NOT_CONNECTED = "Not connected — can't message this session";
-export const CONNECT_HINT = "Connect it: update TabAgent and restart this session";
+export const CONNECT_HINT = "Connect it: run tabagent setup claude, then restart this session";
 
 /** Why a `none` agent cannot be sent to; matches the bridge's NO_ROUTE detail. */
 function noneReason(a: Agent): string {

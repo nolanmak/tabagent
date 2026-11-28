@@ -75,7 +75,7 @@ describe("agent rows (§7)", () => {
     expect(v.routeWords).toBe("Not connected — can't message this session");
     const html = agentRowHtml(v, false);
     expect(html).toContain("Not connected — can&#39;t message this session");
-    expect(html).toContain("Connect it: update TabAgent and restart this session");
+    expect(html).toContain("Connect it: run tabagent setup claude, then restart this session");
     expect(html).toContain(`href="${CONNECT_DOCS_URL}"`);
     expect(html).toContain('target="_blank"');
     expect(html).not.toContain("starts a new session");
