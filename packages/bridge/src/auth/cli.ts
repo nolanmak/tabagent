@@ -8,6 +8,7 @@ import { BitwardenProvider, MIN_BW_VERSION } from "./bitwarden";
 import { bitwardenDataDir, readAuthConfig, writeAuthConfig, type AuthConfig } from "./config";
 import { childBaseEnv, nodeRunner, versionAtLeast, type Runner } from "./exec";
 import { ADMIN_BITWARDEN_SESSION } from "./index";
+import { clearKeychainSync } from "./keychain";
 import { OnePasswordProvider } from "./onepassword";
 import { SmsSource, SMS_HINTS } from "./sms";
 
@@ -37,6 +38,16 @@ export function authConfigCommand(rest: string[], path?: string): Out {
     const a = readAuthConfig(path);
     return ok([`providers: ${a.providers.join(", ") || "(none)"}`, `sms: ${a.sms ? "on" : "off"}`, `bitwarden: idle lock ${a.bitwarden.idleLockMinutes ? `${a.bitwarden.idleLockMinutes} min` : "never"}, max unlock ${a.bitwarden.maxUnlockHours ? `${a.bitwarden.maxUnlockHours} h` : "never"}${a.bitwarden.bin ? `, bin ${a.bitwarden.bin}` : ""}`]);
   }
+  if (key === "auth.bitwarden.rememberUnlock") {
+    if (value !== "on" && value !== "off") return fail("Usage: tabagent config auth.bitwarden.rememberUnlock on|off");
+    writeAuthConfig((c) => ({ ...c, bitwarden: { ...c.bitwarden, rememberUnlock: value === "on" } }), path);
+    if (value === "off") clearKeychainSync();
+    return ok(
+      value === "on"
+        ? ["auth.bitwarden.rememberUnlock = on (restart the bridge, then `tabagent bitwarden unlock` once)", "The session key is saved in your macOS login Keychain and restored on bridge restart or reboot. Any process running as you can read it. `tabagent bitwarden lock`, the kill switch, or turning this off deletes it."]
+        : ["auth.bitwarden.rememberUnlock = off (saved session key deleted from the Keychain)"],
+    );
+  }
   if (key === "auth.bitwarden.idleLockMinutes" || key === "auth.bitwarden.maxUnlockHours") {
     const n = value === "never" || value === "off" ? 0 : Number(value);
     if (!Number.isFinite(n)) return fail(`Usage: tabagent config ${key} <number>|never`);
@@ -50,7 +61,7 @@ export function authConfigCommand(rest: string[], path?: string): Out {
       ...(v === 0 ? ["With this timer off, an unlocked vault stays open to every agent on this Mac until `tabagent bitwarden lock`, the kill switch, or a bridge restart."] : []),
     ]);
   }
-  return fail(`Unknown auth setting "${key ?? ""}". Settings: auth.sms on|off, auth.bitwarden.idleLockMinutes <5-240|never>, auth.bitwarden.maxUnlockHours <1-24|never>`);
+  return fail(`Unknown auth setting "${key ?? ""}". Settings: auth.sms on|off, auth.bitwarden.idleLockMinutes <5-240|never>, auth.bitwarden.maxUnlockHours <1-24|never>, auth.bitwarden.rememberUnlock on|off`);
 }
 
 // ---------------------------------------------------------------------------

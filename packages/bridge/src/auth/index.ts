@@ -10,6 +10,7 @@ import { TabAgentError, toTabAgentError } from "@tabagent/protocol";
 import { BitwardenProvider } from "./bitwarden";
 import { AuthBridge, type AuthAuditSink, type InFlight } from "./bridge";
 import { bitwardenDataDir, lockMs, readAuthConfig, type AuthConfig } from "./config";
+import { macKeychain } from "./keychain";
 import { OnePasswordProvider } from "./onepassword";
 import type { BridgeProvider } from "./provider";
 import { SmsSource } from "./sms";
@@ -51,6 +52,8 @@ export function createAuth(o: AuthOpts): Auth {
       enabled: () => config().providers.includes("bitwarden"),
       idleLockMs: lockMs(cfg0.bitwarden.idleLockMinutes, 60_000),
       maxUnlockMs: lockMs(cfg0.bitwarden.maxUnlockHours, 3_600_000),
+      remember: () => config().bitwarden.rememberUnlock === true,
+      keyStore: macKeychain(),
       event: (e, d) => o.audit.event(e, { kind: "auth", ...d }),
     });
   const sms = o.sms ?? new SmsSource({ enabled: () => config().sms });

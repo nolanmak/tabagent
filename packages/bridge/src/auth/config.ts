@@ -12,6 +12,8 @@ export interface BitwardenConfig {
   bin?: string;
   idleLockMinutes: number;
   maxUnlockHours: number;
+  /** Keep the unlocked session key in the macOS Keychain across bridge restarts. Default off. */
+  rememberUnlock?: boolean;
 }
 
 export interface AuthConfig {
@@ -51,6 +53,7 @@ export function readAuthConfig(path = configPath()): AuthConfig {
       ...(typeof bw.bin === "string" && bw.bin ? { bin: bw.bin } : {}),
       idleLockMinutes: clampOrOff(bw.idleLockMinutes, 5, 240, AUTH_DEFAULTS.bitwarden.idleLockMinutes),
       maxUnlockHours: clampOrOff(bw.maxUnlockHours, 1, 24, AUTH_DEFAULTS.bitwarden.maxUnlockHours),
+      ...(bw.rememberUnlock === true ? { rememberUnlock: true } : {}),
     },
   };
 }

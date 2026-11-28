@@ -37,6 +37,12 @@ describe("config auth.sms", () => {
     expect(r.out).toEqual(SMS_EXPLAIN);
     expect(readAuthConfig(cfgPath).sms).toBe(false);
   });
+  it("rememberUnlock is off by default and toggles on|off", () => {
+    expect(readAuthConfig(cfgPath).bitwarden.rememberUnlock).toBeUndefined();
+    expect(authConfigCommand(["auth.bitwarden.rememberUnlock", "on"], cfgPath).code).toBe(0);
+    expect(readAuthConfig(cfgPath).bitwarden.rememberUnlock).toBe(true);
+    expect(authConfigCommand(["auth.bitwarden.rememberUnlock", "maybe"], cfgPath).code).not.toBe(0);
+  });
   it("bitwarden locks accept never/0 to turn a timer off", () => {
     expect(authConfigCommand(["auth.bitwarden.idleLockMinutes", "never"], cfgPath).code).toBe(0);
     authConfigCommand(["auth.bitwarden.maxUnlockHours", "0"], cfgPath);
