@@ -4,6 +4,7 @@
 import { buildAudit, liftSide, outcomeFor, type AuditRecord, type RedactOpts } from "./audit";
 import { normalizeNavUrl, requirementsFor, type Requirements, type ToolLike } from "./authorize";
 import { originOf, type Level, type SensitiveCategory } from "./policy";
+import { describeSiteChange } from "../pure/siteChange";
 
 /** What the agent gets instead of a result that carried a typed secret (DA1). */
 const WITHHELD: ErrorJson = {
@@ -104,8 +105,11 @@ export interface RouterDeps<S = unknown> {
   /** Optional workflow recorder. It only receives a successful, already-authorized command. */
   captureWorkflowStep?(tabId: number | undefined, tool: string, params: Record<string, unknown>, url: string, sessionId: string): unknown | Promise<unknown>;
   recordWorkflowStep?(captured: unknown, result: unknown): void | Promise<void>;
-  /** Snapshot used to reject a policy mutation whose displayed diff went stale while prompting. */
-  policySnapshot?(): Promise<string>;
+  /**
+   * Policy tools only: check the request against hard boundaries (throwing refuses it before any
+   * prompt) and snapshot the state the prompt is shown against, so a stale approval is rejected.
+   */
+  policySnapshot?(tool: string, params: Record<string, unknown>): Promise<string | undefined>;
   now?(): number;
 }
 
@@ -158,6 +162,8 @@ function summaryFor(tool: string, p: Record<string, unknown>, attach?: { title: 
       return `tabs ${p.action}`;
     case "policy.denylist_change":
       return `change denylist: ${Array.isArray(p.changes) ? p.changes.map((c: any) => `${c.op} ${c.glob}`).join(", ") : ""}; reason: ${String(p.reason ?? "").slice(0, 160)}`;
+    case "policy.site_change":
+      return describeSiteChange(p);
     default:
       return tool;
   }
@@ -170,6 +176,11 @@ const REASONS: Record<string, string> = {
   f: "Adopting a tab you opened gives the agent your page and its sign-ins",
   p: "Changes which sites every agent is blocked from using",
 };
+/** Category p covers two tools; the per-site one gets its own reason line. */
+const TOOL_REASONS: Record<string, string> = {
+  "policy.site_change": "Changes what every agent may do on this site, including signing in",
+};
+const POLICY_TOOLS = new Set(["policy.denylist_change", "policy.site_change"]);
 
 export function createRouter<S>(deps: RouterDeps<S>) {
   let seq = 0;
@@ -249,10 +260,10 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         }
         origin = url ? originOf(url) : null;
         await deps.guard?.({ tool: tool.name, sensitive: req.sensitive, tabId, url });
-        const policySnapshot = tool.name === "policy.denylist_change" ? await deps.policySnapshot?.() : undefined;
+        const policySnapshot = POLICY_TOOLS.has(tool.name) ? await deps.policySnapshot?.(tool.name, params) : undefined;
         // The D17 chokepoint: exactly one authorize() per command, before any handler.
         // authorize() asks about the site first and the sensitive category second.
-        await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: req.sensitive && REASONS[req.sensitive] ? [REASONS[req.sensitive]] : [] });
+        await deps.authorize({ meta: cmd.session, tool: tool.name, action, url, level: req.level, sensitive: req.sensitive, tabId, summary: summaryFor(tool.name, params, attach), reasons: req.sensitive && (TOOL_REASONS[tool.name] ?? REASONS[req.sensitive]) ? [TOOL_REASONS[tool.name] ?? REASONS[req.sensitive]] : [] });
         // nav.goto resolves its tab inside the handler, so look up the session's current tab here
         // for capture only. No tab yet means nothing can be capturing; the handler still runs.
         let captureTab = tabId;

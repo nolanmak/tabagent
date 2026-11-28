@@ -97,6 +97,7 @@ const LEVELS: Record<string, string> = {
   "downloads.wait": "none",
   "downloads.read": "none",
   "policy.denylist_change": "full",
+  "policy.site_change": "full",
   "workflow.capture_start": "act",
   "workflow.capture_stop": "act",
   "workflow.list": "none",
@@ -111,6 +112,8 @@ const LEVELS: Record<string, string> = {
   "auth.status": "read",
   "auth.login": "act",
   "auth.code": "act",
+  "auth.signup": "act",
+  "auth.confirm_link": "act",
   "auth.handoff": "read",
   "captcha.solve": "act",
 };
@@ -155,6 +158,7 @@ describe("D18 static sensitivity", () => {
     ["tabs", { action: "attach" }, "f"],
     ["tabs", { action: "new" }, undefined],
     ["policy.denylist_change", {}, "p"],
+    ["policy.site_change", {}, "p"],
     ["act.click", {}, undefined],
     ["network.list", {}, undefined],
   ] as const)("%s %j -> %s", (name, params, cat) => {
@@ -162,7 +166,7 @@ describe("D18 static sensitivity", () => {
   });
   it("no other tool is statically sensitive", () => {
     const statics = tools.filter((t) => t.sensitive || Object.values(t.actions ?? {}).some((a) => a.sensitive)).map((t) => t.name);
-    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "storage.get", "tabs", "workflow.review_repair"].sort());
+    expect(statics.sort()).toEqual(["act.upload", "cookies.get", "downloads.read", "js.eval", "nav.wait", "network.get", "policy.denylist_change", "policy.site_change", "storage.get", "tabs", "workflow.review_repair"].sort());
   });
 });
 
@@ -174,7 +178,7 @@ const D29: Record<string, string[]> = {
   dev: [...CORE, "js.eval", "console.list", "network.list", "network.get", "network.waitFor", "cookies.get", "storage.get"],
   // DA10: full is everything except the opt-in auth group.
   full: tools.filter((t) => t.group !== "auth").map((t) => t.name),
-  auth: [...CORE, "auth.status", "auth.login", "auth.code", "auth.handoff", "captcha.solve"],
+  auth: [...CORE, "auth.status", "auth.login", "auth.signup", "auth.code", "auth.confirm_link", "auth.handoff", "captcha.solve"],
 };
 
 describe("D29 profiles", () => {

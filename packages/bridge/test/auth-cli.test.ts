@@ -1,6 +1,6 @@
 // `tabagent config auth.*`, `tabagent doctor`, `tabagent bitwarden …` (#36, #37).
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -162,7 +162,7 @@ describe("bitwarden commands", () => {
       isTTY: true,
       interactive: async (_b, args) => (expect(args).toEqual(["unlock", "--raw"]), { code: 0, stdout: KEY + "\n" }),
       ensureDaemon: async () => true,
-      admin: async (method, body) => (posted.push({ method, body }), { status: 204 }),
+      admin: async (method, body) => (method === "POST" && posted.push({ method, body }), { status: 204 }),
     });
     expect(r.code).toBe(0);
     expect(posted).toEqual([{ method: "POST", body: { key: KEY } }]);
@@ -170,6 +170,41 @@ describe("bitwarden commands", () => {
     const st = f.calls().find((c) => c.argv[0] === "status")!;
     expect(st.BW_SESSION).toBe(KEY); // checked with bw status in the TabAgent data dir
     expect(st.BITWARDENCLI_APPDATA_DIR).toBe(join(dir, "bw"));
+  });
+  it("unlock does not ask for the master password when the bridge is already unlocked", async () => {
+    await enable();
+    let asked = false;
+    const r = await bitwardenCommand(["unlock"], {}, {
+      configPath: cfgPath,
+      dataDir: join(dir, "bw"),
+      isTTY: true,
+      interactive: async () => ((asked = true), { code: 0, stdout: KEY }),
+      ensureDaemon: async () => true,
+      admin: async (method) => (method === "GET" ? { status: 200, body: { ok: true, status: { state: "unlocked" } } } : { status: 204 }),
+    });
+    expect(r.code).toBe(0);
+    expect(asked).toBe(false);
+    expect(r.out.join("\n")).toMatch(/already unlocked/i);
+  });
+  it("a second unlock while one is running is refused (a new bw unlock would invalidate the first session)", async () => {
+    await enable();
+    const bwDir = join(dir, "bw");
+    mkdirSync(bwDir, { recursive: true });
+    writeFileSync(join(bwDir, "unlock.lock"), String(process.ppid)); // a live process that isn't this one
+    let asked = false;
+    const r = await bitwardenCommand(["unlock"], {}, { configPath: cfgPath, dataDir: bwDir, isTTY: true, interactive: async () => ((asked = true), { code: 0, stdout: KEY }), ensureDaemon: async () => true, admin: async () => ({ status: 204 }) });
+    expect(r.code).toBe(1);
+    expect(asked).toBe(false);
+    expect(r.err.join("\n") + r.out.join("\n")).toMatch(/another .*unlock/i);
+  });
+  it("a stale unlock lock (dead pid) is ignored and removed afterwards", async () => {
+    await enable();
+    const bwDir = join(dir, "bw");
+    mkdirSync(bwDir, { recursive: true });
+    writeFileSync(join(bwDir, "unlock.lock"), "999999");
+    const r = await bitwardenCommand(["unlock"], {}, { configPath: cfgPath, dataDir: bwDir, isTTY: true, interactive: async () => ({ code: 0, stdout: KEY + "\n" }), ensureDaemon: async () => true, admin: async () => ({ status: 204 }) });
+    expect(r.code).toBe(0);
+    expect(existsSync(join(bwDir, "unlock.lock"))).toBe(false);
   });
   it("daemon unreachable and can't be started → bw lock, non-zero, key absent from stdout and stderr", async () => {
     await enable();
@@ -181,7 +216,7 @@ describe("bitwarden commands", () => {
   it("a bad key is rejected by the bw status check, then locked", async () => {
     await enable();
     let posted = false;
-    const r = await bitwardenCommand(["unlock"], {}, { configPath: cfgPath, isTTY: true, interactive: async () => ({ code: 0, stdout: "not-the-key-" + "x".repeat(20) }), ensureDaemon: async () => true, admin: async () => ((posted = true), { status: 204 }) });
+    const r = await bitwardenCommand(["unlock"], {}, { configPath: cfgPath, isTTY: true, interactive: async () => ({ code: 0, stdout: "not-the-key-" + "x".repeat(20) }), ensureDaemon: async () => true, admin: async (method) => (method === "POST" && (posted = true), { status: 204 }) });
     expect(r.code).toBe(1);
     expect(posted).toBe(false);
     expect(f.calls().at(-1)!.argv[0]).toBe("lock");

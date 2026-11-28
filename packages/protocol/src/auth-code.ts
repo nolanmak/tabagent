@@ -43,7 +43,8 @@ const NEAR = 80;
 // "-" right before the digits means "not a bare code", except one capital letter + "-" (Google's "G-123456", #83 D9).
 const DIGIT_CODE = /(?<![\d+()./:,$#])(?<!(?<!(?:^|[^A-Za-z0-9])[A-Z])-)(?<!\d[ -])(?:(\d{3})[ -](\d{3})|(\d{4})[ -](\d{4})|(\d{4,8}))(?![\d\-/:%]|[.,]\d|[ -]\d)/g;
 
-function senderMatches(filter: string, from: string | undefined): boolean {
+/** Sender filter: an email domain (subdomains match) or an exact phone number / short code. */
+export function senderMatches(filter: string, from: string | undefined): boolean {
   if (!from) return false;
   const f = filter.trim().toLowerCase().replace(/^@/, "");
   const s = from.trim().toLowerCase();

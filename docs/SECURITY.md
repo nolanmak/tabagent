@@ -161,6 +161,27 @@ the user ticked "always" for that account. Google account, password and mail pag
 the site policy, not the sign-in consent, so an agent with `act` on `accounts.google.com` can grant an app
 access without typing a secret.
 
+### Agent-requested policy changes (#67, #104)
+
+Agents cannot write extension settings. Two `full`-level tools let a caller *request* a change, and
+the extension applies it only after the user approves a visible prompt in the side panel:
+
+- `policy.denylist_change`: an exact add/remove list of host globs.
+- `policy.site_change`: one exact origin and the sign-in (`auth`), site policy and lite-mode values
+  to set. The prompt shows the origin, each change and the agent's reason.
+
+These prompts (category p) offer only "Allow once" and "Deny". They cannot be pre-approved, and YOLO,
+saved site permissions and `devAllowSensitive` do not skip them. A denied or timed-out prompt changes
+nothing. The state the prompt was shown against is snapshotted before it is displayed; if the
+denylist or that site's settings change before the user answers, the approval is refused and the
+agent has to ask again. Turning things off (`auth: false`, `policy: "deny"`) goes through the same
+prompt.
+
+A site change is refused before any prompt for: browser and Web Store pages, the never-reachable
+hosts below, the banking and password-manager hosts where TabAgent never signs in, and any host on the
+denylist (the agent is told to request a denylist change first). Removing a bank from the denylist
+never lets TabAgent sign in there.
+
 ### Never reachable
 
 `passwords.google.com`, `myaccount.google.com`, `mail.google.com` and the password-manager vault

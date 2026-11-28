@@ -50,7 +50,22 @@
 
 <section class="card">
   <h2>Sessions</h2>
-  <ul id="sessions" class="list"><li class="muted">No agents connected.</li></ul>
+  <ul id="sessions" class="list"><li class="muted">No sessions.</li></ul>
+</section>
+
+<section class="card" id="agentsBox" hidden>
+  <h2>Agents</h2>
+  <p class="muted small">Claude Code and Codex sessions running on this computer. Pick one to send it a message.</p>
+  <ul id="agents" class="list agents" role="listbox" aria-label="Running agents"><li class="muted">Looking for agents…</li></ul>
+  <p id="agentSources" class="muted small" hidden></p>
+  <div class="composer">
+    <p id="agentTarget" class="small" hidden></p>
+    <textarea id="agentPrompt" rows="3" placeholder="Message for the agent" aria-label="Message for the agent"></textarea>
+    <label class="row check"><input type="checkbox" id="agentShareTab" checked /> <span>Share this tab's title and link <span id="agentTabTitle" class="muted small"></span></span></label>
+    <label class="row check muted"><input type="checkbox" id="agentSelection" disabled /> <span>Include selection <span class="small">(coming soon)</span></span></label>
+    <div class="row composer-actions"><span id="agentComposerNote" class="muted small"></span><button id="agentSend" class="primary" disabled>Send</button></div>
+  </div>
+  <ul id="agentFeed" class="feed agent-feed" aria-label="Messages sent to agents"></ul>
 </section>
 
 <section class="card">
@@ -69,6 +84,10 @@
   <summary><h2>Settings</h2></summary>
   <h3>Sites</h3>
   <p class="muted small">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site.</p>
+  <div class="row sitesearch">
+    <span class="searchbox"><input id="siteSearch" type="search" placeholder="Search sites" aria-label="Search sites" autocomplete="off" spellcheck="false" /><button type="button" id="siteSearchClear" aria-label="Clear site search" title="Clear (Esc)" hidden>✕</button></span>
+    <span id="siteCount" class="muted small" aria-live="polite"></span>
+  </div>
   <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th>Lite</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
   <form id="addSite" class="row">
     <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
