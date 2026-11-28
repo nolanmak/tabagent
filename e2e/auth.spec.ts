@@ -200,7 +200,7 @@ test("auth.code email: login asks for a code, the fake mailbox gets it a moment 
     setTimeout(() => w.srv.mailbox.push({ from: "noreply@tabagent-fixture.com", subject: "Your sign-in code", body: `Your verification code is ${CODE}. It expires in 10 minutes.`, ts: Date.now() }), 1500);
     const r = await call(w, c, "auth.code", { source: "email", from: "tabagent-fixture.com", timeout: 20000 });
     expect(r.isError, r.text).toBe(false);
-    expect(r.json).toEqual({ filled: true, source: "email", submitted: true });
+    expect(r.json).toMatchObject({ filled: true, source: "email", submitted: true, next: expect.any(String) });
     expect(w.srv.received.find((x) => x.path === "/auth/code")?.fields).toEqual({ code: CODE });
     // the private reader tab is gone and never showed up in tabs list
     const tabs = await call(w, c, "tabs", { action: "list" });
@@ -223,7 +223,7 @@ test("auth.code totp from the fake op item", async ({ w }) => {
     expect((await call(w, c, "auth.login")).json.next).toBe("code_required");
     const r = await call(w, c, "auth.code", { source: "totp" });
     expect(r.isError, r.text).toBe(false);
-    expect(r.json).toEqual({ filled: true, source: "totp", submitted: true });
+    expect(r.json).toMatchObject({ filled: true, source: "totp", submitted: true, next: expect.any(String) });
     expect(w.srv.received.find((x) => x.path === "/auth/code")?.fields).toEqual({ code: CODE });
     noLeak(w, CODE);
   } finally {
