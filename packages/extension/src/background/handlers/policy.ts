@@ -37,7 +37,7 @@ export const policyHandlers = {
     const origin = normalizeSiteOrigin(p.origin);
     if (siteChangeSnapshot(current, origin) !== policySnapshot) throw STALE("site settings");
     checkSiteChange(current, origin, p.changes);
-    const result = applySiteChange(current.sites, origin, p.changes);
+    const result = applySiteChange(current.sites, origin, p.changes, !!current.yolo);
     await updateSettings({ sites: result.sites });
     return { status: "applied", origin, site: result.site, applied: result.applied };
   },

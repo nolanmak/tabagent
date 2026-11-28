@@ -409,7 +409,8 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   `policy.site_change` takes one exact http(s) origin (normalised; wildcards,
   paths and credentials are rejected) and `changes: {auth?, policy?, lite?}`.
   `policy: "ask"` removes the stored policy, and `auth: false` also clears the
-  site's "always" accounts, the same as the side panel. Before the prompt, the
+  site's "always" accounts, the same as the side panel (under YOLO, where sign-in
+  is on by default (#110), that stores an explicit `auth: false`). Before the prompt, the
   router asks the extension to check the request and snapshot the state it will
   be shown against. A site change on a hard-denied, never-reachable (vault),
   banking/password-manager (auth-blocked) or denylisted host is refused there

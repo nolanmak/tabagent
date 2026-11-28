@@ -154,7 +154,7 @@ test("#104 a denied site change leaves settings unchanged, and YOLO does not ski
   try {
     const c = await h.mcp({ label: "site-change-deny", profile: "full" });
     const before = await settings(h);
-    const denied = await h.answerPrompt("deny", () => h.call(c, "policy.site_change", { origin: h.A, changes: { auth: true }, reason: "this must not apply when denied" }));
+    const denied = await h.answerPrompt("deny", () => h.call(c, "policy.site_change", { origin: h.A, changes: { auth: false, lite: true }, reason: "this must not apply when denied" }));
     expect(denied.prompt.sensitive.category).toBe("p");
     expect((denied.result as any).text).toContain("PERMISSION_DENIED");
     expect((await settings(h)).sites).toEqual(before.sites);

@@ -11,6 +11,8 @@ export type EffectiveSite = { policy: SitePolicyChoice; lite: boolean; auth: boo
 export interface SiteChangeState {
   sites: Record<string, SiteEntry>;
   denylist: readonly string[];
+  /** Under YOLO, sign-in is on for every origin without an explicit choice (#110). */
+  yolo?: boolean;
 }
 
 const FIELDS: SiteField[] = ["auth", "policy", "lite"];
@@ -31,8 +33,8 @@ export function normalizeSiteOrigin(input: string): string {
   return u.origin;
 }
 
-export function effectiveSite(entry: SiteEntry | undefined, origin: string): EffectiveSite {
-  return { policy: entry?.policy ?? "ask", lite: !!entry?.lite, auth: authEnabled(entry, origin) };
+export function effectiveSite(entry: SiteEntry | undefined, origin: string, yolo = false): EffectiveSite {
+  return { policy: entry?.policy ?? "ask", lite: !!entry?.lite, auth: authEnabled(entry, origin, yolo) };
 }
 
 function diff(before: EffectiveSite, changes: SiteChanges): SiteChangeApplied[] {
@@ -53,14 +55,14 @@ export function checkSiteChange(state: SiteChangeState, rawOrigin: string, chang
   if (isDenylisted(origin, [...state.denylist])) {
     throw new TabAgentError("PERMISSION_DENIED", `${host} is on the TabAgent denylist; its site settings cannot be changed while it is blocked`, "Request a policy.denylist_change that removes it first, then request this site change again.");
   }
-  const applied = diff(effectiveSite(state.sites[origin], origin), changes);
+  const applied = diff(effectiveSite(state.sites[origin], origin, !!state.yolo), changes);
   if (!applied.length) throw new TabAgentError("BAD_REQUEST", `Nothing to change: ${origin} already has these settings`, "Check session.permissions for the current site settings.");
   return { origin, applied };
 }
 
 /** Apply exactly like the side panel does. Returns new objects; the input is not mutated. */
-export function applySiteChange(sites: Record<string, SiteEntry>, origin: string, changes: SiteChanges): { sites: Record<string, SiteEntry>; site: EffectiveSite; applied: SiteChangeApplied[] } {
-  const before = effectiveSite(sites[origin], origin);
+export function applySiteChange(sites: Record<string, SiteEntry>, origin: string, changes: SiteChanges, yolo = false): { sites: Record<string, SiteEntry>; site: EffectiveSite; applied: SiteChangeApplied[] } {
+  const before = effectiveSite(sites[origin], origin, yolo);
   const entry: SiteEntry = structuredClone(sites[origin] ?? {});
   if (changes.policy !== undefined) {
     if (changes.policy === "ask") delete entry.policy;
@@ -73,8 +75,9 @@ export function applySiteChange(sites: Record<string, SiteEntry>, origin: string
   if (changes.auth !== undefined) {
     if (changes.auth) entry.auth = true;
     else {
-      // A default-on origin needs an explicit false to stay off (#79); "Always" accounts go with it.
-      if (authEnabled({}, origin)) entry.auth = false;
+      // A default-on origin (or any origin under YOLO) needs an explicit false to stay off (#79, #110);
+      // "Always" accounts go with it.
+      if (authEnabled({}, origin, yolo)) entry.auth = false;
       else delete entry.auth;
       delete entry.authAlways;
     }
@@ -82,16 +85,16 @@ export function applySiteChange(sites: Record<string, SiteEntry>, origin: string
   const next = { ...sites };
   if (Object.keys(entry).length) next[origin] = entry;
   else delete next[origin];
-  return { sites: next, site: effectiveSite(entry, origin), applied: diff(before, changes) };
+  return { sites: next, site: effectiveSite(entry, origin, yolo), applied: diff(before, changes) };
 }
 
-/** What the approval was shown against: this origin's entry plus the denylist (which gates it). */
+/** What the approval was shown against: this origin's entry, the denylist (which gates it) and YOLO (which changes effective sign-in). */
 export function siteChangeSnapshot(state: SiteChangeState, origin: string): string {
   const e = state.sites[origin] ?? {};
   const pre = e.preapproved ? Object.keys(e.preapproved).sort() : [];
   const entry = { policy: e.policy ?? null, lite: !!e.lite, auth: e.auth ?? null, authAlways: [...(e.authAlways ?? [])].sort(), preapproved: pre };
   const denylist = state.denylist.map((g) => g.trim().toLowerCase()).filter(Boolean).sort();
-  return JSON.stringify([origin, entry, denylist]);
+  return JSON.stringify([origin, entry, denylist, !!state.yolo]);
 }
 
 /** The text the approval prompt shows: the origin, each change and the reason. */

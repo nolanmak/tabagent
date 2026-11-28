@@ -104,6 +104,13 @@ describe("applying a site change (#104)", () => {
     expect(r.applied).toEqual([{ field: "auth", from: true, to: false }]);
   });
 
+  it("under YOLO sign-in is already on, and turning it off stores an explicit false (#110)", () => {
+    expect(code(() => checkSiteChange({ sites: {}, denylist: [], yolo: true }, "https://app.example.com", { auth: true })).message).toMatch(/already/);
+    const r = applySiteChange({}, "https://app.example.com", { auth: false }, true);
+    expect(r.sites["https://app.example.com"]).toEqual({ auth: false });
+    expect(r.applied).toEqual([{ field: "auth", from: true, to: false }]);
+  });
+
   it("turning things on keeps unrelated fields and pre-approvals", () => {
     const r = applySiteChange({ "https://app.example.com": { preapproved: { c: true } } }, "https://app.example.com", { auth: true, policy: "act", lite: true });
     expect(r.sites["https://app.example.com"]).toEqual({ preapproved: { c: true }, auth: true, policy: "act", lite: true });
@@ -128,6 +135,9 @@ describe("stale-approval snapshot (#104)", () => {
     expect(siteChangeSnapshot(state({ [o]: { policy: "full" } }), o)).not.toBe(base);
     expect(siteChangeSnapshot(state({ [o]: { policy: "act", authAlways: ["x"] } }), o)).not.toBe(base);
     expect(siteChangeSnapshot(state({ [o]: { policy: "act" } }, [...DENY, "app.example.com"]), o)).not.toBe(base);
+  });
+  it("changes when YOLO flips, since that changes effective sign-in", () => {
+    expect(siteChangeSnapshot({ ...state(), yolo: true }, o)).not.toBe(siteChangeSnapshot(state(), o));
   });
   it("ignores other origins", () => {
     expect(siteChangeSnapshot(state({ [o]: { policy: "act" }, "https://x.example": { policy: "read" } }), o)).toBe(siteChangeSnapshot(state({ [o]: { policy: "act" } }), o));
