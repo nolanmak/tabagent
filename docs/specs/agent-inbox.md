@@ -174,7 +174,8 @@ Each decision is numbered **ADn** and has its reason. Later sections cite them.
   - Codex app-server (AD10).
   - Registered inbox streams (AD4).
 - **Response:** `{agents: Agent[], sources: {claude: "ok"|"unavailable", codex: "ok"|"unavailable"}}`. A failed source never fails the call.
-- **`Agent` fields:** `{id, vendor: "claude"|"codex", name, title?, cwd, startedAt, pid?, status: "busy"|"idle"|"error", statusLabel?, linked: boolean, canDriveTab: boolean, delivery: Route}`.
+- **`Agent` fields:** `{id, vendor: "claude"|"codex", name, title?, cwd, startedAt, pid?, status: "busy"|"idle"|"error", statusLabel?, linked: boolean, canDriveTab: boolean, delivery: Route, remoteControlUrl?}`.
+  - `remoteControlUrl` (#151): `https://claude.ai/code/<bridgeSessionId>` when the Claude session runs with `--remote-control`. The bridge reads `bridgeSessionId` from `<sessions>/<pid>.json` (`$TABAGENT_CLAUDE_SESSIONS_DIR`, else `$CLAUDE_CONFIG_DIR/sessions`, else `~/.claude/sessions`), only when the record's `pid` matches and its `startedAt` (when present) equals the agent's, and only when the id matches `session_[A-Za-z0-9]+`. No other field of that file is used, and the `.key` files and `messagingSocketPath` (Claude's peer messaging) are never touched. Cached per file by size and mtime.
   - `name` comes from the vendor record. Claude's names are auto-generated (`<cwd basename>-<hex>`) and not useful on their own.
   - `title` (#137) is the readable label. Claude: the **last** `custom-title` entry (`customTitle`, the user's `/rename`) in the session transcript, else the last `ai-title` (`aiTitle`), else `name`. Codex: the thread name. Omitted when there is none; the panel then shows `cwd` basename · age.
   - The transcript is `<projects>/<slug>/<sessionId>.jsonl`, where `<projects>` is `$TABAGENT_CLAUDE_PROJECTS_DIR`, else `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`, and `<slug>` is the cwd with every non-alphanumeric character replaced by `-` (verified against claude 2.1.x). If that file is missing (Claude hashes slugs over 200 characters), the bridge looks for `<sessionId>.jsonl` in every project folder. The `sessionId` is used only to find the file; it is never sent on the wire (AD3).
@@ -202,17 +203,49 @@ The bridge **always** replies, including on failure. The worker times out after 
 ## 7. UI
 
 - **Agents section** (new), separate from **Sessions**. Sessions keeps its current role, and its empty text becomes "No sessions."
-- **Each agent row:**
-  - vendor icon and `title` (§5) as the primary label; cwd basename · age · pid · busy/idle as secondary text
+- **Each agent row (amended by #151):**
+  - vendor icon and `title` (§5) as the primary label; cwd basename · age · pid · busy/idle as secondary text, and a pulsing dot while the agent is busy
   - badges: **linked** and **can drive tab**
-  - the route as words: "instant (channel)", "on its next browser action", "queued (Codex)"
-  - an unlinked Claude agent (#137) says **Not connected — can't message this session**, with a short link **Connect it: update TabAgent and restart this session** to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
-- **Order and grouping (#137):** linked agents first, then the most recently started. Agents that are not connected **and** have no real title (no title, or a title equal to the vendor's auto name) are collapsed under an **N other sessions** disclosure, which opens when one of them is selected.
-- **Composer:** prompt box; "Share this tab" (on), which shows the tab title; "Include selection" (on when a selection exists, disabled when none); **Send**.
+  - the connection in words, the same on the row and the chat page header: **Connected · instant** (channel), **Connected · on next browser action** (piggyback), **Codex · queued**, **Remote Control only** (not linked, has `remoteControlUrl`), **Not connected**, or **Can't take messages (…)**
+  - an unlinked Claude agent (#137) also has a short **How to connect** link to [send-to-agent.md#connect-a-session](../send-to-agent.md#connect-a-session). The panel treats an unlinked Claude agent that an older bridge still lists as `spawn` the same way.
+  - **Open in Claude ↗** when the agent has a `remoteControlUrl` (checked again in the page: only `https://claude.ai/code/session_…`). It opens claude.ai in a normal tab, under the user's own login.
+  - **Clicking the row opens the agent's chat page** (§7a), reusing that agent's chat tab when one is open (Enter or Space on the focused row does the same).
+  - **Quick send** (only on rows that can be messaged) opens the composer directly under that row; pressing it again closes it. There is no composer at the bottom of the list.
+- **Order and grouping (#137):** linked agents first, then the most recently started. Agents that are not connected, have no Remote Control **and** have no real title (no title, or a title equal to the vendor's auto name) are collapsed under an **N other sessions** disclosure, which opens when one of them is selected.
+- **Composer (Quick send):** prompt box; "Share this tab" (on), which shows the tab title; "Include selection" (on when a selection exists, disabled when none); **Send**. A context-menu intent (AD14) opens it under the chosen agent's row.
   - **Send** never spawns. For `none` targets (including unlinked Claude agents) it is disabled, with the reason shown.
   - For every Claude agent with a cwd there is a separate secondary button, **Start a new session in \<folder\>** (with "instead" appended for a linked agent). It is the only control that sets `forceSpawn` (AD6). The limits (AD13) apply to it too.
 - **Feed:** one line per send, keyed by `requestId` and updated by `agent.status`. It shows route, state and the grant result. A new session's line is named "New session in \<folder\>" and its detail names the full folder and the `claude attach <id>` command. The text is rendered with the existing `esc()`.
 - **Context menu:** "Send to agent ▸" lists up to 5 recently sent-to agents (ids stored in `chrome.storage.local`, re-validated against the current list) plus "Choose…". See AD14. An unknown id opens the panel with nothing selected and a notice.
+
+## 7a. Chat page (#151)
+
+`chat.html?agent=<id>` is an extension page: one agent's conversation, live, with the composer pinned to the bottom.
+
+- **Header (sticky):** title, folder, status pill (**Working…** while busy, else Idle or the vendor label), the connection words (§7) and **Open in Claude ↗** when there is a `remoteControlUrl`. It re-reads `agents.list` every 5 s while visible.
+- **History:** the transcript as a chat. User and assistant text are bubbles; Markdown is rendered after escaping everything (paragraphs, line breaks, headings, lists, quotes, inline code, fenced code, bold/italic, `https` links with `target="_blank" rel="noopener noreferrer"`); nothing unescaped is ever written as HTML. Tool calls are one-line chips ("🔧 Bash: npm test") that expand to the call's summary and its result (folded into the call by `tool.id`; an error result is flagged). Messages sent from TabAgent are labelled **via TabAgent**. Thinking, system, meta, attachment, title and sidechain lines are not shown. The newest 200 entries load first; **Load earlier messages** pages back.
+- **Live:** the page holds a port (`agent-chat`) to the worker, which asks the bridge to watch that transcript (`agent.watch`) and forwards `agent.entries`. Unchanged bubbles stay in the DOM, so a selection or an open chip survives updates. If the user is at the bottom the view follows new entries; if they scrolled up, a **New messages ↓** pill appears. A busy agent shows a typing indicator. `reset` reloads history. When the worker restarts, the page reconnects and reloads.
+- **Composer:** Enter sends, Shift+Enter is a newline (never while an IME is composing); the box grows up to 200 px. It uses `agent.send` like the panel (channel = instant, piggyback = next browser action, Codex = queue) with an optional **Share a tab** picker (recent web tabs in the window, none by default). The message shows at once as a pending bubble (Sending… → Sent · waiting for the agent / Waiting for its next browser action / Queued) and is removed when the transcript shows the same text as a TabAgent message (confirmed). A failed send stays, with **Edit and resend** and **Dismiss**. AD13 limits are checked before Send.
+- **Not linked (Claude):** the composer is replaced by a card: "This session isn't connected to TabAgent. **Open in Claude** to talk to it now (Remote Control)", with that button primary, plus how to connect it to TabAgent (update, restart, channels flag). Without a `remoteControlUrl`: "Start the session with `--remote-control` or connect TabAgent". **Start a new session in \<folder\>** stays as a secondary action: it switches the composer to a first message for a new session (`forceSpawn`), with Cancel.
+- **States:** loading ("Loading conversation…"), empty ("No messages yet"), error (with Retry), no transcript yet, session no longer running (history stays readable, no composer), and Codex: "History isn't available for Codex yet" (sending still queues). The page never scrolls horizontally, down to 320 px.
+
+**Wire (paired `/ext` socket only, AD2; worker ↔ bridge):**
+
+| Message | Direction | Fields |
+|---|---|---|
+| `agent.history` | worker → bridge | `{requestId, agentId, before?, limit?}` (limit 1–500, default 200) |
+| `agent.history.result` | bridge → worker | `{requestId, agentId, ok, entries, hasMore, before?, code?, detail?}`; codes `AGENT_GONE`, `NO_TRANSCRIPT`, `UNSUPPORTED` (Codex), `BAD_REQUEST`; the worker adds `NO_EXTENSION`, `TIMEOUT` (15 s) |
+| `agent.watch` / `agent.unwatch` | worker → bridge | `{agentId}`; the worker counts pages per agent and re-sends watches after a reconnect |
+| `agent.entries` | bridge → worker | `{agentId, entries, reset?}` |
+
+An entry is `{uuid, ts, role: "user"|"assistant"|"tool", text?, tool?: {name, summary, id?, result?, error?}, fromTabAgent?}`. Text is capped at 20,000 characters and tool summaries at 2,000 (cut with "… (truncated)"). A TabAgent message is recognised by the composed header (AD12): a channel push is a meta `user` line with `origin.kind: "channel"`, a piggybacked one is the first block of a tool result; only the prompt is kept, not the page paragraph.
+
+**Bridge rules:**
+
+- Only agents in the current discovery list are read: the bridge finds the transcript from the listed session's cwd and sessionId (§5). No path ever comes from the wire.
+- History is read backwards from the end in 256 KB chunks (transcripts can be hundreds of MB); `before` is the byte offset of the oldest line returned. A page scans at most 48 MB; lines over 2 MB are skipped unparsed, and only lines containing a `user`/`assistant` type are parsed.
+- The watcher stats the file every 500 ms and reads appended complete lines (a partial line waits for the next poll). A truncated or replaced file, or the session moving to a new transcript (re-resolved every 5 s), is pushed as `reset`. At most 16 watches; all stop when the extension socket closes.
+- Nothing about history or watches is audited, and transcript content is never logged or sent over REST.
 
 ## 8. Security summary
 
@@ -220,6 +253,7 @@ The bridge **always** replies, including on failure. The worker times out after 
 - Page text is wrapped, the composed text explains the wrapper, and the prompt is outside the wrapper (AD12).
 - The grant covers the attach only (AD11).
 - The audit records the origin and the prompt hash, never the content (AD15).
+- Transcript content (§7a) reaches only extension pages, over the paired socket and the worker's sender-gated `ui.*` / port API; it is never sent over REST, logged or audited, and only listed sessions' transcripts are read. Remote Control opens claude.ai in a normal tab; TabAgent never uses Claude's peer-messaging socket or its keys.
 - Token clients are capped. Secret holders are trusted, per DESIGN D1 (AR1).
 
 ## 9. Accepted risks

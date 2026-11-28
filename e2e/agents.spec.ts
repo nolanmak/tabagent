@@ -182,7 +182,7 @@ test("panel: lists stub agents, Quick send to Codex (queued -> delivered) under 
     // The bridge caches the list for 5 s (§5); the panel's next 5 s refresh picks up the stubs at the latest.
     await expect(codexRow).toContainText("Codex helper", { timeout: 15_000 });
     await expect(claudeRow).toBeVisible({ timeout: 15_000 });
-    await expect(codexRow).toContainText("queued (Codex)");
+    await expect(codexRow).toContainText("Codex · queued");
     await expect(claudeRow).toContainText("Readable stub title");
     await expect(claudeRow).not.toContainText("spawn-target");
     await expect(claudeRow).toContainText("Not connected");
@@ -336,7 +336,7 @@ test("context menu: intent opens the panel with the agent preselected and the se
 
     // A second intent while the panel is open (storage.onChanged), naming an agent that is gone.
     await sw.evaluate(([info, t]) => (globalThis as any).__tabagent.contextMenuClick(info, t), [{ menuItemId: String(agentItem.id).replace(AGENT, "codex:gone"), selectionText: "second pick" }, tab] as const);
-    await expect(p.locator("#agentTarget")).toContainText("That agent is no longer running.");
+    await expect(p.locator("#agentNotice")).toContainText("That agent is no longer running.");
     await expect(row).toHaveAttribute("aria-selected", "false");
     await expect(p.locator("#agentSelection")).toBeChecked();
     await expect(p.locator("#agentSelectionPreview")).toContainText("second pick");

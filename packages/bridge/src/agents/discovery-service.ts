@@ -3,7 +3,8 @@ import { execFile } from "node:child_process";
 import type { Agent, AgentSources } from "@tabagent/protocol";
 import { CodexRpc, defaultCodexSocket, loadedThreadIds, readThread } from "./codex";
 import { codexThreadToAgent, mergeAgents, parseAgentId, parseClaudeAgents, toAgent, type AgentBase, type LinkOf } from "./discovery";
-import { pickTitle, TitleReader } from "./titles";
+import { RemoteControlReader } from "./remote";
+import { pickTitle, TitleReader, transcriptPath } from "./titles";
 
 export interface DiscoveryOpts {
   /** `claude` executable; default $TABAGENT_CLAUDE_BIN, else `claude` on PATH. */
@@ -19,6 +20,8 @@ export interface DiscoveryOpts {
   linkOf?: LinkOf;
   /** #137: Claude transcripts, for session titles; default $TABAGENT_CLAUDE_PROJECTS_DIR, else ~/.claude/projects. */
   claudeProjectsDir?: string;
+  /** #151: Claude session records, for Remote Control URLs; default $TABAGENT_CLAUDE_SESSIONS_DIR, else ~/.claude/sessions. */
+  claudeSessionsDir?: string;
 }
 
 export interface AgentList {
@@ -49,6 +52,7 @@ export class AgentDiscovery {
   private inflight: Promise<SourceLists> | null = null;
   linkOf: LinkOf;
   private titles: TitleReader;
+  private remote: RemoteControlReader;
 
   constructor(o: DiscoveryOpts = {}) {
     this.claudeBin = o.claudeBin ?? defaultClaudeBin();
@@ -59,6 +63,19 @@ export class AgentDiscovery {
     this.now = o.now ?? Date.now;
     this.linkOf = o.linkOf ?? (() => null);
     this.titles = new TitleReader({ projectsDir: o.claudeProjectsDir });
+    this.remote = new RemoteControlReader({ sessionsDir: o.claudeSessionsDir });
+  }
+
+  /**
+   * #151: the transcript of a Claude session in the current (cached) list. Only listed sessions are ever
+   * read, so a page can never name an arbitrary path. null when the agent is not listed or has no transcript.
+   */
+  async transcriptOf(id: string): Promise<{ listed: boolean; path: string | null }> {
+    const l = await this.sources();
+    const hit = l.lists.flat().find((a) => a.id === id);
+    if (!hit) return { listed: false, path: null };
+    if (hit.vendor !== "claude" || !hit.sessionId) return { listed: true, path: null };
+    return { listed: true, path: transcriptPath(this.titles.projectsDir, hit.cwd, hit.sessionId) };
   }
 
   /** Cached for display only; concurrent callers share one run. A send never uses this (AD3). */
@@ -125,7 +142,7 @@ export class AgentDiscovery {
       execFile(this.claudeBin, ["agents", "--json"], { timeout: this.claudeTimeoutMs, maxBuffer: CLAUDE_MAX_BUFFER, windowsHide: true }, (err, stdout) => {
         if (err) return reject(err);
         try {
-          resolve(parseClaudeAgents(String(stdout)).map((a) => this.withTitle(a)));
+          resolve(parseClaudeAgents(String(stdout)).map((a) => this.withRemote(this.withTitle(a))));
         } catch (e) {
           reject(e);
         }
@@ -137,6 +154,12 @@ export class AgentDiscovery {
   private withTitle(a: AgentBase): AgentBase {
     const title = pickTitle(this.titles.titles(a.cwd, a.sessionId), a.name);
     return title ? { ...a, title } : a;
+  }
+
+  /** #151: the Remote Control URL from the session record, when the session runs with --remote-control. */
+  private withRemote(a: AgentBase): AgentBase {
+    const url = this.remote.urlFor(a.pid, a.startedAt);
+    return url ? { ...a, remoteControlUrl: url } : a;
   }
 
   /** thread/loaded/list, then thread/read per thread. A failing read drops only that thread. */

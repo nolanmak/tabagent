@@ -28,16 +28,18 @@ const test = base.extend<{}, { w: W }>({
   w: [
     async ({}, use) => {
       const claude = new StubClaude();
-      const saved = { PATH: process.env.PATH, P: process.env.TABAGENT_CLAUDE_PROJECTS_DIR, S: process.env.TABAGENT_CLAUDE_SESSIONS_DIR };
+      const saved = { PATH: process.env.PATH, P: process.env.TABAGENT_CLAUDE_PROJECTS_DIR, S: process.env.TABAGENT_CLAUDE_SESSIONS_DIR, C: process.env.TABAGENT_CODEX_SOCKET };
       process.env.PATH = `${claude.dir}:${saved.PATH}`;
       process.env.TABAGENT_CLAUDE_PROJECTS_DIR = claude.projectsDir;
       process.env.TABAGENT_CLAUDE_SESSIONS_DIR = claude.sessionsDir;
+      // Never the real Codex app-server.
+      process.env.TABAGENT_CODEX_SOCKET = join(claude.dir, "no-codex.sock");
       const h = new Harness();
       try {
         await h.start();
       } finally {
         process.env.PATH = saved.PATH;
-        for (const [k, v] of [["TABAGENT_CLAUDE_PROJECTS_DIR", saved.P], ["TABAGENT_CLAUDE_SESSIONS_DIR", saved.S]] as const) {
+        for (const [k, v] of [["TABAGENT_CLAUDE_PROJECTS_DIR", saved.P], ["TABAGENT_CLAUDE_SESSIONS_DIR", saved.S], ["TABAGENT_CODEX_SOCKET", saved.C]] as const) {
           if (v === undefined) delete process.env[k];
           else process.env[k] = v;
         }

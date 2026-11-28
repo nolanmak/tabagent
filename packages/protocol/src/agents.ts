@@ -35,6 +35,11 @@ export const AgentSchema = z.object({
   linked: z.boolean(),
   canDriveTab: z.boolean(),
   delivery: z.enum(AGENT_ROUTES),
+  /**
+   * #151: Claude's Remote Control page for this session (`https://claude.ai/code/<bridgeSessionId>`), when it
+   * runs with `--remote-control`. Works whether or not the session is linked to TabAgent.
+   */
+  remoteControlUrl: z.string().optional(),
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
@@ -179,3 +184,103 @@ export const InboxEventSchema = z.object({ event: z.literal("channel.permission_
 
 /** AD9: how long the bridge waits for the proxy to ack a channel push before reporting CHANNEL_TIMEOUT. */
 export const CHANNEL_ACK_TIMEOUT_MS = 5_000;
+
+// ---------------------------------------------------------------------------
+// Chat page (#151, spec §7a): history, live entries and Remote Control. Paired /ext socket only (AD2):
+// the transcript can hold anything the user did, so it never goes over REST and is never logged.
+// ---------------------------------------------------------------------------
+
+/** Claude's own browser UI for a session started with `--remote-control`: https://claude.ai/code/<bridgeSessionId>. */
+export const REMOTE_CONTROL_BASE = "https://claude.ai/code/";
+const REMOTE_ID = /^session_[A-Za-z0-9]{8,100}$/;
+
+/** `bridgeSessionId` from `~/.claude/sessions/<pid>.json` as a Remote Control URL; null when it is not a plain id. */
+export function remoteControlUrl(bridgeSessionId: unknown): string | null {
+  return typeof bridgeSessionId === "string" && REMOTE_ID.test(bridgeSessionId) ? REMOTE_CONTROL_BASE + bridgeSessionId : null;
+}
+
+/** True only for a URL remoteControlUrl() could have made. Pages check it again before rendering a link. */
+export function isRemoteControlUrl(url: unknown): url is string {
+  return typeof url === "string" && url.startsWith(REMOTE_CONTROL_BASE) && REMOTE_ID.test(url.slice(REMOTE_CONTROL_BASE.length));
+}
+
+/** Caps on what the bridge sends per entry and per page (UTF-16 code units). Longer text is cut with a note. */
+export const AGENT_HISTORY_LIMITS = { defaultLimit: 200, maxLimit: 500, text: 20_000, toolSummary: 2_000, toolName: 100 } as const;
+
+export const AGENT_ENTRY_ROLES = ["user", "assistant", "tool"] as const;
+export type AgentEntryRole = (typeof AGENT_ENTRY_ROLES)[number];
+
+/**
+ * One transcript entry, normalised. `uuid` is stable for the same transcript line. A `tool` entry is a tool
+ * call (`tool.id` from the call) or, with `tool.result`, the result for the call with that id.
+ */
+export const AgentEntrySchema = z.object({
+  uuid: z.string().min(1).max(200),
+  /** Epoch ms; 0 when the transcript line had no timestamp. */
+  ts: z.number(),
+  role: z.enum(AGENT_ENTRY_ROLES),
+  text: z.string().max(AGENT_HISTORY_LIMITS.text + 100).optional(),
+  tool: z
+    .object({
+      name: z.string().max(AGENT_HISTORY_LIMITS.toolName + 10),
+      summary: z.string().max(AGENT_HISTORY_LIMITS.toolSummary + 100),
+      id: z.string().max(200).optional(),
+      result: z.boolean().optional(),
+      error: z.boolean().optional(),
+    })
+    .optional(),
+  /** A message the user sent from TabAgent (channel or piggyback); `text` is just their prompt. */
+  fromTabAgent: z.boolean().optional(),
+});
+export type AgentEntry = z.infer<typeof AgentEntrySchema>;
+
+/** Why history is not available. The worker produces NO_EXTENSION and TIMEOUT; the bridge the rest. */
+export const AGENT_HISTORY_CODES = ["AGENT_GONE", "NO_TRANSCRIPT", "UNSUPPORTED", "BAD_REQUEST", "NO_EXTENSION", "TIMEOUT"] as const;
+export type AgentHistoryCode = (typeof AGENT_HISTORY_CODES)[number];
+
+/** Worker -> bridge. `before`: the cursor from the previous page ("Load earlier"); absent for the newest page. */
+export const AgentHistorySchema = z.object({
+  type: z.literal("agent.history"),
+  requestId: z.string().min(1).max(200),
+  agentId: z.string().min(1).max(300),
+  before: z.string().max(40).optional(),
+  limit: z.number().int().min(1).max(AGENT_HISTORY_LIMITS.maxLimit).optional(),
+});
+export type AgentHistory = z.infer<typeof AgentHistorySchema>;
+
+/** Bridge -> worker. Entries oldest first. `before` is the cursor for the next older page when `hasMore`. */
+export const AgentHistoryResultSchema = z.object({
+  type: z.literal("agent.history.result"),
+  requestId: z.string().min(1),
+  agentId: z.string(),
+  ok: z.boolean(),
+  entries: z.array(AgentEntrySchema),
+  hasMore: z.boolean(),
+  before: z.string().optional(),
+  code: z.enum(AGENT_HISTORY_CODES).optional(),
+  detail: z.string().optional(),
+});
+export type AgentHistoryResult = z.infer<typeof AgentHistoryResultSchema>;
+
+/** Worker -> bridge: push entries appended to this agent's transcript until agent.unwatch (or the socket closes). */
+export const AgentWatchSchema = z.object({ type: z.literal("agent.watch"), agentId: z.string().min(1).max(300) });
+export type AgentWatch = z.infer<typeof AgentWatchSchema>;
+export const AgentUnwatchSchema = z.object({ type: z.literal("agent.unwatch"), agentId: z.string().min(1).max(300) });
+export type AgentUnwatch = z.infer<typeof AgentUnwatchSchema>;
+
+/**
+ * Bridge -> worker: new transcript entries for a watched agent. `reset`: the transcript was replaced or
+ * truncated (or the session moved to a new transcript), so the page reloads history instead of appending.
+ */
+export const AgentEntriesSchema = z.object({
+  type: z.literal("agent.entries"),
+  agentId: z.string(),
+  entries: z.array(AgentEntrySchema),
+  reset: z.boolean().optional(),
+});
+export type AgentEntries = z.infer<typeof AgentEntriesSchema>;
+
+/** How often the bridge checks a watched transcript for appended lines. */
+export const AGENT_WATCH_POLL_MS = 500;
+/** Most agents one extension can watch at once (one per open chat page). */
+export const AGENT_WATCH_MAX = 16;
