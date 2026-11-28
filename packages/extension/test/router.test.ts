@@ -497,3 +497,104 @@ describe("settings.get / settings.change through the router (#105, #106)", () =>
     expect(r.audit).toMatchObject({ tool: "settings.change", outcome: "ok", params: { changes: { onSessionEnd: "keep", liteSites: ["a.example"] } } });
   });
 });
+
+describe("policy.mode_change through the router (#109)", () => {
+  const modeWorld = (over: Partial<RouterDeps<{ tabs: number[] }>> = {}, state: Partial<PolicyState> = {}) => {
+    const handler = vi.fn(async (c: any) => ({ status: "applied", snapshot: c.policySnapshot }));
+    const w = world({ handler: (n) => (n === "policy.mode_change" ? handler : undefined), policySnapshot: vi.fn(async () => "mode-snap"), ...over }, state);
+    return { ...w, handler };
+  };
+
+  it("turning YOLO on is a category p prompt with each change, the duration, the reason and warnings", async () => {
+    const authorize = vi.fn(async (_r: AuthorizeRequest) => {});
+    const w = modeWorld({ authorize });
+    const r = await w.router.handle(cmd("policy.mode_change", { yolo: true, durationMin: 45, reason: "bulk-download statements" }));
+    expect(r.ok).toBe(true);
+    const req = authorize.mock.calls[0][0];
+    expect(req).toMatchObject({ tool: "policy.mode_change", sensitive: "p", level: "full", url: "" });
+    expect(req.summary).toContain("turn YOLO mode on for 45 minutes");
+    expect(req.summary).toContain("bulk-download statements");
+    expect(req.reasons.join(" ")).toMatch(/every site without asking/);
+    expect(w.handler).toHaveBeenCalledWith(expect.objectContaining({ policySnapshot: "mode-snap" }));
+  });
+
+  it("turning developer mode on warns about sensitive actions", async () => {
+    const authorize = vi.fn(async (_r: AuthorizeRequest) => {});
+    const w = modeWorld({ authorize });
+    await w.router.handle(cmd("policy.mode_change", { devAllowSensitive: true, reason: "debugging a checkout flow" }));
+    const req = authorize.mock.calls[0][0];
+    expect(req.sensitive).toBe("p");
+    expect(req.reasons.join(" ")).toMatch(/JavaScript/);
+  });
+
+  it("snapshots before the prompt", async () => {
+    const order: string[] = [];
+    const w = modeWorld({
+      policySnapshot: vi.fn(async (tool: string) => (order.push(`snapshot:${tool}`), "mode-snap")),
+      authorize: vi.fn(async (r: AuthorizeRequest) => void order.push(`authorize:${r.sensitive}`)),
+    });
+    await w.router.handle(cmd("policy.mode_change", { yolo: true, reason: "r" }));
+    expect(order).toEqual(["snapshot:policy.mode_change", "authorize:p"]);
+  });
+
+  it.each([{ yolo: true }, { devAllowSensitive: true }, { yolo: true, devAllowSensitive: false }])("YOLO, developer mode and saved permissions do not skip the prompt for %j", async (p) => {
+    // world()'s default authorize applies the pure policy and turns an ask into PERMISSION_DENIED.
+    const w = modeWorld({}, { yolo: true, devAllowSensitive: true, sites: { "https://a.example": { policy: "full", preapproved: { a: true, b: true, c: true, d: true, e: true } } } });
+    const r = await w.router.handle(cmd("policy.mode_change", { ...p, reason: "r" }));
+    expect(r.error?.message).toContain("would ask (sensitive)");
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["denied", "PERMISSION_DENIED"],
+    ["timed out", "PROMPT_TIMEOUT"],
+  ])("a %s prompt never applies the change", async (_label, errCode) => {
+    const w = modeWorld({
+      authorize: vi.fn(async () => {
+        throw new RouterError(errCode, "no");
+      }),
+    });
+    const r = await w.router.handle(cmd("policy.mode_change", { yolo: true, reason: "r" }));
+    expect(r.error?.code).toBe(errCode);
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+
+  it.each([{ yolo: false }, { devAllowSensitive: false }, { yolo: false, devAllowSensitive: false }])("turning off (%j) runs with no prompt, audited with the reason", async (p) => {
+    const w = modeWorld({}, { yolo: true, devAllowSensitive: true });
+    const r = await w.router.handle(cmd("policy.mode_change", { ...p, reason: "task finished" }));
+    expect(r.ok).toBe(true);
+    expect(w.handler).toHaveBeenCalled();
+    expect(w.authorize).toHaveBeenCalledWith(expect.objectContaining({ sensitive: undefined, level: "full" }));
+    expect(r.audit).toMatchObject({ tool: "policy.mode_change", outcome: "ok" });
+    expect(JSON.stringify(r.audit.params)).toContain("task finished");
+  });
+
+  it("turning off still respects the token cap", async () => {
+    const w = modeWorld();
+    const r = await w.router.handle({ ...cmd("policy.mode_change", { yolo: false, reason: "r" }), session: { ...meta, cap: "read" as any } });
+    expect(r.error?.code).toBe("PERMISSION_DENIED");
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+
+  it("a refused precheck (no-op, bad duration) never reaches the prompt or the handler", async () => {
+    const w = modeWorld({
+      policySnapshot: vi.fn(async () => {
+        throw new TabAgentError("BAD_REQUEST", "Nothing to change: YOLO mode is already on");
+      }),
+    });
+    const r = await w.router.handle(cmd("policy.mode_change", { yolo: true, reason: "r" }));
+    expect(r.error?.code).toBe("BAD_REQUEST");
+    expect(w.authorize).not.toHaveBeenCalled();
+    expect(w.handler).not.toHaveBeenCalled();
+  });
+
+  it("schema: reason is required, durationMin is bounded, unknown keys are refused", async () => {
+    const w = modeWorld();
+    expect((await w.router.handle(cmd("policy.mode_change", { yolo: true }))).error?.code).toBe("BAD_REQUEST");
+    expect((await w.router.handle(cmd("policy.mode_change", { yolo: true, reason: "" }))).error?.code).toBe("BAD_REQUEST");
+    expect((await w.router.handle(cmd("policy.mode_change", { yolo: true, durationMin: 0, reason: "r" }))).error?.code).toBe("BAD_REQUEST");
+    expect((await w.router.handle(cmd("policy.mode_change", { yolo: true, durationMin: 1441, reason: "r" }))).error?.code).toBe("BAD_REQUEST");
+    expect((await w.router.handle(cmd("policy.mode_change", { yolo: true, paused: false, reason: "r" }))).error?.code).toBe("BAD_REQUEST");
+    expect(w.authorize).not.toHaveBeenCalled();
+  });
+});
