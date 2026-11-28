@@ -1,6 +1,23 @@
 // Send to agent, bridge side (docs/specs/agent-inbox.md). Handles the extension's agents.* / agent.*
 // messages. Only the paired /ext socket reaches this (the daemon checks); there is no REST route (AD2).
-import { AgentGrantedSchema, agentSendOverLimit, AgentSendSchema, CHANNEL_ACK_TIMEOUT_MS, AgentsListSchema, type Agent, type AgentGranted, type AgentRoute, type AgentSend, type AgentSent, type BridgeToExt } from "@tabagent/protocol";
+import {
+  AGENT_HISTORY_LIMITS,
+  AgentGrantedSchema,
+  AgentHistorySchema,
+  agentSendOverLimit,
+  AgentSendSchema,
+  AgentUnwatchSchema,
+  AgentWatchSchema,
+  CHANNEL_ACK_TIMEOUT_MS,
+  AgentsListSchema,
+  type Agent,
+  type AgentGranted,
+  type AgentHistoryResult,
+  type AgentRoute,
+  type AgentSend,
+  type AgentSent,
+  type BridgeToExt,
+} from "@tabagent/protocol";
 import { agentSendAudit, type GrantAudit } from "./audit";
 import { composeAgentMessage } from "./compose";
 import { parseAgentId, type AgentBase, type AgentLink } from "./discovery";
@@ -10,6 +27,8 @@ import { InboxRegistry, profileCanDriveTab, type InboxStream } from "./inbox";
 import { QUEUE_ADD_TIMEOUT_MS, queueAdd, QueueWatcher } from "./queue";
 import { chooseRoute } from "./route";
 import { runSpawn, SPAWN_TIMEOUT_MS } from "./spawn";
+import { parseCursor, readHistoryPage } from "./transcript";
+import { TranscriptWatchers } from "./watch";
 
 export interface AgentsOpts extends DiscoveryOpts {
   /** AD15 audit sink (the daemon's AuditWriter). */
@@ -27,6 +46,8 @@ export interface AgentsOpts extends DiscoveryOpts {
   channelAckTimeoutMs?: number;
   /** AD11/§6: how long the bridge waits for agent.granted; default 5 s. */
   grantTimeoutMs?: number;
+  /** #151: transcript watcher poll interval (default AGENT_WATCH_POLL_MS). */
+  watchPollMs?: number;
 }
 
 /** §6 step 4: the bridge waits this long for agent.granted, then sends with the no-tab template. */
@@ -80,11 +101,14 @@ export class AgentsBridge {
   private grants = new Map<string, (r: AgentGranted | null) => void>();
   /** Grants that timed out: a late ok that added the tab is released at once. */
   private lateGrants = new Map<string, { sessionId: string; tabId: number; timer: ReturnType<typeof setTimeout> }>();
+  /** #151: transcripts watched for open chat pages. */
+  readonly transcripts: TranscriptWatchers;
 
   constructor(private o: AgentsOpts = {}) {
     this.inbox = new InboxRegistry({ now: o.now, onClosed: (key) => this.held.drop(key, "The agent's TabAgent connection closed") });
     this.held = new HoldQueue<Held>({ max: o.holdMax, ttlMs: o.holdTtlMs ?? envTtl(), now: o.now, onExpire: (m, reason) => this.report(m, "expired", reason) });
     this.discovery = new AgentDiscovery({ ...o, linkOf: (a) => this.linkOf(a) });
+    this.transcripts = new TranscriptWatchers({ resolve: async (id) => (await this.discovery.transcriptOf(id)).path, pollMs: o.watchPollMs });
   }
 
   /** AD4: a Claude agent is linked when a live stream registered its pid. Codex is never linked in v1. */
@@ -145,7 +169,59 @@ export class AgentsBridge {
       this.onGranted(msg, send);
       return true;
     }
+    if (type === "agent.history") {
+      void this.onHistory(msg, send);
+      return true;
+    }
+    if (type === "agent.watch") {
+      const r = AgentWatchSchema.safeParse(msg);
+      if (r.success) void this.onWatch(r.data.agentId, send);
+      return true;
+    }
+    if (type === "agent.unwatch") {
+      const r = AgentUnwatchSchema.safeParse(msg);
+      if (r.success) this.transcripts.unwatch(r.data.agentId);
+      return true;
+    }
     return false;
+  }
+
+  /** The extension socket closed: nobody is left to push chat entries to. */
+  onExtGone() {
+    this.transcripts.stopAll();
+  }
+
+  /**
+   * #151: one page of an agent's transcript, newest page first. Only agents in the current discovery list
+   * are read (no paths from the wire), and nothing about the content is audited or logged.
+   */
+  private async onHistory(msg: unknown, send: Send) {
+    const parsed = AgentHistorySchema.safeParse(msg);
+    const raw = msg as { requestId?: unknown; agentId?: unknown };
+    const requestId = parsed.success ? parsed.data.requestId : typeof raw.requestId === "string" && raw.requestId ? raw.requestId.slice(0, 200) : null;
+    if (!requestId) return;
+    const agentId = parsed.success ? parsed.data.agentId : typeof raw.agentId === "string" ? raw.agentId.slice(0, 300) : "";
+    const fail = (code: NonNullable<AgentHistoryResult["code"]>, detail: string) => send({ type: "agent.history.result", requestId, agentId, ok: false, entries: [], hasMore: false, code, detail });
+    if (!parsed.success) return fail("BAD_REQUEST", "Malformed agent.history");
+    const before = parseCursor(parsed.data.before);
+    if (before === null) return fail("BAD_REQUEST", "Bad history cursor");
+    if (parseAgentId(agentId)?.vendor === "codex") return fail("UNSUPPORTED", "History isn't available for Codex yet");
+    try {
+      const t = await this.discovery.transcriptOf(agentId);
+      if (!t.listed) return fail("AGENT_GONE", "That agent is no longer running");
+      if (!t.path) return fail("NO_TRANSCRIPT", "No conversation found for this session yet");
+      const page = await readHistoryPage(t.path, { before, limit: parsed.data.limit ?? AGENT_HISTORY_LIMITS.defaultLimit });
+      send({ type: "agent.history.result", requestId, agentId, ok: true, entries: page.entries, hasMore: page.hasMore, ...(page.hasMore ? { before: String(page.before) } : {}) });
+    } catch {
+      fail("NO_TRANSCRIPT", "The conversation could not be read");
+    }
+  }
+
+  private async onWatch(agentId: string, send: Send) {
+    if (parseAgentId(agentId)?.vendor !== "claude") return;
+    const t = await this.discovery.transcriptOf(agentId).catch(() => ({ listed: false, path: null }));
+    if (!t.listed) return;
+    await this.transcripts.watch(agentId, send);
   }
 
   private onGranted(msg: unknown, send: Send) {
@@ -168,6 +244,7 @@ export class AgentsBridge {
     for (const l of this.lateGrants.values()) clearTimeout(l.timer);
     this.lateGrants.clear();
     this.held.stop();
+    this.transcripts.stopAll();
     this.inbox.closeAll();
   }
 

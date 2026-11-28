@@ -145,6 +145,9 @@ function setHtml(el: HTMLElement, html: string) {
   if (el.innerHTML !== html) el.innerHTML = html;
 }
 
+/** The list markup last written; the live list also holds the moved composer, so innerHTML can't be compared. */
+let lastAgentsHtml = "";
+
 function renderAgentList() {
   const now = Date.now();
   const html = !agentsLoaded
@@ -152,10 +155,42 @@ function renderAgentList() {
     : agentsError
       ? `<li class="err">${esc(agentsError)}</li>`
       : agentListHtml(agents.map((a) => agentRowView(a, now)), selectedAgentId, agentsOtherOpen) || `<li class="muted">No agents running.</li>`;
-  setHtml($("agents"), html);
+  if (html !== lastAgentsHtml) {
+    // #151: the Quick send composer sits inside the list; park it (keeping its text) while the rows are rebuilt.
+    const focused = document.activeElement as HTMLTextAreaElement | null;
+    const keepFocus = focused && $("agentComposer").contains(focused) ? { el: focused, start: focused.selectionStart, end: focused.selectionEnd } : null;
+    $("composerPark").append($("agentComposer"));
+    $("agents").innerHTML = html;
+    lastAgentsHtml = html;
+    placeComposer();
+    if (keepFocus && $("agentComposer").isConnected && !$("composerPark").contains(keepFocus.el)) {
+      keepFocus.el.focus();
+      if (keepFocus.start != null && "setSelectionRange" in keepFocus.el) keepFocus.el.setSelectionRange(keepFocus.start, keepFocus.end ?? keepFocus.start);
+    }
+  } else placeComposer();
   const notes = sourcesNotes(agentSources);
   $("agentSources").hidden = !notes.length;
   $("agentSources").textContent = notes.join(" · ");
+  $("agentNotice").hidden = !agentNotice || !!selectedAgentId;
+  $("agentNotice").textContent = agentNotice;
+}
+
+/** #151: Quick send opens the composer directly under its row, never at the bottom of the list. */
+function placeComposer() {
+  const comp = $("agentComposer");
+  const row = selectedAgentId ? $("agents").querySelector<HTMLElement>(`li[data-agent-id="${CSS.escape(selectedAgentId)}"]`) : null;
+  if (!row) {
+    if (comp.parentElement !== $("composerPark")) $("composerPark").append(comp);
+    return;
+  }
+  let slot = row.nextElementSibling;
+  if (!slot?.classList.contains("quick-send")) {
+    slot = document.createElement("li");
+    slot.className = "quick-send";
+    slot.setAttribute("role", "none");
+    row.after(slot);
+  }
+  if (comp.parentElement !== slot) slot.append(comp);
 }
 
 function renderComposer() {
@@ -176,8 +211,8 @@ function renderComposer() {
   $("agentShareLabel").textContent = shareTabLabel(v);
   $("agentComposerNote").textContent = c.note;
   const target = $("agentTarget");
-  target.hidden = !v && !agentNotice;
-  target.innerHTML = v ? `To <b>${esc(v.title)}</b> <span class="muted">(${esc(v.vendorLabel)}, ${esc(v.notConnected ? "not connected" : v.routeWords)})</span>` : `<span class="err">${esc(agentNotice)}</span>`;
+  target.hidden = !v;
+  target.innerHTML = v ? `To <b>${esc(v.title)}</b> <span class="muted">(${esc(v.vendorLabel)}, ${esc(v.connection.label)})</span>` : "";
   $("agentTabTitle").textContent = activeTab ? `(${activeTab.title || activeTab.url})` : "(no web page in this tab)";
 }
 
@@ -309,13 +344,21 @@ async function refreshAgents() {
   applyPendingIntent();
 }
 
-function selectAgent(el: EventTarget | null) {
-  const li = (el as HTMLElement | null)?.closest<HTMLElement>("li[data-agent-id]");
-  if (!li?.dataset.agentId) return;
-  selectedAgentId = li.dataset.agentId;
+/** #151: Quick send toggles the composer under that row. */
+function toggleQuickSend(id: string) {
+  selectedAgentId = selectedAgentId === id ? null : id;
   agentNotice = "";
   renderAgentsBox();
-  agentPrompt().focus();
+  if (selectedAgentId) agentPrompt().focus();
+}
+
+/** #151: a row opens the agent's chat page (an existing chat tab for it is reused). */
+async function openChat(id: string) {
+  const r = await send({ type: "ui.agent_open_chat", agentId: id }).catch((e) => ({ error: String(e) }));
+  if (r?.error) {
+    agentNotice = `Could not open the chat: ${r.error}`;
+    renderAgentsBox();
+  }
 }
 
 /** `forceSpawn`: the explicit Start a new session button (#137). Plain Send never spawns. */
@@ -510,13 +553,22 @@ $("sessions").addEventListener("click", async (e) => {
     }
   }
 });
-$("agents").addEventListener("click", (e) => selectAgent(e.target));
+$("agents").addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  // The Quick send composer lives inside the list; links (Open in Claude, How to connect) open themselves.
+  if (t.closest(".quick-send, a, summary")) return;
+  const quick = t.closest<HTMLElement>("[data-quick-send]")?.dataset.quickSend;
+  if (quick) return toggleQuickSend(quick);
+  const id = t.closest<HTMLElement>("li[data-agent-id]")?.dataset.agentId;
+  if (id) void openChat(id);
+});
 $("agents").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
-  // Leave the disclosure summary and the connect link to their own keyboard behaviour.
-  if ((e.target as HTMLElement).closest("summary, a")) return;
+  const t = e.target as HTMLElement;
+  // Only the row itself: leave the composer, buttons, links and the disclosure to their own keys.
+  if (!t.matches("li[data-agent-id]")) return;
   e.preventDefault();
-  selectAgent(e.target);
+  void openChat(t.dataset.agentId!);
 });
 // #137: remember whether "N other sessions" is open across the 5 s re-render. `toggle` does not bubble.
 $("agents").addEventListener(

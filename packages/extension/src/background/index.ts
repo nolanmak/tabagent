@@ -7,10 +7,11 @@ import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
 import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
-import { agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, sendToAgent, setAgentsSender, setAgentStatusListener } from "./bridgeAgents";
+import { agentHistory, agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, rewatchAgents, sendToAgent, setAgentsSender, setAgentStatusListener, watchAgent, watchedAgents as watchedAgentsList } from "./bridgeAgents";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
 import { menuItemsBuilt, onMenuClick, rebuildMenus, wireContextMenu, type CurrentAgents } from "./contextMenu";
-import { agentRowView } from "../pure/agents";
+import { agentRowView, chatPageUrl } from "../pure/agents";
+import { findChatTab } from "../pure/chatTabs";
 import { onAuthBridgeMessage, onHandoffBridgeMessage, setAuthSender } from "./auth"; // M6 auth (registers auth.* handlers)
 import { onCaptchaBridgeMessage, setCaptchaSender } from "./captcha"; // #61 (registers captcha.solve + autoCaptcha)
 import { allCdpTabs, detachAll, peekCdpTab } from "./cdp";
@@ -54,6 +55,8 @@ const bridge = createBridgeClient({
     if (status === "connected") void rebuildMenus(currentAgents).catch(() => {});
     if (status === "connected") flushQueuedEvents();
     if (status === "connected") void syncPrompts();
+    // #151: the bridge forgets transcript watches when its socket closes; open chat pages ask again.
+    if (status === "connected") rewatchAgents();
   },
   protocolVersion: PROTOCOL_VERSION,
   extensionVersion: VERSION,
@@ -508,6 +511,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
           return { type: "agent.sent", requestId: req.msg.requestId, route: "none", state: "failed", code: "NO_EXTENSION", detail: "The bridge does not support Send to agent; update @nolmak/tabagent" };
         return sendToAgent(req.msg);
       }
+      case "ui.agent_history": {
+        // #151: transcript pages for the chat page; only over the paired socket (AD2), never logged.
+        if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return { type: "agent.history.result", requestId: "", agentId: String(msg.agentId ?? ""), ok: false, entries: [], hasMore: false, code: "NO_EXTENSION", detail: "The bridge does not support Send to agent; update @nolmak/tabagent" };
+        return agentHistory({ agentId: msg.agentId, before: msg.before, limit: msg.limit });
+      }
+      case "ui.agent_open_chat":
+        return openChatTab(String(msg.agentId ?? ""));
       case "ui.answer":
         // #108: same path as Touch ID / phone answers; first answer wins, the panel's is recorded as "panel".
         return prompts.answerAs(String(msg.promptId ?? msg.id), msg.answer, "panel");
@@ -565,6 +575,46 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   return true;
 });
 
+/** #151: focus the agent's chat page if one is open, else open it in a new tab. */
+async function openChatTab(agentId: string) {
+  if (!agentId) return { ok: false };
+  const base = chrome.runtime.getURL("");
+  const hit = findChatTab(await chrome.tabs.query({}), base, agentId);
+  if (hit?.id != null) {
+    await chrome.tabs.update(hit.id, { active: true });
+    if (hit.windowId != null) await chrome.windows.update(hit.windowId, { focused: true }).catch(() => {});
+    return { ok: true, tabId: hit.id, reused: true };
+  }
+  const tab = await chrome.tabs.create({ url: chatPageUrl(base, agentId) });
+  return { ok: true, tabId: tab.id, reused: false };
+}
+
+// #151: a chat page holds a port open while it shows an agent; entries for that agent are pushed into it.
+// Same gate as ui.* (our own extension pages only), and the watch ends when the page closes.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "agent-chat") return;
+  if (!isPanelSender(port.sender, chrome.runtime.id, chrome.runtime.getURL(""))) {
+    port.disconnect();
+    return;
+  }
+  let unwatch: (() => void) | null = null;
+  port.onMessage.addListener((m: any) => {
+    if (m?.type !== "watch" || typeof m.agentId !== "string" || !m.agentId || m.agentId.length > 300) return;
+    unwatch?.();
+    unwatch = watchAgent(m.agentId, (e) => {
+      try {
+        port.postMessage(e);
+      } catch {
+        /* page gone */
+      }
+    });
+  });
+  port.onDisconnect.addListener(() => {
+    unwatch?.();
+    unwatch = null;
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Lifecycle (D11): alarm-driven reconnect every 30s; ping every 20s once welcomed.
 // ---------------------------------------------------------------------------
@@ -618,6 +668,7 @@ chrome.runtime.onInstalled.addListener(() => bridge.connect());
   runDueSchedules,
   rebuildMenus: () => rebuildMenus(currentAgents),
   menuItems: menuItemsBuilt,
+  watchedAgents: () => watchedAgentsList(),
   contextMenuClick: onMenuClick,
   checkYoloExpiry,
   advanceClock: (ms: number) => setSettingsClockOffset(ms),

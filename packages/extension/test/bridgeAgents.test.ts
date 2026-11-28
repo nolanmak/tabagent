@@ -1,6 +1,6 @@
 // Worker side of Send to agent: agents.list request/reply over the bridge socket (AD1, AD16).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, sendToAgent, setAgentsSender, setAgentStatusListener } from "../src/background/bridgeAgents";
+import { agentHistory, rewatchAgents, watchAgent, watchedAgents, agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, sendToAgent, setAgentsSender, setAgentStatusListener } from "../src/background/bridgeAgents";
 
 let sent: any[];
 beforeEach(() => {
@@ -83,5 +83,52 @@ describe("ui.agent_send -> agent.send (AD12, AD17, §6)", () => {
     vi.advanceTimersByTime(20_001);
     await expect(p).resolves.toMatchObject({ requestId: "q3", state: "failed", code: "TIMEOUT" });
     expect(onAgentsBridgeMessage({ type: "agent.sent", requestId: "q3", route: "queue", state: "queued" })).toBe(true);
+  });
+});
+
+describe("#151 chat page: agent.history and agent.watch", () => {
+  it("agentHistory sends agent.history (limit clamped) and resolves with the matching result", async () => {
+    const p = agentHistory({ agentId: "claude:1:1", before: "123", limit: 99_999 });
+    expect(sent[0]).toMatchObject({ type: "agent.history", agentId: "claude:1:1", before: "123", limit: 500 });
+    const { requestId } = sent[0];
+    onAgentsBridgeMessage({ type: "agent.history.result", requestId: "other", agentId: "x", ok: true, entries: [], hasMore: false });
+    const entries = [{ uuid: "u", ts: 1, role: "user", text: "hi" }];
+    expect(onAgentsBridgeMessage({ type: "agent.history.result", requestId, agentId: "claude:1:1", ok: true, entries, hasMore: true, before: "9" })).toBe(true);
+    await expect(p).resolves.toEqual({ type: "agent.history.result", requestId, agentId: "claude:1:1", ok: true, entries, hasMore: true, before: "9" });
+  });
+  it("a malformed page, no bridge, no agent and a silent bridge are failed results, never rejections", async () => {
+    const bad = agentHistory({ agentId: "a" });
+    onAgentsBridgeMessage({ type: "agent.history.result", requestId: sent.at(-1).requestId, agentId: "a", ok: true, entries: [{ nope: 1 }], hasMore: false });
+    await expect(bad).resolves.toMatchObject({ ok: false, code: "BAD_REQUEST" });
+    await expect(agentHistory({ agentId: 5 })).resolves.toMatchObject({ ok: false, code: "BAD_REQUEST" });
+    const slow = agentHistory({ agentId: "a" });
+    expect(sent.at(-1).limit).toBe(200);
+    vi.advanceTimersByTime(15_001);
+    await expect(slow).resolves.toMatchObject({ ok: false, code: "TIMEOUT" });
+    setAgentsSender(() => false);
+    await expect(agentHistory({ agentId: "a" })).resolves.toMatchObject({ ok: false, code: "NO_EXTENSION" });
+  });
+  it("watches are counted per agent: one agent.watch, one agent.unwatch, entries fan out, rewatch after reconnect", () => {
+    const a: any[] = [];
+    const b: any[] = [];
+    const offA = watchAgent("claude:1:1", (m) => a.push(m));
+    const offB = watchAgent("claude:1:1", (m) => b.push(m));
+    expect(sent.filter((m) => m.type === "agent.watch")).toEqual([{ type: "agent.watch", agentId: "claude:1:1" }]);
+    expect(watchedAgents()).toEqual(["claude:1:1"]);
+    const push = { type: "agent.entries", agentId: "claude:1:1", entries: [{ uuid: "u", ts: 1, role: "assistant", text: "ok" }] };
+    expect(onAgentsBridgeMessage(push)).toBe(true);
+    expect(onAgentsBridgeMessage({ type: "agent.entries", agentId: "other", entries: [] })).toBe(true);
+    expect(onAgentsBridgeMessage({ type: "agent.entries", agentId: "claude:1:1", entries: "bad" })).toBe(true);
+    expect(a).toEqual([push]);
+    expect(b).toEqual([push]);
+    sent.length = 0;
+    rewatchAgents();
+    expect(sent).toEqual([{ type: "agent.watch", agentId: "claude:1:1" }]);
+    offA();
+    offA();
+    expect(sent.filter((m) => m.type === "agent.unwatch")).toEqual([]);
+    offB();
+    expect(sent.filter((m) => m.type === "agent.unwatch")).toEqual([{ type: "agent.unwatch", agentId: "claude:1:1" }]);
+    expect(watchedAgents()).toEqual([]);
   });
 });

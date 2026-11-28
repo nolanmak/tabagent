@@ -23,7 +23,7 @@ await build({
   format: "esm",
   define: { PAGELIB_SRC: JSON.stringify(pagelibSrc) },
 });
-const uiEntries = { sidepanel: join(here, "src/ui/sidepanel.ts"), prompt: join(here, "src/ui/prompt.ts") };
+const uiEntries = { sidepanel: join(here, "src/ui/sidepanel.ts"), prompt: join(here, "src/ui/prompt.ts"), chat: join(here, "src/ui/chat.ts") };
 if (existsSync(join(here, "src/ui/authpanel.ts"))) uiEntries.authpanel = join(here, "src/ui/authpanel.ts"); // M6 handoff UI (optional)
 await build({ ...common, entryPoints: uiEntries, outdir: out, format: "iife" });
 

@@ -326,6 +326,7 @@ export class Daemon {
         this.ext = null;
         this.log("Extension disconnected");
         this.approvals.onExtGone();
+        this.agents.onExtGone();
       }
       this.failPending(ws, "The TabAgent extension disconnected");
       this.handoff.onSocketClosed(ws);

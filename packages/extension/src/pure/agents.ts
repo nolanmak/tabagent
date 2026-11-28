@@ -1,6 +1,6 @@
 // Send to agent P1c (docs/specs/agent-inbox.md §7, AD6, AD7, AD13): the side panel's Agents section,
 // composer and send feed as plain data in, plain data or escaped HTML out. sidepanel.ts wires it to the DOM.
-import { agentSendOverLimit, type Agent, type AgentDeliveryState, type AgentRoute, type AgentSendCode, type AgentSources, type AgentVendor } from "@tabagent/protocol";
+import { agentSendOverLimit, isRemoteControlUrl, type Agent, type AgentDeliveryState, type AgentRoute, type AgentSendCode, type AgentSources, type AgentVendor } from "@tabagent/protocol";
 import { esc } from "./html";
 
 /** §5: the panel asks when it opens and every 5 s while visible. */
@@ -35,8 +35,30 @@ export function formatAge(ms: number): string {
 
 /** #137: the docs section that explains how to connect a session so it can be messaged. */
 export const CONNECT_DOCS_URL = "https://github.com/nolanmak/tabagent/blob/main/docs/send-to-agent.md#connect-a-session";
-export const NOT_CONNECTED = "Not connected — can't message this session";
-export const CONNECT_HINT = "Connect it: run tabagent setup claude, then restart this session";
+export const NOT_CONNECTED = "Not connected";
+export const CONNECT_HINT = "How to connect";
+/** #152: what connecting takes, as the link's tooltip. */
+export const CONNECT_STEPS = "Run tabagent setup claude, then restart this session";
+
+/** #151: how this session can be reached, in the same words on the panel row and the chat page. */
+export type ConnectionTone = "instant" | "next" | "queue" | "remote" | "off" | "error";
+export interface ConnectionState {
+  label: string;
+  tone: ConnectionTone;
+}
+
+/** The Remote Control link, only when it is one the bridge could have made (claude.ai/code/session_…). */
+export function remoteUrl(a: Pick<Agent, "remoteControlUrl">): string | null {
+  return isRemoteControlUrl(a.remoteControlUrl) ? a.remoteControlUrl : null;
+}
+
+export function connectionState(a: Agent): ConnectionState {
+  if (a.linked && a.delivery === "channel") return { label: "Connected · instant", tone: "instant" };
+  if (a.linked && a.delivery === "piggyback") return { label: "Connected · on next browser action", tone: "next" };
+  if (a.vendor === "codex") return a.delivery === "queue" ? { label: "Codex · queued", tone: "queue" } : { label: a.status === "error" ? `Can't take messages (${a.statusLabel ?? "error"})` : "Can't take messages", tone: "error" };
+  if (remoteUrl(a)) return { label: "Remote Control only", tone: "remote" };
+  return { label: NOT_CONNECTED, tone: "off" };
+}
 
 /** Why a `none` agent cannot be sent to; matches the bridge's NO_ROUTE detail. */
 function noneReason(a: Agent): string {
@@ -73,6 +95,11 @@ export interface AgentRowView {
   badges: string[];
   /** Glossary canDriveTab: a Send with the tab grants it to this agent (AD11). */
   canDriveTab: boolean;
+  /** #151: the row's connection words ("Connected · instant", "Remote Control only", …). */
+  connection: ConnectionState;
+  /** #151: Claude's Remote Control page for this session, when it has one. */
+  remoteControlUrl: string | null;
+  busy: boolean;
 }
 
 export function agentRowView(a: Agent, now: number): AgentRowView {
@@ -108,6 +135,9 @@ export function agentRowView(a: Agent, now: number): AgentRowView {
     reason,
     badges,
     canDriveTab: a.canDriveTab,
+    connection: connectionState(a),
+    remoteControlUrl: remoteUrl(a),
+    busy: a.status === "busy",
   };
 }
 
@@ -116,16 +146,26 @@ export function shareTabLabel(v: AgentRowView | null): string {
   return v?.canDriveTab && (v.route === "piggyback" || v.route === "channel") ? "Share this tab (agent can use it)" : "Share this tab's title and link";
 }
 
-/** One clickable row (a listbox option). Every agent-supplied string goes through esc(). */
+/** The chat page for an agent (#151). The id is the only parameter; the page asks the worker for the rest. */
+export function chatPageUrl(base: string, agentId: string): string {
+  return `${base}chat.html?agent=${encodeURIComponent(agentId)}`;
+}
+
+/**
+ * One row (a listbox option). Clicking it opens the agent's chat page (#151); "Quick send" opens the
+ * composer right under the row; "Open in Claude" is the Remote Control page. Every agent string goes
+ * through esc(). `selected`: the Quick send composer is open under this row.
+ */
 export function agentRowHtml(v: AgentRowView, selected: boolean): string {
   const meta = [v.cwdBase, v.age, v.pid != null ? `pid ${v.pid}` : null, v.status].filter((x) => x != null).map(esc).join(" · ");
   const badges = v.badges.map((b) => `<span class="badge">${esc(b)}</span>`).join("");
-  const route = v.sendable
-    ? `<span class="agent-route">${esc(v.routeWords)}</span>`
-    : v.notConnected
-      ? `<span class="err">${esc(NOT_CONNECTED)}</span><br><a class="connect-hint" href="${esc(CONNECT_DOCS_URL)}" target="_blank" rel="noopener noreferrer">${esc(CONNECT_HINT)}</a>`
-      : `<span class="err">${esc(v.reason)}</span>`;
-  return `<li class="agent${v.sendable ? "" : " agent-none"}${selected ? " selected" : ""}" role="option" tabindex="0" aria-selected="${selected}" data-agent-id="${esc(v.id)}" title="${esc(v.cwd)}"><span><span class="vendor vendor-${esc(v.vendor)}">${esc(v.vendorLabel)}</span> <b>${esc(v.title)}</b>${badges}<br><span class="muted small">${meta}</span><br><span class="small">${route}</span></span></li>`;
+  const conn = `<span class="conn conn-${v.connection.tone}">${esc(v.connection.label)}</span>`;
+  const hint = v.notConnected ? ` <a class="connect-hint" href="${esc(CONNECT_DOCS_URL)}" target="_blank" rel="noopener noreferrer" title="${esc(CONNECT_STEPS)}">${esc(CONNECT_HINT)}</a>` : "";
+  const rc = v.remoteControlUrl ? `<a class="rc-link" href="${esc(v.remoteControlUrl)}" target="_blank" rel="noopener noreferrer" title="Open this session in Claude (Remote Control)">Open in Claude ↗</a>` : "";
+  const quick = v.sendable ? `<button type="button" class="quick-btn" data-quick-send="${esc(v.id)}" aria-expanded="${selected}">${selected ? "Close" : "Quick send"}</button>` : "";
+  const busy = v.busy ? `<span class="busy-dot" title="Working" aria-label="Working"></span>` : "";
+  const label = `${v.title} — open chat`;
+  return `<li class="agent${v.sendable ? "" : " agent-none"}${selected ? " selected" : ""}" role="option" tabindex="0" aria-selected="${selected}" aria-label="${esc(label)}" data-agent-id="${esc(v.id)}" title="${esc(v.cwd)}"><span class="agent-main"><span class="agent-line"><span class="vendor vendor-${esc(v.vendor)}">${esc(v.vendorLabel)}</span> <b class="agent-title">${esc(v.title)}</b>${busy}${badges}</span><span class="muted small agent-meta">${meta}</span><span class="small agent-conn">${conn}${hint}</span></span><span class="agent-actions">${rc}${quick}<span class="chev" aria-hidden="true">›</span></span></li>`;
 }
 
 /**
@@ -134,7 +174,8 @@ export function agentRowHtml(v: AgentRowView, selected: boolean): string {
  */
 export function groupAgents(views: AgentRowView[]): { main: AgentRowView[]; other: AgentRowView[] } {
   const sorted = views.slice().sort((a, b) => Number(b.linked) - Number(a.linked) || b.startedAt - a.startedAt);
-  const collapsed = (v: AgentRowView) => v.notConnected && !v.titled;
+  // A Remote Control session can be opened in Claude, so it stays in the main list.
+  const collapsed = (v: AgentRowView) => v.notConnected && !v.titled && !v.remoteControlUrl;
   return { main: sorted.filter((v) => !collapsed(v)), other: sorted.filter(collapsed) };
 }
 

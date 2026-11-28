@@ -1,7 +1,23 @@
 // Send to agent, worker side (docs/specs/agent-inbox.md AD1, AD16, AD17, §6): agents.list -> agents.listed
 // and agent.send -> agent.sent over the bridge socket, plus agent.status events. Chrome-free; index.ts
 // wires the sender and routes bridge messages here.
-import { AGENTS_FEATURE, AgentSendSchema, TabAgentError, type Agent, type AgentSend, type AgentSendCode, type AgentSent, type AgentSources, type AgentStatusEvent } from "@tabagent/protocol";
+import {
+  AGENT_HISTORY_LIMITS,
+  AGENTS_FEATURE,
+  AgentEntriesSchema,
+  AgentHistoryResultSchema,
+  AgentSendSchema,
+  TabAgentError,
+  type Agent,
+  type AgentEntries,
+  type AgentHistoryCode,
+  type AgentHistoryResult,
+  type AgentSend,
+  type AgentSendCode,
+  type AgentSent,
+  type AgentSources,
+  type AgentStatusEvent,
+} from "@tabagent/protocol";
 
 type Sender = (msg: unknown) => boolean;
 let sender: Sender | null = null;
@@ -79,9 +95,81 @@ export function sendToAgent(msg: AgentSend, timeoutMs = AGENT_SEND_TIMEOUT_MS): 
   });
 }
 
+// ---------------------------------------------------------------------------
+// Chat page (#151): agent.history and agent.watch / agent.entries
+// ---------------------------------------------------------------------------
+
+export const AGENT_HISTORY_TIMEOUT_MS = 15_000;
+
+const histories = new Map<string, { resolve: (r: AgentHistoryResult) => void; timer: ReturnType<typeof setTimeout> }>();
+
+const historyFailed = (requestId: string, agentId: string, code: AgentHistoryCode, detail: string): AgentHistoryResult => ({ type: "agent.history.result", requestId, agentId, ok: false, entries: [], hasMore: false, code, detail });
+
+/** One page of an agent's transcript. Never rejects: no bridge or a silent one is a failed result. */
+export function agentHistory(req: { agentId: unknown; before?: unknown; limit?: unknown }, timeoutMs = AGENT_HISTORY_TIMEOUT_MS): Promise<AgentHistoryResult> {
+  const requestId = crypto.randomUUID();
+  const agentId = typeof req.agentId === "string" ? req.agentId : "";
+  const limit = typeof req.limit === "number" && Number.isInteger(req.limit) ? Math.min(Math.max(req.limit, 1), AGENT_HISTORY_LIMITS.maxLimit) : AGENT_HISTORY_LIMITS.defaultLimit;
+  const msg = { type: "agent.history", requestId, agentId, limit, ...(typeof req.before === "string" ? { before: req.before } : {}) };
+  return new Promise((resolve) => {
+    if (!agentId) return resolve(historyFailed(requestId, agentId, "BAD_REQUEST", "No agent"));
+    if (!sender || !sender(msg)) return resolve(historyFailed(requestId, agentId, "NO_EXTENSION", "The bridge is not connected"));
+    const timer = setTimeout(() => {
+      histories.delete(requestId);
+      resolve(historyFailed(requestId, agentId, "TIMEOUT", "The bridge did not answer in time"));
+    }, timeoutMs);
+    histories.set(requestId, { resolve, timer });
+  });
+}
+
+type EntriesListener = (m: AgentEntries) => void;
+/** Chat pages watching each agent. The bridge is asked once per agent, however many pages watch it. */
+const watchers = new Map<string, Set<EntriesListener>>();
+
+/** Watch an agent's transcript; returns the unwatch function. The last unwatch tells the bridge. */
+export function watchAgent(agentId: string, fn: EntriesListener): () => void {
+  let set = watchers.get(agentId);
+  if (!set) {
+    set = new Set();
+    watchers.set(agentId, set);
+    sender?.({ type: "agent.watch", agentId });
+  }
+  set.add(fn);
+  return () => {
+    const cur = watchers.get(agentId);
+    if (!cur || !cur.delete(fn) || cur.size) return;
+    watchers.delete(agentId);
+    sender?.({ type: "agent.unwatch", agentId });
+  };
+}
+
+/** The bridge drops watches when its socket closes; ask again after every (re)connect. */
+export function rewatchAgents() {
+  for (const agentId of watchers.keys()) sender?.({ type: "agent.watch", agentId });
+}
+
+export function watchedAgents(): string[] {
+  return [...watchers.keys()];
+}
+
 /** Called by index.ts for bridge messages; returns true when the message was ours. */
 export function onAgentsBridgeMessage(msg: any): boolean {
   switch (msg?.type) {
+    case "agent.history.result": {
+      const w = histories.get(msg.requestId);
+      if (!w) return true;
+      histories.delete(msg.requestId);
+      clearTimeout(w.timer);
+      const r = AgentHistoryResultSchema.safeParse(msg);
+      w.resolve(r.success ? r.data : historyFailed(String(msg.requestId), String(msg.agentId ?? ""), "BAD_REQUEST", "The bridge sent a malformed history page"));
+      return true;
+    }
+    case "agent.entries": {
+      const r = AgentEntriesSchema.safeParse(msg);
+      if (!r.success) return true;
+      for (const fn of watchers.get(r.data.agentId) ?? []) fn(r.data);
+      return true;
+    }
     case "agent.sent": {
       const w = sends.get(msg.requestId);
       if (!w) return true;

@@ -28,8 +28,8 @@ test("side panel never scrolls horizontally with long content", async ({ h }) =>
     ...over,
   });
   const rows =
-    agentRowHtml(agentRowView(longAgent({ title: `A readable session title that goes on and on ${"z".repeat(90)}` }), now), true) +
-    agentRowHtml(agentRowView(longAgent({ id: "claude:2:2", linked: false, canDriveTab: false, delivery: "none" }), now), false) +
+    agentRowHtml(agentRowView(longAgent({ title: `A readable session title that goes on and on ${"z".repeat(90)}`, delivery: "channel" }), now), true) +
+    agentRowHtml(agentRowView(longAgent({ id: "claude:2:2", linked: false, canDriveTab: false, delivery: "none", remoteControlUrl: "https://claude.ai/code/session_01AbCdEfGhIjKlMnOpQrStUv" }), now), false) +
     agentRowHtml(agentRowView(longAgent({ id: "codex:t", vendor: "codex", name: null, delivery: "none", status: "error" }), now), false);
   const spawnLabel = agentRowView(longAgent({ linked: false, delivery: "none" }), now).spawnLabel!;
   const feed = agentFeedLineHtml({ requestId: "r", ts: now, agentName: longAgent().name!, vendor: "claude", route: "spawn", state: "failed", code: "WORKSPACE_UNTRUSTED", detail: `Workspace not trusted. Run claude in ${longAgent().cwd} once and accept the trust prompt.` });
@@ -41,6 +41,11 @@ test("side panel never scrolls horizontally with long content", async ({ h }) =>
       document.getElementById("manualCaptureTab")!.innerHTML = `<option>A very long tab title ${long}</option>`;
       document.getElementById("agentsBox")!.hidden = false;
       document.getElementById("agents")!.innerHTML = rows;
+      // #151: the Quick send composer opens under the selected row.
+      const slot = document.createElement("li");
+      slot.className = "quick-send";
+      slot.append(document.getElementById("agentComposer")!);
+      document.querySelector("#agents li.agent")!.after(slot);
       document.getElementById("agentFeed")!.innerHTML = feed;
       // #137: the secondary Start a new session button, labelled with a long folder name.
       const spawn = document.getElementById("agentSpawn")!;

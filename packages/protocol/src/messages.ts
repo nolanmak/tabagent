@@ -1,6 +1,11 @@
 // Wire messages between bridge and extension (D4, D5, D11, D14, D20), as zod schemas.
 import { z } from "zod";
 import {
+  AgentEntriesSchema,
+  AgentHistoryResultSchema,
+  AgentHistorySchema,
+  AgentUnwatchSchema,
+  AgentWatchSchema,
   AgentSendSchema,
   AgentSentSchema,
   AgentsListedSchema,
@@ -11,6 +16,11 @@ import {
   type AgentsList,
   type AgentsListed,
   type AgentStatusEvent,
+  type AgentEntries,
+  type AgentHistory,
+  type AgentHistoryResult,
+  type AgentUnwatch,
+  type AgentWatch,
 } from "./agents";
 import { ERROR_CODES } from "./errors";
 
@@ -209,8 +219,8 @@ export const AgentReleaseSchema = z.object({
 });
 export type AgentRelease = z.infer<typeof AgentReleaseSchema>;
 
-export const ExtToBridgeSchema = z.discriminatedUnion("type", [HelloSchema, PingSchema, EventSchema, ResultEnvelopeSchema, FilesResolveSchema, AgentsListSchema, AgentSendSchema, AgentGrantedSchema]);
-export const BridgeToExtSchema = z.discriminatedUnion("type", [WelcomeSchema, PongSchema, CommandSchema, SessionClosedSchema, BridgeErrorSchema, FilesResolvedSchema, AgentsListedSchema, AgentSentSchema, AgentStatusSchema, AgentGrantSchema, AgentReleaseSchema]);
+export const ExtToBridgeSchema = z.discriminatedUnion("type", [HelloSchema, PingSchema, EventSchema, ResultEnvelopeSchema, FilesResolveSchema, AgentsListSchema, AgentSendSchema, AgentGrantedSchema, AgentHistorySchema, AgentWatchSchema, AgentUnwatchSchema]);
+export const BridgeToExtSchema = z.discriminatedUnion("type", [WelcomeSchema, PongSchema, CommandSchema, SessionClosedSchema, BridgeErrorSchema, FilesResolvedSchema, AgentsListedSchema, AgentSentSchema, AgentStatusSchema, AgentGrantSchema, AgentReleaseSchema, AgentHistoryResultSchema, AgentEntriesSchema]);
 
 export type ToolErrorWire = z.infer<typeof ToolErrorSchema>;
 
@@ -230,7 +240,7 @@ export interface LegacyResult<R = unknown> {
   error?: ToolErrorWire;
 }
 
-export type ExtToBridge = Hello | LegacyHello | z.infer<typeof PingSchema> | EventMessage | ResultEnvelope | LegacyResult | FilesResolve | AgentsList | AgentSend | AgentGranted;
+export type ExtToBridge = Hello | LegacyHello | z.infer<typeof PingSchema> | EventMessage | ResultEnvelope | LegacyResult | FilesResolve | AgentsList | AgentSend | AgentGranted | AgentHistory | AgentWatch | AgentUnwatch;
 export type BridgeToExt =
   | AgentGrant
   | AgentRelease
@@ -242,7 +252,9 @@ export type BridgeToExt =
   | FilesResolved
   | AgentsListed
   | AgentSent
-  | AgentStatusEvent;
+  | AgentStatusEvent
+  | AgentHistoryResult
+  | AgentEntries;
 
 /** Result type kept for existing extension code: the envelope with an optional audit record. */
 export type Result<R = unknown> = Omit<ResultEnvelope<R>, "audit"> & { audit?: AuditRecord };
