@@ -117,6 +117,25 @@ describe("gate: requireSensitive", () => {
     expect((await Set_.getSettings()).sites[A].authAlways).toEqual(["acct1"]);
     await P.requireSensitive(meta(), `${A}/`, "g", "auth.login", "sign in", [], { auth });
   });
+  it("#112 sign-up consent: always asked even when the account is in authAlways; Always is not stored; prompt shows the sign-up summary", async () => {
+    const summary = "Create an account on a.example as n•••@x.com and save it to Bitwarden?";
+    const auth = { accountId: "bitwarden:new", accountMasked: "n•••@x.com", provider: "bitwarden", signup: true };
+    await Set_.updateSettings({ sites: { [A]: { policy: "full", auth: true, authAlways: ["bitwarden:new"] } } });
+    const p = P.requireSensitive(meta(), `${A}/`, "g", "auth.signup", summary, [], { auth });
+    const pr = await nextPrompt();
+    expect(pr).toBeTruthy();
+    expect(pr.summary).toBe(summary);
+    expect(pr.auth).toMatchObject({ signup: true });
+    P.answerPrompt(pr.promptId, "always");
+    await p;
+    expect((await Set_.getSettings()).sites[A].authAlways).toEqual(["bitwarden:new"]);
+    // Asked again next time.
+    const p2 = P.requireSensitive(meta(), `${A}/`, "g", "auth.signup", summary, [], { auth });
+    const pr2 = await nextPrompt();
+    expect(pr2).toBeTruthy();
+    P.answerPrompt(pr2.promptId, "deny");
+    await expect(p2).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
   it("effectivePolicy and preapprovalsFor", async () => {
     await Set_.updateSettings({ sites: { [A]: { policy: "act", preapproved: { a: true } } } });
     expect(await P.effectivePolicy(`${A}/`, meta())).toMatchObject({ origin: A, policy: "act" });

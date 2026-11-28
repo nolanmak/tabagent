@@ -332,6 +332,8 @@ export const ProviderStatusSchema = z.strictObject({
   totp: z.enum(TOTP_STATES).optional(),
   /** TabAgent-authored fix for the user ("ask the user to run `tabagent bitwarden unlock`"). Never vault text. */
   hint: z.string().optional(),
+  /** auth.signup only (#112): the provider account's own email, masked; the default sign-up account. */
+  userMasked: z.string().regex(MASKED_ACCOUNT_RE).optional(),
 });
 export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;
 
@@ -387,6 +389,31 @@ export const AuthCodeRequestSchema = z.object({
 export type AuthCodeRequest = z.infer<typeof AuthCodeRequestSchema>;
 
 /**
+ * ext → bridge, sent ONLY after consent (#112): create a login for `origin` in the password manager with
+ * a generated password. `username` defaults to the provider account's email. Answered with the new
+ * account (id + masked name); the password is then fetched with auth.secret.request like any other.
+ */
+export const AuthSignupRequestSchema = z.object({
+  type: z.literal("auth.signup.request"),
+  id: z.string().min(1),
+  commandId: z.string().min(1),
+  origin: z.string().min(1),
+  username: z.string().min(1).max(254).optional(),
+});
+export type AuthSignupRequest = z.infer<typeof AuthSignupRequestSchema>;
+
+/** bridge → ext. Never carries the password. */
+export const AuthSignupResultSchema = z.object({
+  type: z.literal("auth.signup.result"),
+  id: z.string().min(1),
+  commandId: z.string().min(1),
+  ok: z.boolean(),
+  account: AuthAccountSchema.optional(),
+  error: WireError.optional(),
+});
+export type AuthSignupResult = z.infer<typeof AuthSignupResultSchema>;
+
+/**
  * bridge → ext. The only message that carries a secret. The extension holds `value` in a local for one
  * command, types it, and drops it. It is never in params, results, logs, the audit log or storage.
  * Failure: `ok: false` with `error` and no value.
@@ -402,12 +429,12 @@ export const SecretMessageSchema = z.object({
 });
 export type SecretMessage = z.infer<typeof SecretMessageSchema>;
 
-export const AuthExtToBridgeSchema = z.discriminatedUnion("type", [AuthAccountsRequestSchema, AuthSecretRequestSchema, AuthCodeRequestSchema]);
+export const AuthExtToBridgeSchema = z.discriminatedUnion("type", [AuthAccountsRequestSchema, AuthSecretRequestSchema, AuthCodeRequestSchema, AuthSignupRequestSchema]);
 export type AuthExtToBridge = z.infer<typeof AuthExtToBridgeSchema>;
-export const AuthBridgeToExtSchema = z.discriminatedUnion("type", [AuthAccountsResultSchema, SecretMessageSchema]);
+export const AuthBridgeToExtSchema = z.discriminatedUnion("type", [AuthAccountsResultSchema, SecretMessageSchema, AuthSignupResultSchema]);
 export type AuthBridgeToExt = z.infer<typeof AuthBridgeToExtSchema>;
 
-export const AUTH_EXT_MESSAGE_TYPES = ["auth.accounts", "auth.secret.request", "auth.code.request"] as const;
+export const AUTH_EXT_MESSAGE_TYPES = ["auth.accounts", "auth.secret.request", "auth.code.request", "auth.signup.request"] as const;
 export function isAuthExtMessage(m: unknown): boolean {
   return !!m && typeof m === "object" && (AUTH_EXT_MESSAGE_TYPES as readonly string[]).includes(String((m as { type?: unknown }).type));
 }
@@ -479,6 +506,33 @@ export const AUTH_TOOLS = [
     handledBy: "both",
   },
   {
+    name: "auth.signup",
+    group: "auth",
+    description: "Create an account on this sign-up page: Bitwarden generates and saves a new password; fills email/username + password (asks you every time), optionally submits. Never returns the password.",
+    params: z.object({
+      tabId,
+      email: z.string().max(254).regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/).optional().describe("Default: the Bitwarden account email"),
+      username: z.string().min(1).max(128).optional().describe("For forms with a username field"),
+      submit: z.boolean().optional().describe("Default true"),
+    }),
+    result: z.strictObject({
+      created: z.boolean(),
+      account: maskedAccount().optional(),
+      /** The new item: pass to auth.login account= later. */
+      accountId: accountIdString().optional(),
+      source: z.enum(["bitwarden"]).optional(),
+      filled: z.boolean(),
+      submitted: z.boolean(),
+      next: z.enum(["done", "code_required", "handoff_required", "unknown"]),
+    }),
+    level: "act",
+    secret: true,
+    pageContent: [],
+    profiles: ["auth"],
+    lite: "unsupported",
+    handledBy: "both",
+  },
+  {
     name: "auth.code",
     group: "auth",
     description: "Fetch a one-time code (totp, email, sms; auto tries in that order) and type it into the code field. Never returns the code.",
@@ -501,6 +555,28 @@ export const AUTH_TOOLS = [
     profiles: ["auth"],
     lite: "unsupported",
     handledBy: "both",
+  },
+  {
+    name: "auth.confirm_link",
+    group: "auth",
+    description: "After a sign-up: find the site's confirmation email in Gmail (asks you) and open its one confirmation link in this tab. Never returns the email or link.",
+    params: z.object({
+      tabId,
+      from: z.string().max(253).optional().describe("Sender domain; default: the site's domain"),
+      timeout: z.number().int().positive().max(TIMEOUTS.max).optional().describe("ms to wait for the email, default 60000"),
+    }),
+    result: z.strictObject({
+      followed: z.boolean(),
+      next: z.enum(["done", "code_required", "handoff_required", "unknown"]),
+      /** Nothing followed: no confirmation link on the site's domain, or several. */
+      reason: z.enum(["none", "ambiguous"]).optional(),
+    }),
+    level: "act",
+    secret: true,
+    pageContent: [],
+    profiles: ["auth"],
+    lite: "unsupported",
+    handledBy: "extension",
   },
   {
     name: "auth.handoff",

@@ -32,7 +32,7 @@ export interface PromptInfo {
   level?: Level;
   sensitive?: { category: SensitiveCategory; description: string };
   /** Category g: which account and provider (masked, never the secret). */
-  auth?: { accountId: string; accountMasked: string; provider: string };
+  auth?: { accountId: string; accountMasked: string; provider: string; signup?: boolean };
   tool: string;
   summary: string;
   reasons: string[];

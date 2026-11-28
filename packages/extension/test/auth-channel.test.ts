@@ -36,6 +36,23 @@ describe("auth channel", () => {
     expect(ch.pendingCount()).toBe(0);
   });
 
+  it("#112 createLogin: sends auth.signup.request, resolves with the new account; errors come back as TabAgentErrors", async () => {
+    const { ch, sent } = setup();
+    const p = ch.createLogin("cmd1", "https://github.com", "nolan@gmail.com");
+    expect(sent[0]).toEqual({ type: "auth.signup.request", origin: "https://github.com", username: "nolan@gmail.com", id: "m1", commandId: "cmd1" });
+    // a secret reply with the same id is not a sign-up result
+    ch.onMessage({ type: "secret", id: "m1", commandId: "cmd1", field: "password", ok: true, value: "x" });
+    expect(ch.pendingCount()).toBe(1);
+    const account = { id: "bitwarden:new-1", provider: "bitwarden", accountMasked: "n•••@gmail.com" };
+    expect(ch.onMessage({ type: "auth.signup.result", id: "m1", commandId: "cmd1", ok: true, account })).toBe(true);
+    await expect(p).resolves.toEqual(account);
+
+    const q = ch.createLogin("cmd1", "https://github.com");
+    expect(sent[1]).toEqual({ type: "auth.signup.request", origin: "https://github.com", id: "m2", commandId: "cmd1" });
+    ch.onMessage({ type: "auth.signup.result", id: "m2", commandId: "cmd1", ok: false, error: { code: "UNSUPPORTED", message: "Only Bitwarden" } });
+    await expect(q).rejects.toMatchObject({ code: "UNSUPPORTED" });
+  });
+
   it("totp request expects a field:code reply", async () => {
     const { ch } = setup();
     const p = ch.secret("c", "bitwarden:x", "totp");

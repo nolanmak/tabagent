@@ -67,7 +67,9 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
 | [`auth.status`](#authstatus) | `auth_status` | read | — | auth | supported | both |
 | [`auth.login`](#authlogin) | `auth_login` | act | — | auth | unsupported | both |
+| [`auth.signup`](#authsignup) | `auth_signup` | act | — | auth | unsupported | both |
 | [`auth.code`](#authcode) | `auth_code` | act | — | auth | unsupported | both |
+| [`auth.confirm_link`](#authconfirm_link) | `auth_confirm_link` | act | — | auth | unsupported | extension |
 | [`auth.handoff`](#authhandoff) | `auth_handoff` | read | — | auth | supported | extension |
 | [`captcha.solve`](#captchasolve) | `captcha_solve` | act | — | auth | unsupported | both |
 
@@ -756,6 +758,19 @@ MCP name `auth_login` · level act · profiles auth · lite unsupported · handl
 | `account` | string |  | Account id from auth.status when several match |
 | `submit` | boolean |  | Default true |
 
+### auth.signup
+
+Create an account on this sign-up page: Bitwarden generates and saves a new password; fills email/username + password (asks you every time), optionally submits. Never returns the password.
+
+MCP name `auth_signup` · level act · profiles auth · lite unsupported · handled by both
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `email` | string |  | Default: the Bitwarden account email |
+| `username` | string |  | For forms with a username field |
+| `submit` | boolean |  | Default true |
+
 ### auth.code
 
 Fetch a one-time code (totp, email, sms; auto tries in that order) and type it into the code field. Never returns the code.
@@ -770,6 +785,18 @@ MCP name `auth_code` · level act · profiles auth · lite unsupported · handle
 | `from` | string |  | Sender domain filter for email codes |
 | `timeout` | integer |  | ms to wait for the code, default 60000 |
 | `submit` | boolean |  | Default true |
+
+### auth.confirm_link
+
+After a sign-up: find the site's confirmation email in Gmail (asks you) and open its one confirmation link in this tab. Never returns the email or link.
+
+MCP name `auth_confirm_link` · level act · profiles auth · lite unsupported · handled by extension
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | integer |  | Tab id; default: the session's active tab |
+| `from` | string |  | Sender domain; default: the site's domain |
+| `timeout` | integer |  | ms to wait for the email, default 60000 |
 
 ### auth.handoff
 
