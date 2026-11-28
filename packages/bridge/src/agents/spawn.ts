@@ -22,13 +22,15 @@ const firstLine = (s: string) =>
     .map((l) => l.trim())
     .find(Boolean) ?? "";
 
-export function spawnOutcome(r: ExecResult, timeoutMs = SPAWN_TIMEOUT_MS): SpawnOutcome {
+/** `cwd`, when given, is named in the started detail so the feed says where the new session runs (#137). */
+export function spawnOutcome(r: ExecResult, timeoutMs = SPAWN_TIMEOUT_MS, cwd?: string): SpawnOutcome {
   const out = `${r.stdout}\n${r.stderr}`;
   const untrusted = out.split("\n").find((l) => l.includes("Workspace not trusted"));
   if (untrusted) return { state: "failed", code: "WORKSPACE_UNTRUSTED", detail: cap(untrusted.trim()) };
   if (!r.error) {
     const id = /backgrounded · ([0-9a-f]{8})/.exec(r.stdout)?.[1];
-    return id ? { state: "started", shortId: id, detail: `Started background session ${id}. Attach with: claude attach ${id}` } : { state: "started", detail: "Started a background session." };
+    const where = cwd ? ` in ${cwd}` : "";
+    return id ? { state: "started", shortId: id, detail: `Started background session ${id}${where}. Attach with: claude attach ${id}` } : { state: "started", detail: `Started a background session${where}.` };
   }
   if (r.error.code === "ENOENT") return { state: "failed", code: "SPAWN_FAILED", detail: "claude was not found on PATH" };
   if (r.error.killed || r.error.signal) return { state: "failed", code: "SPAWN_FAILED", detail: `claude --bg did not finish within ${timeoutMs / 1000} s` };
@@ -49,7 +51,7 @@ export function runSpawn(claudeBin: string, text: string, cwd: string, timeoutMs
   if (!cwd || !isDirectory(cwd)) return Promise.resolve({ state: "failed", code: "NO_CWD", detail: cwd ? `The agent's folder no longer exists: ${cwd}` : "The agent has no working folder" });
   return new Promise((resolve) => {
     execFile(claudeBin, ["--bg", text], { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
-      resolve(spawnOutcome({ error: error as ExecResult["error"], stdout: String(stdout ?? ""), stderr: String(stderr ?? "") }, timeoutMs));
+      resolve(spawnOutcome({ error: error as ExecResult["error"], stdout: String(stdout ?? ""), stderr: String(stderr ?? "") }, timeoutMs, cwd));
     });
   });
 }

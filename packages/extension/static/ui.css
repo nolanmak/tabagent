@@ -61,6 +61,15 @@ button { white-space:nowrap; overflow-wrap:normal; flex-shrink:0; }
 .composer { margin-top:8px; padding-top:8px; border-top:1px solid var(--line); }
 .composer-actions { justify-content:space-between; } .composer-actions > span { flex:1 1 10em; min-width:0; }
 .agent-feed:not(:empty) { margin-top:8px; }
+/* #137: not-connected rows, the "N other sessions" disclosure and the Start a new session button */
+.connect-hint { color:var(--muted); text-decoration:underline; overflow-wrap:anywhere; }
+.agents li.agents-other { padding:4px 0 0; }
+.agents li.agents-other > details { flex:1; min-width:0; }
+.agents li.agents-other summary { color:var(--muted); font-size:12px; padding:2px 4px; }
+.agents li.agents-other summary::before { content:"▸ "; } .agents li.agents-other details[open] > summary::before { content:"▾ "; }
+.agents li.agents-other ul { margin:4px 0 0; padding:0; }
+.composer-spawn { justify-content:flex-end; margin-top:4px; }
+#agentSpawn { white-space:normal; overflow-wrap:anywhere; text-align:left; flex-shrink:1; min-width:0; max-width:100%; }
 .yolo-banner { margin:8px 12px 0; padding:8px 10px; border-radius:8px; background:#db2777; color:#fff; font-size:13px; }
 .sitesearch { flex-wrap:nowrap; } .searchbox { position:relative; display:flex; flex:1 1 auto; min-width:0; }
 .searchbox input { width:100%; padding-right:26px; } .searchbox input::-webkit-search-cancel-button { display:none; }

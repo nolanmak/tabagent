@@ -15,6 +15,7 @@ import {
   groupAgents,
   formatAge,
   ROUTE_WORDS,
+  sendTarget,
   shareableTab,
   sourcesNotes,
   type AgentFeedEntry,
@@ -231,6 +232,12 @@ describe("shareable tab and the send message", () => {
   it("builds ui.agent_send with the tab fields only when a tab is shared", () => {
     expect(buildAgentSend({ requestId: "r1", agentId: "codex:t", prompt: "hi", share: { tabId: 3, title: "T", url: "https://a.test/" } })).toEqual({ type: "ui.agent_send", requestId: "r1", agentId: "codex:t", prompt: "hi", includeTab: true, tabId: 3, title: "T", url: "https://a.test/" });
     expect(buildAgentSend({ requestId: "r2", agentId: "codex:t", prompt: "hi", share: null })).toEqual({ type: "ui.agent_send", requestId: "r2", agentId: "codex:t", prompt: "hi", includeTab: false });
+  });
+
+  it("#137: a new session's feed line names its folder and the spawn route; a plain send names the agent", () => {
+    const v = agentRowView(agent({ title: "Pending user input check" }), NOW);
+    expect(sendTarget(v, true)).toEqual({ agentName: "New session in tabagent", route: "spawn" });
+    expect(sendTarget(v, false)).toEqual({ agentName: "Pending user input check", route: "none" });
   });
 
   it("#137: forceSpawn is sent only for the explicit Start a new session button", () => {

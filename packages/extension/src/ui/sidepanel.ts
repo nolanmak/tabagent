@@ -2,7 +2,7 @@
 // activity feed (audit records only) and settings. A view over worker state.
 import type { Agent, AgentSources } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
-import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentRowHtml, agentRowView, buildAgentSend, composerState, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
+import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
 import { filterSites } from "../pure/siteFilter";
@@ -115,6 +115,8 @@ let selectedAgentId: string | null = null;
 let agentNotice = "";
 let agentSending = false;
 let agentSendFeed: AgentFeedEntry[] = [];
+/** #137: the "N other sessions" disclosure is open. */
+let agentsOtherOpen = false;
 /** The active tab as it would be shared; re-read at Send time. */
 let activeTab: SharedTab | null = null;
 /** The active tab's id, shareable or not; undefined until first read. */
@@ -147,7 +149,7 @@ function renderAgentList() {
     ? `<li class="muted">Looking for agents…</li>`
     : agentsError
       ? `<li class="err">${esc(agentsError)}</li>`
-      : agents.map((a) => agentRowHtml(agentRowView(a, now), a.id === selectedAgentId)).join("") || `<li class="muted">No agents running.</li>`;
+      : agentListHtml(agents.map((a) => agentRowView(a, now)), selectedAgentId, agentsOtherOpen) || `<li class="muted">No agents running.</li>`;
   setHtml($("agents"), html);
   const notes = sourcesNotes(agentSources);
   $("agentSources").hidden = !notes.length;
@@ -164,10 +166,14 @@ function renderComposer() {
   const btn = $("agentSend") as HTMLButtonElement;
   btn.textContent = c.label;
   btn.disabled = !c.canSend || agentSending;
+  const spawn = $("agentSpawn") as HTMLButtonElement;
+  spawn.hidden = !c.spawnLabel;
+  spawn.textContent = c.spawnLabel ?? "";
+  spawn.disabled = !c.canSpawn || agentSending;
   $("agentComposerNote").textContent = c.note;
   const target = $("agentTarget");
   target.hidden = !v && !agentNotice;
-  target.innerHTML = v ? `To <b>${esc(v.title)}</b> <span class="muted">(${esc(v.vendorLabel)}, ${esc(v.routeWords)})</span>` : `<span class="err">${esc(agentNotice)}</span>`;
+  target.innerHTML = v ? `To <b>${esc(v.title)}</b> <span class="muted">(${esc(v.vendorLabel)}, ${esc(v.notConnected ? "not connected" : v.routeWords)})</span>` : `<span class="err">${esc(agentNotice)}</span>`;
   $("agentTabTitle").textContent = activeTab ? `(${activeTab.title || activeTab.url})` : "(no web page in this tab)";
 }
 
@@ -308,7 +314,8 @@ function selectAgent(el: EventTarget | null) {
   agentPrompt().focus();
 }
 
-async function sendToSelectedAgent() {
+/** `forceSpawn`: the explicit Start a new session button (#137). Plain Send never spawns. */
+async function sendToSelectedAgent(forceSpawn = false) {
   const v = selectedAgentView();
   if (!v || agentSending) return;
   const prompt = agentPrompt().value;
@@ -318,26 +325,29 @@ async function sendToSelectedAgent() {
   const share = shareTab() ? current : null;
   if (shareTab()) activeTab = share;
   const selection = outgoingSelection();
-  if (!composerState({ agent: v, prompt, share, selection }).canSend) return renderComposer();
+  const c = composerState({ agent: v, prompt, share, selection });
+  if (!(forceSpawn ? c.canSpawn : c.canSend)) return renderComposer();
   const requestId = crypto.randomUUID();
-  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: v.title, vendor: v.vendor, route: v.route });
+  const t = sendTarget(v, forceSpawn);
+  agentFeed({ type: "sending", requestId, ts: Date.now(), agentName: t.agentName, vendor: v.vendor, route: t.route });
   agentSending = true;
   renderComposer();
   let r: any;
   try {
-    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, selection }));
+    r = await send(buildAgentSend({ requestId, agentId: v.id, prompt, share, selection, forceSpawn }));
   } catch (e) {
     r = { error: String((e as Error)?.message ?? e) };
   }
   agentSending = false;
   if (r?.type === "agent.sent") agentFeed({ type: "sent", msg: r });
-  else agentFeed({ type: "sent", msg: { requestId, route: v.route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
+  else agentFeed({ type: "sent", msg: { requestId, route: t.route, state: "failed", detail: r?.error ?? "TabAgent did not answer" } });
   // Keep the text after a failure so it can be retried.
   if (r?.type === "agent.sent" && r.state !== "failed") {
     agentPrompt().value = "";
     // The selection went with this message; the next one starts without it.
     if (selection) heldSelection = null;
-    void rememberRecent({ id: v.id, name: v.title });
+    // A new session is not this agent, so it does not go in the context menu's recent list.
+    if (!forceSpawn) void rememberRecent({ id: v.id, name: v.title });
   }
   renderComposer();
 }
@@ -479,9 +489,19 @@ $("sessions").addEventListener("click", (e) => {
 $("agents").addEventListener("click", (e) => selectAgent(e.target));
 $("agents").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
+  // Leave the disclosure summary and the connect link to their own keyboard behaviour.
+  if ((e.target as HTMLElement).closest("summary, a")) return;
   e.preventDefault();
   selectAgent(e.target);
 });
+// #137: remember whether "N other sessions" is open across the 5 s re-render. `toggle` does not bubble.
+$("agents").addEventListener(
+  "toggle",
+  (e) => {
+    if (e.target instanceof HTMLDetailsElement) agentsOtherOpen = e.target.open;
+  },
+  true,
+);
 agentPrompt().addEventListener("input", renderComposer);
 agentPrompt().addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -496,6 +516,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[SEND_INTENT_KEY]?.newValue !== undefined) void takeIntent();
 });
 $("agentSend").addEventListener("click", () => void sendToSelectedAgent());
+// #137: the only way to start a new session is this separate, explicitly labelled button.
+$("agentSpawn").addEventListener("click", () => void sendToSelectedAgent(true));
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 chrome.tabs.onUpdated.addListener((_id, info, tab) => {
   if (tab.active && (info.title || info.url)) void refreshActiveTab();

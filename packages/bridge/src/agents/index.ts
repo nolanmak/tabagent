@@ -39,6 +39,12 @@ type Reply = Omit<AgentSent, "type" | "requestId">;
 
 const WHO = { caller: "side panel" };
 
+/** Why a send has no route (NO_ROUTE). The panel shows the same words before Send. */
+function noRouteDetail(a: Agent): string {
+  if (a.vendor === "claude" && !a.linked) return "This session is not connected to TabAgent, so it cannot be messaged. Start a new session instead, or connect this one (update TabAgent and restart the session).";
+  return a.status === "error" ? `This agent cannot take messages (${a.statusLabel ?? "error"})` : "No way to deliver to this agent";
+}
+
 const envTtl = () => {
   const n = Number(process.env.TABAGENT_HOLD_TTL_MS);
   return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -153,7 +159,9 @@ export class AgentsBridge {
     // 2. Route (AD6), from the fresh link. The channel route is P3 (#93), so it is never enabled here.
     const stream = this.streamFor(agent);
     const route: AgentRoute = chooseRoute({ vendor: agent.vendor, status: agent.status, linked: agent.linked && !!stream, channels: stream?.channels }, { forceSpawn: req.forceSpawn });
-    if (route !== "queue" && route !== "spawn" && route !== "piggyback") return { route: "none", state: "failed", code: "NO_ROUTE", detail: agent.status === "error" ? `This agent cannot take messages (${agent.statusLabel ?? "error"})` : "No way to deliver to this agent" };
+    // #137: without forceSpawn this never spawns, so an unlinked Claude session fails here rather than
+    // silently getting a new background session in its place.
+    if (route !== "queue" && route !== "spawn" && route !== "piggyback") return { route: "none", state: "failed", code: "NO_ROUTE", detail: noRouteDetail(agent) };
     // 3. Limits (AD13). The kill switch (AD17) is enforced by the worker, which knows the paused state.
     const over = agentSendOverLimit(req);
     if (over) return { route, state: "failed", code: "TOO_LARGE", detail: `The ${over.field} is ${over.length} characters; the limit is ${over.limit}` };

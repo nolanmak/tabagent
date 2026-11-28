@@ -13,7 +13,7 @@ export interface RouteTarget {
 export interface RouteOpts {
   /** AD9/P3: the channel route ships. False until then. */
   channelEnabled?: boolean;
-  /** The user picked "Start new session" (Claude only). */
+  /** The user pressed the explicit "Start a new session" button (Claude only). The only way to spawn (#137). */
   forceSpawn?: boolean;
 }
 
@@ -23,6 +23,7 @@ export function chooseRoute(t: RouteTarget, o: RouteOpts = {}): AgentRoute {
   if (t.linked) return "piggyback";
   // AD10: a Codex thread in systemError is listed but not sendable.
   if (t.vendor === "codex") return t.status === "error" ? "none" : "queue";
-  if (t.vendor === "claude") return "spawn";
+  // #137: an unlinked Claude session cannot be messaged. Never spawn a new session in its place unless
+  // the user explicitly asked for one (forceSpawn, above).
   return "none";
 }
