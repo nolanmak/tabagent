@@ -27,20 +27,6 @@ export function hostMatches(glob: string, host: string): boolean {
   return host === glob;
 }
 
-export const DEFAULT_DENYLIST = [
-  "chromewebstore.google.com",
-  "chrome.google.com",
-  "*.1password.com",
-  "*.lastpass.com",
-  "*.bitwarden.com",
-  "*.dashlane.com",
-  "accounts.google.com",
-  "*.chase.com",
-  "*.bankofamerica.com",
-  "*.wellsfargo.com",
-  "*.mercury.com",
-  "*.paypal.com",
-];
 
 /** Schemes the extension never touches. */
 export function isRestrictedUrl(url: string): boolean {

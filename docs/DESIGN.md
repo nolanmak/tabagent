@@ -397,7 +397,9 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   The label is a convention the agent may ignore; the D18 gates are the
   backstop.
 - **Denylist.** `chrome://`, extension pages, the Web Store, and a seeded,
-  user-editable list (password managers, banking) are refused.
+  user-editable list (password managers, banking, Google sign-in) are refused.
+  Banking and password-manager hosts are also hard-blocked for the auth tools;
+  Google sign-in is not (the user can unlock it, #79).
 - **Visibility (D40).** Badge states: off, connected, acting, needs approval,
   paused. A coloured tab group per session; an on-page border (default on) and
   target highlights. Overlay elements carry `data-tabagent-overlay`, have

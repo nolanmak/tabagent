@@ -206,6 +206,19 @@ describe("auth category g (M6)", () => {
     const st = base({ denylist: [], sites: { [o]: { policy: "full", auth: true } } });
     expect(resolve(st, req({ url: `${o}/login`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("never signs in") });
   });
+  it("Google sign-in (#81): allowed once not denylisted, enabled and policy act; refused otherwise", () => {
+    const o = "https://accounts.google.com";
+    const on = base({ denylist: [], sites: { [o]: { policy: "act", auth: true } } });
+    expect(resolve(on, req({ url: `${o}/v3/signin/identifier`, sensitive: "g", accountId: "x" })).decision).toBe("ask");
+    const listed = base({ denylist: ["accounts.google.com"], sites: { [o]: { policy: "act", auth: true } } });
+    expect(resolve(listed, req({ url: `${o}/v3/signin/identifier`, sensitive: "g", accountId: "x" })).decision).toBe("deny");
+    const off = base({ denylist: [], sites: { [o]: { policy: "act" } } });
+    expect(resolve(off, req({ url: `${o}/v3/signin/identifier`, sensitive: "g", accountId: "x" }))).toMatchObject({ decision: "deny", message: expect.stringContaining("not enabled") });
+  });
+  it("Google account pages stay never-reachable after the change (D4)", () => {
+    const st = base({ denylist: [], yolo: true, sites: { "https://myaccount.google.com": { policy: "full", auth: true } } });
+    expect(resolve(st, req({ url: "https://myaccount.google.com/security" })).decision).toBe("deny");
+  });
   it("needs an http(s) page", () => {
     expect(resolve(base(), req({ url: "about:blank", level: null, sensitive: "g" }))).toMatchObject({ decision: "deny" });
   });

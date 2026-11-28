@@ -212,8 +212,12 @@ export function resolve(state: PolicyState, req: PolicyRequest): Decision {
   return sensitiveStep(state, req, origin);
 }
 
-/** Sign-in is never automated on banking / password-manager hosts, even if the user edits the denylist (M6). */
-export const AUTH_DENY_HOSTS = ["*.chase.com", "*.bankofamerica.com", "*.wellsfargo.com", "*.citi.com", "*.capitalone.com", "*.mercury.com", "*.paypal.com", "*.1password.com", "*.lastpass.com", "*.bitwarden.com", "*.dashlane.com", "*.keepersecurity.com", "accounts.google.com"];
+/**
+ * Sign-in is never automated on banking / password-manager hosts, even if the user edits the denylist (M6).
+ * accounts.google.com is not here (#81): Google sign-in is unlockable by the user, who must remove it from the
+ * seeded denylist and enable sign-in for that origin. Google account pages stay in VAULT_DENY_HOSTS (DA12).
+ */
+export const AUTH_DENY_HOSTS = ["*.chase.com", "*.bankofamerica.com", "*.wellsfargo.com", "*.citi.com", "*.capitalone.com", "*.mercury.com", "*.paypal.com", "*.1password.com", "*.lastpass.com", "*.bitwarden.com", "*.dashlane.com", "*.keepersecurity.com"];
 
 function sensitiveStep(state: PolicyState, req: PolicyRequest, origin: string | null): Decision {
   const cat = req.sensitive;
