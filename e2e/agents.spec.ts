@@ -120,3 +120,67 @@ test("the kill switch blocks sends with PAUSED, and nothing reaches the agent (A
     await w.h.sw.evaluate(() => (globalThis as any).__tabagent.resume());
   }
 });
+
+// P1c (#90): the side panel's Agents section, composer and feed, driven through the real panel UI.
+test("panel: lists stub agents, sends to Codex (queued -> delivered), spawns Claude (started + attach hint), blocks over-limit", async ({ w }) => {
+  const T = "019a0000-0000-7000-8000-0000000000c1";
+  const queue: string[] = [];
+  w.claude.set("bg.err", null);
+  w.claude.set("bg.exit", null);
+  w.claude.set("bg.out", "backgrounded · 0badc0de\n");
+  w.claude.agents([claudeRecord(4250, 1795639120000, { cwd: w.claude.dir, name: "spawn-target" })]);
+  w.codex.threads([codexThread(T, { type: "idle" }, { name: "Codex helper" })]);
+  w.codex.on("thread/queue/add", ({ clientUserMessageId }) => {
+    queue.push(`sub-${clientUserMessageId}`);
+    return { queuedSubmission: { id: `sub-${clientUserMessageId}`, clientUserMessageId, input: [] } };
+  });
+  w.codex.on("thread/queue/list", () => ({ data: queue.map((id) => ({ id })), nextCursor: null }));
+
+  const p = await w.h.openPanel();
+  try {
+    await expect(p.locator("#agentsBox")).toBeVisible();
+    await expect(p.locator("#sessions")).toContainText("No sessions.");
+    const codexRow = p.locator(`#agents [data-agent-id="codex:${T}"]`);
+    const claudeRow = p.locator(`#agents [data-agent-id="claude:4250:1795639120000"]`);
+    await expect(codexRow).toContainText("Codex helper");
+    await expect(codexRow).toContainText("queued (Codex)");
+    await expect(claudeRow).toContainText("spawn-target");
+    await expect(claudeRow).toContainText("starts a new session");
+    await expect(claudeRow).toContainText("pid 4250");
+    await expect(p.locator("#agentSelection")).toBeDisabled();
+
+    // Codex: queued, then delivered once the submission leaves the queue.
+    const adds = w.codex.calls("thread/queue/add").length;
+    await codexRow.click();
+    await p.fill("#agentPrompt", "Summarise the page");
+    await expect(p.locator("#agentSend")).toHaveText("Send");
+    await p.click("#agentSend");
+    const codexLine = p.locator("#agentFeed li").filter({ hasText: "Codex helper" });
+    await expect(codexLine).toContainText("queued", { timeout: 15_000 });
+    expect(w.codex.calls("thread/queue/add").length).toBe(adds + 1);
+    queue.length = 0;
+    w.codex.notify("thread/queue/changed", { threadId: T });
+    await expect(codexLine).toContainText("delivered", { timeout: 15_000 });
+
+    // Claude spawn target: Start new session, started with the attach hint.
+    await claudeRow.click();
+    await p.fill("#agentPrompt", "Write tests");
+    await expect(p.locator("#agentSend")).toHaveText("Start new session");
+    await p.click("#agentSend");
+    const claudeLine = p.locator("#agentFeed li").filter({ hasText: "spawn-target" });
+    await expect(claudeLine).toContainText("started", { timeout: 15_000 });
+    await expect(claudeLine).toContainText("claude attach 0badc0de");
+    expect(w.claude.read("bg.text")).toBe("[TabAgent: message from the user via the side panel]\nWrite tests");
+
+    // Over the AD13 prompt limit: blocked in the panel, nothing reaches the bridge.
+    const bgCalls = w.claude.calls().filter((c) => c.startsWith("--bg")).length;
+    await p.fill("#agentPrompt", "x".repeat(8001));
+    await expect(p.locator("#agentSend")).toBeDisabled();
+    await expect(p.locator("#agentComposerNote")).toContainText("the limit is 8,000");
+    await p.locator("#agentSend").click({ force: true });
+    expect(w.claude.calls().filter((c) => c.startsWith("--bg")).length).toBe(bgCalls);
+    await expect(p.locator("#agentFeed li")).toHaveCount(2);
+  } finally {
+    await p.close();
+  }
+});
