@@ -10,6 +10,8 @@ import { api, ensureDaemon, health, restCall } from "./client";
 import { auditPath, configPath, loadConfig } from "./config";
 import { Daemon } from "./daemon";
 import { buildMcpServer } from "./mcp";
+import { findAgentPid, readPs } from "./agents/ancestry";
+import { InboxClient } from "./inbox-client";
 import { auditTail, configCommand, formatAuditLine, helpText, killCommand, settingsCommand, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out, type ToolCall } from "./commands";
 import { BRIDGE_VERSION } from "./version";
 import { authCli } from "./auth/cli-entry";
@@ -50,6 +52,14 @@ async function cmdServe(f: Flags) {
   process.on("SIGTERM", stop);
 }
 
+/**
+ * AD9 hook for P3 (#93): "1" when the agent's argv (`ps -o args= -p <agentPid>`) loads TabAgent as a
+ * development channel. P2a has no channel route, so it always reports "0".
+ */
+function channelsFlag(_agentPid: number | undefined): "0" | "1" {
+  return "0";
+}
+
 async function cmdMcp(f: Flags) {
   // D6: stdout carries MCP frames only. Anything else goes to stderr.
   console.log = (...a: unknown[]) => process.stderr.write(a.map(String).join(" ") + "\n");
@@ -64,6 +74,8 @@ async function cmdMcp(f: Flags) {
   const token = process.env.TABAGENT_TOKEN ?? cfg.secret;
   const sessionId = `${process.pid}-${randomBytes(3).toString("hex")}`;
   let client = typeof f.label === "string" ? f.label : "";
+  // AD4: the agent process that owns this proxy (npx puts `npm exec` in between). Started now, used at registration.
+  const agentPid = findAgentPid(process.ppid, readPs).catch(() => undefined);
 
   const up = await ensureDaemon(cfg.port, CLI_PATH);
   if (!up.health) log(`could not start a bridge on port ${cfg.port}; see ${join(dirname(configPath()), "bridge.log")}`);
@@ -82,11 +94,29 @@ async function cmdMcp(f: Flags) {
     }
     return r;
   };
+  // AD4/AD5: the agent inbox. Registered right after initialize; reconnects and re-registers on its own.
+  let pid: number | undefined;
+  const inbox = new InboxClient({
+    port: cfg.port,
+    token,
+    headers: () => ({
+      ...headers(),
+      ...(pid ? { "x-tabagent-agent-pid": String(pid) } : {}),
+      "x-tabagent-channels": channelsFlag(pid),
+      "x-tabagent-profile": profile,
+    }),
+    ensureDaemon: () => ensureDaemon(cfg.port, CLI_PATH),
+    log,
+  });
   const server = buildMcpServer({
     call,
     profile,
     onClientInfo: (name) => {
       if (!client && name) client = name.replace(/[^\w .-]/g, "").slice(0, 40);
+      void agentPid.then((p) => {
+        pid = p;
+        if (!ended) inbox.start();
+      });
     },
   });
   const transport = new StdioServerTransport();
@@ -94,6 +124,7 @@ async function cmdMcp(f: Flags) {
   const end = async () => {
     if (ended) return;
     ended = true;
+    inbox.stop();
     try {
       await fetch(`http://127.0.0.1:${cfg.port}/v1/session/end`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers() }, body: "{}", signal: AbortSignal.timeout(1000) }).catch(() => {});
     } finally {

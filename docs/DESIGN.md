@@ -374,7 +374,10 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   the accessible name; (c) arbitrary JS: `js.eval`, `nav.wait` with `fn`;
   (d) credential reads: `cookies.get`, `storage.get`, `network.get`;
   (e) local file transfer: `act.upload`, `downloads.read`; (f) `tabs attach`.
-  Pre-approval is per origin per category a–e; f always asks. Password and card
+  Pre-approval is per origin per category a–e; f always asks. Choosing `full`
+  in the side panel also sets sign-in and all a–e pre-approvals for the origin
+  (sign-in skipped, with a reason shown, on auth-deny, vault or denylisted
+  hosts); other levels change only the policy (#118). Password and card
   values are masked as `••••` in snapshots, diffs, `form.describe`, the live
   feed and the audit record. Screenshots are not masked.
 - **Prompts (D19).** Chrome only opens the side panel on a user gesture, so a

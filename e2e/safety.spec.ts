@@ -422,6 +422,53 @@ test("#14 settings: revoke a site policy from the side panel", async ({ h }) => 
   await panel.close();
 });
 
+test("#118 adding a site with full in the panel turns on sign-in and every pre-approval", async ({ h }) => {
+  await h.setPolicies({}, { paused: false, devAllowSensitive: false });
+  const panel = await h.openPanel();
+  await panel.click("#settingsBox summary");
+  expect(await panel.textContent("#addSite")).toContain("full also turns on sign-in and pre-approvals");
+  await panel.fill("#newOrigin", h.A);
+  await panel.selectOption("#newLevel", "full");
+  await panel.click("#addSite button[type=submit]");
+  await expect.poll(async () => (await settings(h)).sites[h.A]).toEqual({ policy: "full", auth: true, preapproved: { a: true, b: true, c: true, d: true, e: true } });
+  await expect(panel.locator(`input[data-auth][data-origin="${h.A}"]`)).toBeChecked();
+  for (const c of ["a", "b", "c", "d", "e"]) await expect(panel.locator(`input[data-pre="${c}"][data-origin="${h.A}"]`)).toBeChecked();
+  // A sensitive action (c: js.eval) on that origin runs with no extra toggle and no prompt.
+  const c = await h.mcp({ label: "full118" });
+  await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
+  const r = await h.ok(c, "js.eval", { expression: "1+1" });
+  expect(JSON.stringify(r.json)).toContain("2");
+  expect(await h.pendingPrompts()).toHaveLength(0);
+  // Lowering from full leaves the toggles alone.
+  await panel.selectOption(`select[data-policy][data-origin="${h.A}"]`, "act");
+  await expect.poll(async () => (await settings(h)).sites[h.A]).toEqual({ policy: "act", auth: true, preapproved: { a: true, b: true, c: true, d: true, e: true } });
+  await panel.close();
+});
+
+test("#118 full never enables sign-in on hard-limited or denylisted hosts, and says why", async ({ h }) => {
+  const host = new URL(h.B).hostname;
+  const prevDenylist = (await settings(h)).denylist;
+  await h.setPolicies({ [h.B]: "read" }, { paused: false, devAllowSensitive: false, denylist: [...prevDenylist, host] });
+  const panel = await h.openPanel();
+  await panel.click("#settingsBox summary");
+  await panel.fill("#newOrigin", "https://www.chase.com");
+  await panel.selectOption("#newLevel", "full");
+  await panel.click("#addSite button[type=submit]");
+  await expect.poll(async () => (await settings(h)).sites["https://www.chase.com"]?.policy).toBe("full");
+  const chase = (await settings(h)).sites["https://www.chase.com"];
+  expect(chase.auth).toBeUndefined();
+  expect(chase.preapproved).toEqual({ a: true, b: true, c: true, d: true, e: true });
+  await expect(panel.locator("#siteLevelNote")).toContainText("never signs in on www.chase.com");
+  await expect(panel.locator(`input[data-auth][data-origin="https://www.chase.com"]`)).not.toBeChecked();
+  // Same rule through the row's policy select, for a host on the user's denylist.
+  await panel.selectOption(`select[data-policy][data-origin="${h.B}"]`, "full");
+  await expect.poll(async () => (await settings(h)).sites[h.B]?.policy).toBe("full");
+  expect((await settings(h)).sites[h.B].auth).toBeUndefined();
+  await expect(panel.locator("#siteLevelNote")).toContainText("denylist");
+  await h.setPolicies({}, { denylist: prevDenylist });
+  await panel.close();
+});
+
 test("#15 scoped tokens: cap and site limits; audit log never has raw card numbers", async ({ h }) => {
   await h.trustFixtures();
   const { execFileSync } = await import("node:child_process");
