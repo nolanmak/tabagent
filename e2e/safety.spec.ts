@@ -448,6 +448,7 @@ test("#13 login form: submit with a password prompts; deny leaves the page uncha
   expect(feed).not.toContain("hunter2-secret");
   expect(feed).toContain("••••");
   const panel = await h.openPanel();
+  await Harness.openSection(panel, "activity");
   await panel.waitForSelector("#feed li[data-feed-id]");
   expect(await panel.textContent("#feed")).not.toContain("hunter2-secret");
   await panel.close();
@@ -531,6 +532,7 @@ test("#14 kill switch: in-flight nav.wait returns KILLED, every call is KILLED u
   expect(again.title).toContain(h.A);
   // feed shows the calls
   await panel.reload();
+  await Harness.openSection(panel, "activity");
   await panel.waitForSelector("#feed li[data-feed-id]");
   expect(await panel.textContent("#feed")).toContain("nav.wait");
   await panel.close();

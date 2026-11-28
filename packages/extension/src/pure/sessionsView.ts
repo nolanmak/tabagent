@@ -51,7 +51,7 @@ export function sessionView(s: SessionSummary, titles: Record<number, string | u
 
 export function sessionRowHtml(s: SessionView): string {
   const n = s.tabList.length;
-  const summary = `<span class="dot g-${esc(s.color)}"></span><b>${esc(s.label)}</b> <span class="muted">${n} tab${n === 1 ? "" : "s"} · ${esc(s.cap)}</span>`;
+  const summary = `<span class="dot g-${esc(s.color)}" aria-hidden="true"></span><span><b class="session-label">${esc(s.label)}</b> <span class="muted small">${n} tab${n === 1 ? "" : "s"} · ${esc(s.cap)}</span></span>`;
   const head =
     s.viewTabId != null
       ? `<button type="button" class="session-view" data-view-tab="${Number(s.viewTabId)}" title="View this session's tab" aria-label="View tab of session ${esc(s.label)}">${summary}</button>`
@@ -62,7 +62,7 @@ export function sessionRowHtml(s: SessionView): string {
           .map((t) => `<li><button type="button" class="session-tab${t.active ? " active" : ""}" data-view-tab="${Number(t.tabId)}" title="${esc(truncateTitle(t.title, 300))}"${t.active ? ' aria-current="true"' : ""}>${esc(truncateTitle(t.title))}</button></li>`)
           .join("")}</ul>`
       : "";
-  return `<li class="session" data-session="${esc(s.id)}"><div class="session-head">${head}<button type="button" data-end="${esc(s.id)}">End</button></div>${tabs}</li>`;
+  return `<li class="session" data-session="${esc(s.id)}"><div class="session-head">${head}<button type="button" class="ghost sm" data-end="${esc(s.id)}" aria-label="End session ${esc(s.label)}">End</button></div>${tabs}</li>`;
 }
 
 /** Why ui.focusTab must not focus this tab, or null when a TabAgent session owns it. */

@@ -2,6 +2,7 @@
 // composer and send feed as plain data in, plain data or escaped HTML out. sidepanel.ts wires it to the DOM.
 import { agentSendOverLimit, isRemoteControlUrl, type Agent, type AgentDeliveryState, type AgentRoute, type AgentSendCode, type AgentSources, type AgentVendor } from "@tabagent/protocol";
 import { esc } from "./html";
+import { icon } from "./icons";
 
 /** §5: the panel asks when it opens and every 5 s while visible. */
 export const AGENTS_REFRESH_MS = 5_000;
@@ -158,14 +159,22 @@ export function chatPageUrl(base: string, agentId: string): string {
  */
 export function agentRowHtml(v: AgentRowView, selected: boolean): string {
   const meta = [v.cwdBase, v.age, v.pid != null ? `pid ${v.pid}` : null, v.status].filter((x) => x != null).map(esc).join(" · ");
-  const badges = v.badges.map((b) => `<span class="badge">${esc(b)}</span>`).join("");
+  // "linked" repeats the connection words ("Connected · …"), so the row shows only the other badges.
+  const badges = v.badges.filter((b) => b !== "linked").map((b) => `<span class="sep">·</span><span class="badge-word">${esc(b)}</span>`).join("");
   const conn = `<span class="conn conn-${v.connection.tone}">${esc(v.connection.label)}</span>`;
-  const hint = v.notConnected ? ` <a class="connect-hint" href="${esc(CONNECT_DOCS_URL)}" target="_blank" rel="noopener noreferrer" title="${esc(CONNECT_STEPS)}">${esc(CONNECT_HINT)}</a>` : "";
+  // With Remote Control, Open in Claude is the way in; the connect hint would only crowd the row.
+  const hint = v.notConnected && !v.remoteControlUrl ? `<a class="connect-hint" href="${esc(CONNECT_DOCS_URL)}" target="_blank" rel="noopener noreferrer" title="${esc(CONNECT_STEPS)}">${esc(CONNECT_HINT)}</a>` : "";
   const rc = v.remoteControlUrl ? `<a class="rc-link" href="${esc(v.remoteControlUrl)}" target="_blank" rel="noopener noreferrer" title="Open this session in Claude (Remote Control)">Open in Claude ↗</a>` : "";
   const quick = v.sendable ? `<button type="button" class="quick-btn" data-quick-send="${esc(v.id)}" aria-expanded="${selected}">${selected ? "Close" : "Quick send"}</button>` : "";
-  const busy = v.busy ? `<span class="busy-dot" title="Working" aria-label="Working"></span>` : "";
+  // #156: one status dot (connection tone; pulsing amber while the agent works), title, one quiet meta line.
+  const dot = `<span class="status-dot tone-${v.connection.tone}${v.busy ? " busy-dot" : ""}" title="${esc(v.busy ? "Working" : v.connection.label)}" aria-hidden="true"></span>`;
   const label = `${v.title} — open chat`;
-  return `<li class="agent${v.sendable ? "" : " agent-none"}${selected ? " selected" : ""}" role="option" tabindex="0" aria-selected="${selected}" aria-label="${esc(label)}" data-agent-id="${esc(v.id)}" title="${esc(v.cwd)}"><span class="agent-main"><span class="agent-line"><span class="vendor vendor-${esc(v.vendor)}">${esc(v.vendorLabel)}</span> <b class="agent-title">${esc(v.title)}</b>${busy}${badges}</span><span class="muted small agent-meta">${meta}</span><span class="small agent-conn">${conn}${hint}</span></span><span class="agent-actions">${rc}${quick}<span class="chev" aria-hidden="true">›</span></span></li>`;
+  return `<li class="agent${v.sendable ? "" : " agent-none"}${selected ? " selected" : ""}" role="option" tabindex="0" aria-selected="${selected}" aria-label="${esc(label)}" data-agent-id="${esc(v.id)}" title="${esc(v.cwd)}">${dot}<span class="agent-main"><span class="agent-line"><b class="agent-title">${esc(v.title)}</b></span><span class="agent-sub">${vendorShown(v) ? `<span class="vendor-name">${esc(v.vendorLabel)}</span><span class="sep">·</span>` : ""}<span class="agent-conn">${conn}</span><span class="sep">·</span><span class="agent-meta">${meta}</span>${badges}</span></span><span class="agent-actions">${rc}${hint}${quick}<span class="chev" aria-hidden="true">${icon("chevron")}</span></span></li>`;
+}
+
+/** #156: the vendor name before the connection words, unless they already start with it ("Codex · queued"). */
+export function vendorShown(v: Pick<AgentRowView, "vendorLabel" | "connection">): boolean {
+  return !v.connection.label.startsWith(v.vendorLabel);
 }
 
 /**

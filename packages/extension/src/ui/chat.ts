@@ -8,6 +8,7 @@ import {
   chatHeaderView,
   chatItemHtml,
   chatItems,
+  chatRailHtml,
   chatReducer,
   composerMode,
   historyErrorText,
@@ -27,6 +28,11 @@ const send = (m: unknown): Promise<any> => chrome.runtime.sendMessage(m);
 const agentId = new URLSearchParams(location.search).get("agent") ?? "";
 let state = initialChat();
 let agent: Agent | null = null;
+/** Every running session, for the left rail (#156). */
+let allAgents: Agent[] = [];
+/** The bridge listed the sessions at least once (an empty rail means none, not unknown). */
+let agentsListed = false;
+let lastRailHtml = "";
 let agentsLoaded = false;
 let bridgeNote = "";
 let spawnChosen = false;
@@ -148,6 +154,7 @@ function renderComposer() {
   const showForm = mode === "send" || mode === "spawn";
   form.hidden = !showForm;
   opts.hidden = !showForm;
+  $("composerHints").hidden = !showForm;
   $("spawnCancel").hidden = mode !== "spawn";
   const v = agent ? agentRowView(agent, Date.now()) : null;
   if (mode === "spawn" && v) {
@@ -171,11 +178,21 @@ function renderComposer() {
   ($("sendBtn") as HTMLButtonElement).disabled = !showForm || sending || !input().value.trim() || !!over;
 }
 
+/** #156: the rail of sessions; rewritten only when it changed, so a hover or focus survives the 5 s refresh. */
+function renderRail() {
+  const html = agentsListed ? chatRailHtml(allAgents.map((a) => agentRowView(a, Date.now())), agentId) : agentsLoaded ? `<li class="rail-empty">Sessions unavailable.</li>` : "";
+  if (html && html !== lastRailHtml) {
+    $("railList").innerHTML = html;
+    lastRailHtml = html;
+  }
+}
+
 /** Re-render everything; keep the view pinned to the bottom when it was there, else offer the pill. */
 function render(o: { stick?: boolean; newContent?: boolean } = {}) {
   const sc = scroller();
   const wasBottom = atBottom(sc);
   renderHeader();
+  renderRail();
   renderComposer();
   renderLog();
   renderPending();
@@ -225,14 +242,17 @@ async function loadOlder() {
 }
 
 async function refreshAgent() {
-  if (!agentId || document.hidden) return;
+  // Without an agent id the page still lists the running sessions in the rail (#156).
+  if (document.hidden) return;
   try {
     const r = await send({ type: "ui.agents_list" });
     if (r?.supported === false) bridgeNote = "The TabAgent bridge does not support agents. Update @nolmak/tabagent.";
     else if (r?.error) throw new Error(r.error);
     else {
       bridgeNote = "";
-      agent = (r?.agents as Agent[] | undefined)?.find((a) => a.id === agentId) ?? null;
+      allAgents = (r?.agents as Agent[] | undefined) ?? [];
+      agentsListed = true;
+      agent = allAgents.find((a) => a.id === agentId) ?? null;
     }
   } catch (e) {
     bridgeNote = `TabAgent can't reach the bridge: ${String((e as Error)?.message ?? e)}`;
@@ -292,7 +312,7 @@ async function refreshShareTabs() {
   } catch {
     /* no tabs API */
   }
-  sel.innerHTML = `<option value="">None</option>` + tabs.map((t) => `<option value="${t.id}">${esc((t.title || t.url || "").slice(0, 80))}</option>`).join("");
+  sel.innerHTML = `<option value="">No tab</option>` + tabs.map((t) => `<option value="${t.id}">${esc((t.title || t.url || "").slice(0, 80))}</option>`).join("");
   if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
 }
 
@@ -398,6 +418,26 @@ scroller().addEventListener("scroll", () => {
 $("newPill").addEventListener("click", () => {
   scroller().scrollTo({ top: scroller().scrollHeight, behavior: "smooth" });
   $("newPill").hidden = true;
+});
+// #156: the current session's rail row keeps you here (no reload, the draft stays); the others navigate.
+$("railList").addEventListener("click", (e) => {
+  if (!(e.target as HTMLElement).closest("a[aria-current='page']")) return;
+  e.preventDefault();
+  if (!$("composer").hidden) input().focus();
+});
+if (!/Mac|iPhone|iPad/.test(navigator.platform)) $("focusKey").textContent = "Ctrl+K";
+// #156: Cmd/Ctrl+K or / focuses the composer; Esc leaves it.
+document.addEventListener("keydown", (e) => {
+  const t = e.target as HTMLElement;
+  const typing = t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName);
+  if (e.key === "Escape" && t === input()) {
+    input().blur();
+    return;
+  }
+  const want = ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") || (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey);
+  if (!want || $("composer").hidden) return;
+  e.preventDefault();
+  input().focus();
 });
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void refreshAgent();

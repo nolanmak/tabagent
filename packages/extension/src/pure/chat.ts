@@ -1,8 +1,9 @@
 // The chat page (#151, spec §7a): transcript entries, sends in flight and the agent's state as plain data
 // in, plain data or escaped HTML out. ui/chat.ts wires it to the DOM and the worker.
 import type { Agent, AgentDeliveryState, AgentEntry, AgentHistoryCode, AgentRoute } from "@tabagent/protocol";
-import { agentRowView, connectionState, remoteUrl, type ConnectionState } from "./agents";
+import { agentRowView, connectionState, groupAgents, vendorShown, remoteUrl, type AgentRowView, type ConnectionState } from "./agents";
 import { esc } from "./html";
+import { icon, toolIcon } from "./icons";
 import { renderMarkdown } from "./markdown";
 
 /** Entries kept in memory; older ones are dropped (and can be loaded again). */
@@ -162,6 +163,12 @@ export function toolLine(item: Extract<ChatItem, { kind: "tool" }>): string {
   return sum ? `${item.name}: ${sum}` : item.name;
 }
 
+/** #156: the chip's line as markup: the tool name, then its first argument line in mono ("Bash: npm test"). */
+function toolLineHtml(item: Extract<ChatItem, { kind: "tool" }>): string {
+  const sum = firstLine(item.summary);
+  return sum ? `<span class="tool-name">${esc(item.name)}:</span> <span class="tool-arg">${esc(sum)}</span>` : `<span class="tool-name">${esc(item.name)}</span>`;
+}
+
 /** One message bubble or tool chip. `open`: the chip was expanded by the user (kept across re-renders). */
 export function chatItemHtml(item: ChatItem, open = false): string {
   if (item.kind === "msg") {
@@ -171,12 +178,11 @@ export function chatItemHtml(item: ChatItem, open = false): string {
     return `<div class="msg msg-${item.role}" data-key="${esc(item.key)}"><div class="bubble md">${renderMarkdown(item.text)}</div><div class="msg-meta"><span>${who}</span>${via}${t ? ` <span>· ${esc(t)}</span>` : ""}</div></div>`;
   }
   const err = item.result?.error ? ` <span class="tool-err">error</span>` : "";
-  const icon = item.name === "Interrupted" ? "⏹" : "🔧";
   const hasBody = !!(item.summary.trim() || item.result?.summary.trim());
   const body = hasBody
     ? `${item.summary.trim() ? `<pre class="tool-pre">${esc(item.summary)}</pre>` : ""}${item.result?.summary.trim() ? `<div class="tool-label">Result</div><pre class="tool-pre">${esc(item.result.summary)}</pre>` : ""}`
     : `<div class="tool-label">No details</div>`;
-  return `<details class="tool-chip${item.result?.error ? " tool-chip-err" : ""}" data-key="${esc(item.key)}"${open ? " open" : ""}><summary><span class="tool-icon" aria-hidden="true">${icon}</span><span class="tool-text">${esc(toolLine(item))}</span>${err}</summary><div class="tool-body">${body}</div></details>`;
+  return `<details class="tool-chip${item.result?.error ? " tool-chip-err" : ""}" data-key="${esc(item.key)}"${open ? " open" : ""}><summary><span class="tool-icon" aria-hidden="true">${icon(toolIcon(item.name))}</span><span class="tool-text" title="${esc(toolLine(item))}">${toolLineHtml(item)}</span>${err}</summary><div class="tool-body">${body}</div></details>`;
 }
 
 const PENDING_WORDS: Record<PendingSend["state"], string> = {
@@ -261,4 +267,18 @@ export function atBottom(el: { scrollTop: number; scrollHeight: number; clientHe
 /** The most recently used normal web tab other than this page: what "Share a tab" offers first. */
 export function recentWebTabs<T extends { id?: number; url?: string; title?: string; lastAccessed?: number }>(tabs: T[]): T[] {
   return tabs.filter((t) => typeof t.id === "number" && /^https?:\/\//i.test(t.url ?? "")).sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
+}
+
+/**
+ * #156: the chat page's left rail. Every running session (same order as the side panel), the current one marked.
+ * Each row links to that session's chat page, so switching stays in this tab.
+ */
+export function chatRailHtml(views: AgentRowView[], currentId: string): string {
+  const { main, other } = groupAgents(views);
+  const rows = [...main, ...other].map((v) => {
+    const cur = v.id === currentId;
+    const meta = [...(vendorShown(v) ? [v.vendorLabel] : []), v.connection.label, v.age].map(esc).join(" · ");
+    return `<li><a href="chat.html?agent=${encodeURIComponent(v.id)}" data-rail-agent="${esc(v.id)}"${cur ? ' aria-current="page"' : ""} title="${esc(v.cwd)}"><span class="status-dot tone-${v.connection.tone}${v.busy ? " busy-dot" : ""}" aria-hidden="true"></span><span class="rail-text"><span class="rail-title">${esc(v.title)}</span><span class="rail-meta">${meta}</span></span></a></li>`;
+  });
+  return rows.join("") || `<li class="rail-empty">No sessions running.</li>`;
 }

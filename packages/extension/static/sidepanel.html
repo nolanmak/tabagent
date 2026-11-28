@@ -6,123 +6,138 @@
 <title>TabAgent</title>
 <link rel="stylesheet" href="ui.css" />
 </head>
-<body>
-<header>
+<body class="panel">
+<header class="topbar">
   <div class="brand"><img src="icons/32.png" alt="" width="20" height="20" /> TabAgent</div>
-  <span id="status" class="pill">…</span>
+  <div class="topbar-actions">
+    <span id="status" class="conn-status" role="status">…</span>
+    <button id="killBtn" class="danger-soft sm kill-btn" title="Stop all agents (Alt+Shift+K)" aria-label="Stop all agents"><span class="sq" aria-hidden="true"></span>Stop all</button>
+    <button id="resumeBtn" class="primary sm" hidden>▶ Resume</button>
+  </div>
 </header>
-<p id="yoloBanner" class="yolo-banner" role="status" hidden><strong>YOLO mode is on.</strong> Agents can use every site without asking, and sign in anywhere with your saved accounts (you still approve each account once). Turn it off under Settings. <span id="yoloExpiry" hidden></span></p>
 
-<section id="pairBox" class="card" hidden>
-  <h2>Pair with the bridge</h2>
-  <p class="muted">Run <code>tabagent serve</code> (or <code>npx -y @nolmak/tabagent serve</code>) and enter the pairing code it prints (<code>tabagent status</code> shows it again).</p>
+<div class="panel-body">
+<p id="yoloBanner" class="banner yolo-banner" role="status" hidden><span class="banner-text"><strong>YOLO mode is on.</strong> Agents can use every site without asking, and sign in anywhere with your saved accounts (you still approve each account once). Turn it off under Settings. <span id="yoloExpiry" hidden></span></span></p>
+<div id="pausedBanner" class="banner banner-danger" role="status" hidden><span class="banner-text" id="killNote">Shortcut: Alt+Shift+K</span></div>
+<div id="restartLock" class="banner banner-warn" hidden><span class="banner-text"><span id="restartLockText"></span></span> <button id="endRestartLock" class="sm" title="Only if you reloaded TabAgent yourself and no sign-in page from before the reload is still open">End lock now</button></div>
+
+<section id="pairBox" class="card attention" hidden>
+  <div class="card-head"><span class="attention-dot" aria-hidden="true"></span><h2>Pair with the bridge</h2></div>
+  <p class="muted small">Run <code>tabagent serve</code> (or <code>npx -y @nolmak/tabagent serve</code>) and enter the pairing code it prints (<code>tabagent status</code> shows it again).</p>
   <form id="pairForm">
     <input id="pairCode" placeholder="Pairing code (e.g. 7KQ-4MX)" autocomplete="off" aria-label="Pairing code" />
     <input id="pairPort" type="number" placeholder="Port" aria-label="Bridge port" />
-    <button type="submit" id="pairBtn">Pair</button>
+    <button type="submit" id="pairBtn" class="primary">Pair</button>
   </form>
-  <p id="pairErr" class="err" hidden></p>
+  <p id="pairErr" class="err small" hidden></p>
 </section>
 
-<section class="card kill">
-  <button id="killBtn" class="danger" title="Alt+Shift+K">■ Stop all agents</button>
-  <button id="resumeBtn" class="primary" hidden>▶ Resume</button>
-  <span class="muted small" id="killNote">Shortcut: Alt+Shift+K</span>
-  <p id="restartLock" class="small" hidden><span id="restartLockText"></span> <button id="endRestartLock" title="Only if you reloaded TabAgent yourself and no sign-in page from before the reload is still open">End lock now</button></p>
-</section>
-
-<section id="promptsBox" class="card attention" hidden>
-  <h2>Waiting for you</h2>
+<section id="promptsBox" class="card attention" aria-labelledby="promptsHead" hidden>
+  <div class="card-head"><span class="attention-dot" aria-hidden="true"></span><h2 id="promptsHead">Waiting for you</h2><span id="promptsCount" class="count attn"></span></div>
   <ul id="prompts" class="prompts"></ul>
 </section>
 
 <section id="handoffBox" class="card attention" hidden>
-  <h2>Your turn</h2>
-  <p class="muted small">An agent handed these tabs to you. Agents cannot use them until you press Done or Cancel.</p>
+  <div class="card-head"><span class="attention-dot" aria-hidden="true"></span><h2>Your turn</h2></div>
+  <p class="lead">An agent handed these tabs to you. Agents cannot use them until you press Done or Cancel.</p>
   <ul id="handoffs" class="list"></ul>
   <div id="authMount"></div>
 </section>
 
 <section id="stoppedBox" class="card" hidden>
-  <h2>Stopped tabs</h2>
-  <p class="muted small">Debugging was cancelled on these tabs. Resume lets agents drive them again.</p>
+  <div class="card-head"><h2>Stopped tabs</h2></div>
+  <p class="lead">Debugging was cancelled on these tabs. Resume lets agents drive them again.</p>
   <ul id="stopped" class="list"></ul>
 </section>
 
-<section class="card">
-  <h2>Sessions</h2>
-  <ul id="sessions" class="list"><li class="muted">No sessions.</li></ul>
-  <p id="sessionsNotice" class="muted small" role="status" hidden></p>
-</section>
-
-<section class="card" id="agentsBox" hidden>
-  <h2>Agents</h2>
-  <p class="muted small">Claude Code and Codex sessions running on this computer. Click one to open it as a chat; <b>Quick send</b> messages it from here.</p>
+<section class="section" id="agentsBox" aria-labelledby="agentsHead" hidden>
+  <div class="section-head"><h2 id="agentsHead">Agents</h2><span id="agentsCount" class="count"></span><span class="hint">Click to open a chat</span></div>
   <p id="agentNotice" class="small err" hidden></p>
-  <ul id="agents" class="list agents" role="listbox" aria-label="Running agents"><li class="muted">Looking for agents…</li></ul>
+  <ul id="agents" class="agents" role="listbox" aria-label="Running agents"><li class="empty">Looking for agents…</li></ul>
   <p id="agentSources" class="muted small" hidden></p>
   <div id="composerPark" hidden>
   <div class="composer" id="agentComposer">
     <p id="agentTarget" class="small" hidden></p>
     <textarea id="agentPrompt" rows="3" placeholder="Message for the agent" aria-label="Message for the agent"></textarea>
-    <label class="row check"><input type="checkbox" id="agentShareTab" checked /> <span><span id="agentShareLabel">Share this tab's title and link</span> <span id="agentTabTitle" class="muted small"></span></span></label>
-    <label class="row check"><input type="checkbox" id="agentSelection" disabled /> <span>Include selection <span id="agentSelectionPreview" class="muted small"></span></span></label>
-    <div class="row composer-actions"><span id="agentComposerNote" class="muted small"></span><button id="agentSend" class="primary" disabled>Send</button></div>
-    <div class="row composer-actions composer-spawn"><button id="agentSpawn" class="secondary" hidden disabled></button></div>
+    <label class="check"><input type="checkbox" id="agentShareTab" checked /> <span><span id="agentShareLabel">Share this tab's title and link</span> <span id="agentTabTitle" class="muted small"></span></span></label>
+    <label class="check"><input type="checkbox" id="agentSelection" disabled /> <span>Include selection <span id="agentSelectionPreview" class="muted small"></span></span></label>
+    <div class="composer-actions"><span id="agentComposerNote" class="muted small"></span><button id="agentSend" class="primary" disabled>Send</button></div>
+    <div class="composer-actions composer-spawn"><button id="agentSpawn" class="secondary" hidden disabled></button></div>
   </div>
   </div>
   <ul id="agentFeed" class="feed agent-feed" aria-label="Messages sent to agents"></ul>
 </section>
 
-<section class="card">
-  <h2>Activity</h2>
-  <ul id="feed" class="feed"></ul>
-</section>
-
-<section class="card" id="workflowsBox">
-  <h2>Workflow recipes</h2>
-  <p class="muted small">Captured tasks are drafts until you review them. Scheduled and replayed tasks stop for secrets, sign-in, MFA, risky actions, or ambiguous targets.</p>
-  <p><select id="manualCaptureTab" aria-label="Tab to capture"></select> <button id="manualCaptureStart">Start manual capture</button> <button id="manualCaptureStop" hidden>Stop & save capture</button> <span id="manualCaptureState" class="muted small"></span></p>
-  <ul id="workflows"></ul>
-</section>
-
-<details class="card" id="settingsBox">
-  <summary><h2>Settings</h2></summary>
-  <h3>Sites</h3>
-  <p class="muted small">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site. Sign-in allowed still asks before each sign-in or code, unless the site signs in without asking or has an Always grant.</p>
-  <div class="row sitesearch">
-    <span class="searchbox"><input id="siteSearch" type="search" placeholder="Search sites" aria-label="Search sites" autocomplete="off" spellcheck="false" /><button type="button" id="siteSearchClear" aria-label="Clear site search" title="Clear (Esc)" hidden>✕</button></span>
-    <span id="siteCount" class="muted small" aria-live="polite"></span>
+<details class="section" id="sessionsBox" data-section="sessions">
+  <summary><h2>Sessions</h2><span id="sessionsCount" class="count"></span><span class="summary-meta" id="sessionsMeta"></span></summary>
+  <div class="section-body">
+    <ul id="sessions" class="list"><li class="empty-row">No sessions.</li></ul>
+    <p id="sessionsNotice" class="muted small" role="status" hidden></p>
   </div>
-  <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th>Lite</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th title="Sign-in allowed, sign in without asking, always allow texted/emailed codes, and Always grants">Sign-in</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
-  <form id="addSite" class="row">
-    <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
-    <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option></select>
-    <button type="submit">Add</button>
-    <span class="muted small">full also turns on sign-in (without asking) and pre-approvals</span>
-  </form>
-  <p id="siteLevelNote" class="muted small" role="status" hidden></p>
-  <h3>Denylist</h3>
-  <p class="muted small">Host globs, one per line. Browser pages and the Web Store are always blocked.</p>
-  <textarea id="denylist" rows="5"></textarea>
-  <div class="row"><button id="saveDenylist">Save denylist</button></div>
-  <h3>Behaviour</h3>
-  <label class="row">When a session ends
-    <select id="onSessionEnd"><option value="collapse">Collapse its tab group</option><option value="keep">Keep tabs</option><option value="close">Close its tabs</option></select>
-  </label>
-  <label class="row">Leave-page dialogs
-    <select id="beforeUnload"><option value="accept">Leave the page</option><option value="dismiss">Stay on the page</option><option value="ask-agent">Let the agent decide</option></select>
-  </label>
-  <label class="row"><input type="checkbox" id="showOverlay" /> Show the on-page activity border</label>
-  <label class="row"><input type="checkbox" id="forceLite" /> Lite mode everywhere (no debugger)</label>
-  <label class="row"><input type="checkbox" id="yolo" /> <strong>YOLO mode:</strong> allow every site without asking (denylist, kill switch, tab takeover and sign-in still apply)</label>
-  <label class="row"><input type="checkbox" id="devAllowSensitive" /> Developer: skip sensitive-action confirmations</label>
-  <label class="row"><input type="checkbox" id="outsideApprovals" /> Answer prompts outside this panel: <code>tabagent approve</code> with Touch ID or your Mac password, or a one-time phone page on your tailnet</label>
-  <div class="row" id="phoneLinkRow" hidden><button id="phoneLinkBtn">Phone link for approvals</button></div>
-  <pre class="muted small" id="phoneLink" style="white-space:pre-wrap;overflow-wrap:anywhere;user-select:all" hidden></pre>
-  <div class="row"><button id="unpair" class="link">Unpair bridge</button></div>
-  <p class="muted small" id="about"></p>
 </details>
+
+<details class="section" id="activityBox" data-section="activity">
+  <summary><h2>Activity</h2><span id="activityCount" class="count"></span><span class="summary-meta" id="activityMeta"></span></summary>
+  <div class="section-body">
+    <ul id="feed" class="feed"></ul>
+  </div>
+</details>
+
+<details class="section" id="workflowsBox" data-section="workflows">
+  <summary><h2>Workflows</h2><span id="workflowsCount" class="count"></span><span class="summary-meta" id="workflowsMeta"></span></summary>
+  <div class="section-body">
+    <p class="section-note">Captured tasks are drafts until you review them. Scheduled and replayed tasks stop for secrets, sign-in, MFA, risky actions, or ambiguous targets.</p>
+    <div class="toolbar"><select id="manualCaptureTab" aria-label="Tab to capture"></select> <button id="manualCaptureStart">Start manual capture</button> <button id="manualCaptureStop" class="danger-soft" hidden>Stop &amp; save capture</button> <span id="manualCaptureState" class="muted small"></span></div>
+    <ul id="workflows"></ul>
+  </div>
+</details>
+
+<details class="section" id="settingsBox" data-section="settings">
+  <summary><h2>Settings</h2></summary>
+  <div class="section-body">
+  <div class="settings-group">
+    <h3>Sites</h3>
+    <p class="section-note">Sites without a policy ask. Pre-approve skips the confirmation for that kind of sensitive action on that site. Sign-in allowed still asks before each sign-in or code, unless the site signs in without asking or has an Always grant.</p>
+    <div class="row sitesearch">
+      <span class="searchbox"><input id="siteSearch" type="search" placeholder="Search sites" aria-label="Search sites" autocomplete="off" spellcheck="false" /><button type="button" id="siteSearchClear" aria-label="Clear site search" title="Clear (Esc)" hidden>✕</button></span>
+      <span id="siteCount" class="muted small" aria-live="polite"></span>
+    </div>
+    <div class="tablewrap"><table class="sites"><thead><tr><th>Origin</th><th>Policy</th><th>Lite</th><th title="a form · b risky click · c JS · d credentials · e files">Pre-approved</th><th title="Sign-in allowed, sign in without asking, always allow texted/emailed codes, and Always grants">Sign-in</th><th></th></tr></thead><tbody id="sites"></tbody></table></div>
+    <form id="addSite" class="row">
+      <input id="newOrigin" placeholder="https://example.com" aria-label="Origin" />
+      <select id="newLevel" aria-label="Policy"><option>read</option><option>act</option><option>full</option><option>deny</option></select>
+      <button type="submit">Add</button>
+      <span class="muted small">full also turns on sign-in (without asking) and pre-approvals</span>
+    </form>
+    <p id="siteLevelNote" class="muted small" role="status" hidden></p>
+  </div>
+  <div class="settings-group">
+    <h3>Denylist</h3>
+    <p class="section-note">Host globs, one per line. Browser pages and the Web Store are always blocked.</p>
+    <textarea id="denylist" rows="5" aria-label="Denylist"></textarea>
+    <div class="row"><button id="saveDenylist">Save denylist</button></div>
+  </div>
+  <div class="settings-group">
+    <h3>Behaviour</h3>
+    <label class="field-row"><span>When a session ends</span>
+      <select id="onSessionEnd"><option value="collapse">Collapse its tab group</option><option value="keep">Keep tabs</option><option value="close">Close its tabs</option></select>
+    </label>
+    <label class="field-row"><span>Leave-page dialogs</span>
+      <select id="beforeUnload"><option value="accept">Leave the page</option><option value="dismiss">Stay on the page</option><option value="ask-agent">Let the agent decide</option></select>
+    </label>
+    <label class="switch-row"><input type="checkbox" id="showOverlay" /> <span>Show the on-page activity border</span></label>
+    <label class="switch-row"><input type="checkbox" id="forceLite" /> <span>Lite mode everywhere (no debugger)</span></label>
+    <label class="switch-row warnish"><input type="checkbox" id="yolo" /> <span><strong>YOLO mode:</strong> allow every site without asking (denylist, kill switch, tab takeover and sign-in still apply)</span></label>
+    <label class="switch-row"><input type="checkbox" id="devAllowSensitive" /> <span>Developer: skip sensitive-action confirmations</span></label>
+    <label class="switch-row"><input type="checkbox" id="outsideApprovals" /> <span>Answer prompts outside this panel: <code>tabagent approve</code> with Touch ID or your Mac password, or a one-time phone page on your tailnet</span></label>
+    <div class="row" id="phoneLinkRow" hidden><button id="phoneLinkBtn">Phone link for approvals</button></div>
+    <pre class="muted small" id="phoneLink" hidden></pre>
+  </div>
+  <div class="row"><button id="unpair" class="link">Unpair bridge</button></div>
+  <p class="about" id="about"></p>
+  </div>
+</details>
+</div>
 <script src="sidepanel.js"></script>
 <script src="authpanel.js"></script>
 </body>
