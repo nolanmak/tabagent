@@ -14,3 +14,5 @@ f683f5da878c2d04d243db113b43bbab0cbef1dc:packages/extension/test/pagelib-captcha
 176a3b6568c5847d57aafaa2f2fab6155fc0437e:packages/extension/manifest.json:generic-api-key:7
 # Chrome extension public key; public by design
 cb8c8e403413b7be6aa7c586123ad1c4ff229d1c:packages/extension/manifest.json:generic-api-key:7
+# fake Bitwarden session key in a unit test (not a secret)
+ed4e8feaa04dd4c5bb87ba61134fffc48d5f32d5:packages/bridge/test/auth-providers.test.ts:generic-api-key:422

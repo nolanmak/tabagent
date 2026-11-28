@@ -419,7 +419,7 @@ describe("Bitwarden lifetime, queue and sync policy (fake clock, in-memory bw)",
 });
 
 describe("Bitwarden rememberUnlock (Keychain)", () => {
-  const KEY2 = "c2Vzc2lvbi1rZXktZm9yLXRlc3Rz";
+  const KEY2 = "R".repeat(12) + randomBytes(12).toString("base64url");
   function setup(remember: boolean, saved: string | null = null) {
     let stored = saved;
     const ops: string[] = [];
@@ -479,7 +479,7 @@ describe("Bitwarden rememberUnlock (Keychain)", () => {
   });
 
   it("a saved key the vault no longer accepts is discarded", async () => {
-    const a = setup(true, "bm90LWEtdmFsaWQta2V5LWF0LWFsbA");
+    const a = setup(true, "X".repeat(20));
     await a.p.startup({});
     expect(a.p.unlocked).toBe(false);
     expect(a.stored()).toBeNull();
