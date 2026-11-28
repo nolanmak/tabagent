@@ -242,8 +242,9 @@ export function createRouter<S>(deps: RouterDeps<S>) {
         side = {};
         err = { ...WITHHELD };
       }
-      const audit = await buildAudit({ tool: toolName, action, origin, params, outcome: ok ? "ok" : outcomeFor(err?.code), errorCode: err?.code, result: clean, redact, ...note });
-      deps.feed?.({ ...feedBase(), params: audit.params, status: ok ? "ok" : audit.outcome === "denied" ? "denied" : "error", errorCode: err?.code, ms: now() - started, resultSummary: audit.resultSummary });
+      const ms = now() - started;
+      const audit = await buildAudit({ tool: toolName, action, origin, params, outcome: ok ? "ok" : outcomeFor(err?.code), errorCode: err?.code, result: clean, redact, ...note, durationMs: ms });
+      deps.feed?.({ ...feedBase(), params: audit.params, status: ok ? "ok" : audit.outcome === "denied" ? "denied" : "error", errorCode: err?.code, ms, resultSummary: audit.resultSummary });
       const env: Envelope = { type: "result", id: cmd.id, ok, ...(ok ? { result: clean } : { error: err }), ...side, audit };
       return env;
     };

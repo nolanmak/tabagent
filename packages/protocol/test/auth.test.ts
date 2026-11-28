@@ -104,7 +104,7 @@ describe("DA10 profile", () => {
     expect(names(toolsForProfiles("full")).filter((n) => n.startsWith("auth."))).toEqual([]);
     expect(names(toolsForProfiles("auth")).filter((n) => n.startsWith("auth.")).sort()).toEqual(authNames);
     expect(names(toolsForProfiles("full,auth")).length).toBe(tools.length);
-    expect(toolsForProfiles("auth")).toHaveLength(13 + 6 + 1); // + captcha.solve (#61)
+    expect(toolsForProfiles("auth")).toHaveLength(15 + 6 + 1); // core (with task.start/end, #158) + auth + captcha.solve (#61)
   });
   it("group auth, lookup by MCP name", () => {
     for (const n of authNames) {

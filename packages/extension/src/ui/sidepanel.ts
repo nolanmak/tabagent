@@ -1,6 +1,6 @@
 // Side panel (#14): pairing, kill switch, prompts, stopped tabs, sessions, agents (#90),
 // activity feed (audit records only) and settings. A view over worker state.
-import { answerLabel, type Agent, type AgentSources, type PromptAnswer } from "@tabagent/protocol";
+import { answerLabel, type Agent, type AgentSources, type PromptAnswer, type TaskSummary } from "@tabagent/protocol";
 import { authEnabled, type StoredPolicy } from "../background/policy";
 import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, shareTabLabel, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { markFocus, restoreFocus } from "../pure/focusKeep";
@@ -11,6 +11,7 @@ import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sani
 import { formatRemaining } from "../pure/modeChange";
 import { nextOpen, sectionSummaries, type SectionId } from "../pure/panelSections";
 import { filterSites } from "../pure/siteFilter";
+import { liveDurationText, tasksHtml, tasksSummary } from "../pure/tasksView";
 import { workflowStepDetail } from "../pure/workflow";
 import { alwaysLabel, authAutoActive, hasCodesAlways, revokeAlways, setAuthAuto, setCodesAlways, setSignIn } from "../pure/siteAuth";
 import { AUTH_AUTO_WARNING, applyLevel, authBlockedReason } from "../pure/siteLevel";
@@ -350,6 +351,62 @@ async function rememberRecent(agent: { id: string; name: string }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #158 Tasks: summaries come from the bridge (built from the audit log). Re-listed when the section is shown,
+// on tasks.changed (at most once a second) and after a label; running timers tick locally.
+// ---------------------------------------------------------------------------
+let tasks: TaskSummary[] = [];
+let openTaskId: string | null = null;
+let tasksError = "";
+let tasksInFlight = false;
+let tasksTimer: ReturnType<typeof setTimeout> | null = null;
+const TASKS_THROTTLE_MS = 1000;
+const TASKS_LIMIT = 50;
+
+function renderTasks() {
+  if (!state) return;
+  const box = $("tasksBox") as HTMLDetailsElement;
+  box.hidden = !state.tasksSupported;
+  if (box.hidden) return;
+  const list = $("tasks");
+  const mark = markFocus(list, "data-task-id", document.activeElement);
+  const scroll = list.scrollTop;
+  list.innerHTML = tasksHtml(tasks, Date.now(), openTaskId);
+  list.scrollTop = scroll;
+  restoreFocus(list, "data-task-id", mark);
+  const sum = tasksSummary(tasks);
+  $("tasksCount").textContent = sum.count;
+  $("tasksMeta").textContent = sum.meta;
+  $("tasksError").hidden = !tasksError;
+  $("tasksError").textContent = tasksError;
+}
+
+async function refreshTasks() {
+  if (!state?.tasksSupported || document.hidden) return;
+  if (tasksInFlight) return scheduleTasks();
+  tasksInFlight = true;
+  try {
+    const r = await send({ type: "ui.tasks_list", limit: TASKS_LIMIT, ...(openTaskId ? { calls: openTaskId } : {}) });
+    if (r?.supported === false) state.tasksSupported = false;
+    else tasks = Array.isArray(r?.tasks) ? r.tasks : [];
+    tasksError = "";
+  } catch (e) {
+    tasksError = `Could not list tasks: ${String((e as Error)?.message ?? e)}`;
+  } finally {
+    tasksInFlight = false;
+  }
+  renderTasks();
+}
+
+/** Coalesce bursts of tasks.changed (one per tool call) into one re-list a second. */
+function scheduleTasks() {
+  if (tasksTimer) return;
+  tasksTimer = setTimeout(() => {
+    tasksTimer = null;
+    void refreshTasks();
+  }, TASKS_THROTTLE_MS);
+}
+
 async function refreshAgents() {
   // §5: only while the panel is visible; visibilitychange refreshes when it is shown again.
   if (!agentsVisible() || agentsInFlight || document.hidden) return;
@@ -530,6 +587,7 @@ function render() {
   renderAgentsBox();
   renderFeed();
   renderWorkflows();
+  renderTasks();
   renderSettings();
 }
 
@@ -537,6 +595,7 @@ async function refresh() {
   state = await send({ type: "ui.state" });
   render();
   void refreshAgents();
+  void refreshTasks();
 }
 
 chrome.runtime.onMessage.addListener((m: any) => {
@@ -565,6 +624,9 @@ chrome.runtime.onMessage.addListener((m: any) => {
       state.stoppedTabs = m.tabs;
       renderStopped();
       break;
+    case "tasks.changed":
+      scheduleTasks();
+      break;
     case "status":
     case "paused":
     case "settings":
@@ -575,6 +637,26 @@ chrome.runtime.onMessage.addListener((m: any) => {
 
 // #156: a section the user opened or closed stays that way (summary clicks include Enter and Space).
 for (const id of SECTIONS) $(`${id}Box`).querySelector("summary")!.addEventListener("click", () => touchedSections.add(id));
+$("tasksBox").addEventListener("toggle", () => {
+  if (($("tasksBox") as HTMLDetailsElement).open) void refreshTasks();
+});
+$("tasks").addEventListener("click", async (e) => {
+  const b = (e.target as HTMLElement).closest("button");
+  if (!b) return;
+  if (b.dataset.taskToggle) {
+    openTaskId = openTaskId === b.dataset.taskToggle ? null : b.dataset.taskToggle;
+    renderTasks();
+    // The list carries calls for the opened task only: fetch them.
+    if (openTaskId) void refreshTasks();
+    return;
+  }
+  if (b.dataset.taskLabel && b.dataset.task) {
+    b.disabled = true;
+    const r = await send({ type: "ui.tasks_label", taskId: b.dataset.task, outcome: b.dataset.taskLabel }).catch((err) => ({ ok: false, code: String(err) }));
+    tasksError = r?.ok ? "" : `Could not label the task (${r?.code ?? "error"})`;
+    void refreshTasks();
+  }
+});
 
 $("pairForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -659,6 +741,7 @@ chrome.tabs.onUpdated.addListener((_id, info, tab) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
+  void refreshTasks();
   void refreshAgents();
   void refreshActiveTab();
 });
@@ -796,6 +879,8 @@ setInterval(() => {
 }, AGENTS_REFRESH_MS);
 setInterval(() => {
   for (const el of document.querySelectorAll<HTMLElement>(".countdown")) el.textContent = `${Math.max(0, Math.round((Number(el.dataset.expires) - Date.now()) / 1000))}s`;
+  // #158: running tasks' durations tick without a re-list.
+  for (const el of document.querySelectorAll<HTMLElement>(".task-dur.live")) el.textContent = liveDurationText(Number(el.dataset.started), Date.now());
   if (state) renderYoloExpiry();
 }, 1000);
 setInterval(() => {

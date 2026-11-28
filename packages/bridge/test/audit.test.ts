@@ -15,6 +15,8 @@ afterEach(async () => {
 });
 
 const lines = (p: string) => readFileSync(p, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+/** Tool records only (#158 adds task.* events around them). */
+const records = (p: string) => lines(p).filter((l) => !l.event);
 const rec = (extra = {}) => ({ tool: "act.type", origin: "https://a.test", params: { ref: "e3", text: "[redacted]" }, outcome: "ok", resultSummary: { bytes: 10, sha256: "abc" }, ...extra });
 
 describe("tokens (#15, D3)", () => {
@@ -116,7 +118,7 @@ describe("audit writer (D20)", () => {
     const r = await startDaemon();
     daemons.push(r.d);
     await rest(r.base, "/v1/act.type", r.cfg.secret, { ref: "e1", text: "hunter2-password" });
-    const [l] = lines(join(r.home, "audit.jsonl"));
+    const [l] = records(join(r.home, "audit.jsonl"));
     expect(l).toMatchObject({ tool: "act.type", outcome: "error", errorCode: "NO_EXTENSION", origin: null, caller: "local" });
     expect(JSON.stringify(l)).not.toContain("hunter2");
   });
@@ -130,7 +132,7 @@ describe("audit writer (D20)", () => {
     await rest(r.base, "/v1/act.type", r.cfg.secret, { ref: "e1", text: "hunter2" });
     const log = readFileSync(join(r.home, "audit.jsonl"), "utf8");
     expect(log).not.toContain("hunter2");
-    expect(lines(join(r.home, "audit.jsonl")).map((l) => l.outcome)).toEqual(["ok", "denied"]);
+    expect(records(join(r.home, "audit.jsonl")).map((l) => l.outcome)).toEqual(["ok", "denied"]);
     e.close();
   });
   it("events are logged", () => {

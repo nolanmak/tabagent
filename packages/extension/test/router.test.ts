@@ -96,6 +96,15 @@ describe("router order and envelope", () => {
     expect(r.audit).toMatchObject({ tool: "page.snapshot", origin: "https://a.example", outcome: "ok", resultSummary: { bytes: expect.any(Number), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) } });
     expect(JSON.stringify(r.audit)).not.toContain('"snapshot":"x"');
   });
+  it("the audit record carries the command's durationMs, the same value as the feed (#158)", async () => {
+    let t = 1000;
+    const w = world({ now: () => (t += 250) });
+    const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
+    expect(r.audit.durationMs).toBe(250);
+    expect((w.deps.feed as any).mock.calls.at(-1)[0].ms).toBe(250);
+    const bad = await w.router.handle(cmd("no.such.tool"));
+    expect(bad.audit.durationMs).toBe(250);
+  });
   it("a handler that signed in without asking marks the audit record authAuto (#131)", async () => {
     const w = world({ handler: (n) => (n === "page.snapshot" ? async (c: any) => (c.auditNote({ authAuto: true }), { ok: true }) : undefined) });
     const r = await w.router.handle(cmd("page.snapshot", { tabId: 1 }));
