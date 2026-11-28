@@ -107,9 +107,13 @@ export interface BitwardenOpts {
   /** Opt-in: keep the session key across bridge restarts (`auth.bitwarden.rememberUnlock`). */
   remember?: () => boolean;
   keyStore?: KeyStore;
+  /** For tests: the wait between restore retries. */
+  sleep?: (ms: number) => Promise<void>;
   /** Audit hook for unlock/lock events (never carries key material). */
   event?: (event: string, data: Record<string, unknown>) => void;
 }
+
+const RESTORE_TRIES = 3;
 
 export class BitwardenProvider implements BridgeProvider {
   readonly name = "bitwarden" as const;
@@ -173,12 +177,27 @@ export class BitwardenProvider implements BridgeProvider {
     if (!this.o.enabled()) return;
     if (this.remembering) {
       const saved = await this.o.keyStore!.load().catch(() => null);
-      if (saved && (await this.rawStatus(saved).catch(() => "locked" as const)) === "unlocked") {
-        this.key = saved;
-        this.unlockedAt = this.lastFetch = this.now();
-        this.o.event?.("bitwarden.unlocked", { restored: true });
-        await this.sync().catch(() => {});
-        return;
+      if (saved) {
+        // A slow or failed `bw status` is not a rejection: retry, and only discard the key when
+        // Bitwarden says locked/unauthenticated. On repeated errors keep it (no `bw lock`, which would
+        // invalidate it) and stay locked; the next start tries again.
+        const sleep = this.o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+        let state: BwRawStatus | "error" = "error";
+        for (let i = 0; i < RESTORE_TRIES && state === "error"; i++) {
+          if (i > 0) await sleep(1000 * i);
+          state = await this.rawStatus(saved).catch(() => "error" as const);
+        }
+        if (state === "unlocked") {
+          this.key = saved;
+          this.unlockedAt = this.lastFetch = this.now();
+          this.o.event?.("bitwarden.unlocked", { restored: true });
+          await this.sync().catch(() => {});
+          return;
+        }
+        if (state === "error") {
+          this.o.event?.("bitwarden.restore_failed", {});
+          return;
+        }
       }
     }
     await this.o.keyStore?.clear().catch(() => {});
@@ -272,6 +291,9 @@ export class BitwardenProvider implements BridgeProvider {
 
   async sync(): Promise<void> {
     if (!this.key) throw this.lockedError();
+    // `bw list` only reads the CLI's local copy; pull from the server first so logins added or
+    // imported after `tabagent bitwarden login` show up. Offline or a failed pull: list what we have.
+    await this.bw(["sync"], true).catch(() => null);
     const r = await this.bw(["list", "items"], true);
     let env: Envelope;
     try {

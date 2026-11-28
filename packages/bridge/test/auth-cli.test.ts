@@ -83,6 +83,17 @@ describe("doctor", () => {
     expect(text).toContain("Bitwarden CLI: disabled");
     expect(text).toContain("Bridge not running");
   });
+  it("reports the bridge's Bitwarden state, not the CLI's own locked copy", async () => {
+    const f = fakeCliDir();
+    const r = await doctorCommand({
+      platform: "linux",
+      onepassword: op(f),
+      bitwarden: { status: async () => ({ name: "bitwarden", state: "locked", hint: "Bitwarden is locked" }) } as unknown as BitwardenProvider,
+      bitwardenDaemon: async () => "unlocked",
+      config: { providers: ["bitwarden"], sms: false, bitwarden: { idleLockMinutes: 30, maxUnlockHours: 8 } },
+    });
+    expect(r.out.join("\n")).toContain("Bitwarden CLI: unlocked (bridge)");
+  });
   it("macOS, db readable: ok with the Text Message Forwarding hint", async () => {
     const db = join(dir, "chat.db");
     writeFileSync(db, "");

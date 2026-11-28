@@ -19,7 +19,14 @@ export const authCli = {
   },
   async doctor(_pos: string[], f: Flags): Promise<Out> {
     const cfg = port(f);
-    return doctorCommand({ bridge: async () => ({ port: cfg.port, up: !!(await health(cfg.port)) }) });
+    return doctorCommand({
+      bridge: async () => ({ port: cfg.port, up: !!(await health(cfg.port)) }),
+      bitwardenDaemon: async () => {
+        const r = await fetch(`http://127.0.0.1:${cfg.port}${ADMIN_BITWARDEN_SESSION}`, { headers: { authorization: `Bearer ${cfg.secret}` } });
+        if (!r.ok) return undefined;
+        return ((await r.json()) as { status?: { state?: string } }).status?.state;
+      },
+    });
   },
   async bitwarden(pos: string[], f: Flags, cliPath: string): Promise<Out> {
     const cfg = port(f);
