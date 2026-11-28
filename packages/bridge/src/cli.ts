@@ -1,4 +1,4 @@
-// tabagent CLI: serve | mcp | pair | status | tools | token | audit | settings | kill | approve | skill | config | <tool>
+// tabagent CLI: serve | mcp | pair | status | tools | token | audit | settings | kill | approve | skill | config | setup | <tool>
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync, watchFile } from "node:fs";
 import { dirname, join } from "node:path";
@@ -14,6 +14,7 @@ import { findAgentPid, readPs } from "./agents/ancestry";
 import { channelName, channelsFlag, readArgs } from "./agents/channels";
 import { InboxClient } from "./inbox-client";
 import { approveCommand, auditTail, configCommand, formatAuditLine, helpText, killCommand, settingsCommand, skillCommand, tokenCommand, toolOutput, toolsCommand, type Out, type ToolCall } from "./commands";
+import { setupCommand } from "./setup";
 import { BRIDGE_VERSION } from "./version";
 import { authCli } from "./auth/cli-entry";
 import { captchaCli } from "./captcha/cli-entry";
@@ -282,6 +283,9 @@ switch (cmd) {
   }
   case "skill":
     print(skillCommand(pos, f, skillSource()));
+    break;
+  case "setup":
+    print(await setupCommand(pos, f, { cliPath: CLI_PATH }));
     break;
   case "config":
     print(pos[0]?.startsWith("auth") ? await authCli.config(pos) : configCommand(pos));

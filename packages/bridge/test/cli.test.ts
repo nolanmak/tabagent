@@ -51,6 +51,21 @@ describe.skipIf(!existsSync(CLI))("built CLI", { timeout: 30_000 }, () => {
     }
   });
 
+  it("setup claude --dry-run and --local through the built CLI, with a stub claude on PATH (#152)", async () => {
+    const bin = mkdtempSync(join(tmpdir(), "tabagent-stub-"));
+    writeFileSync(join(bin, "claude"), `#!/bin/sh\necho "$*" >> "${join(bin, "calls")}"\n[ "$2" = get ] && { echo "No MCP server found" >&2; exit 1; }\nexit 0\n`, { mode: 0o755 });
+    const e = { ...env, PATH: `${bin}:${process.env.PATH}` };
+    const dry = await run(process.execPath, [CLI, "setup", "claude", "--dry-run", "--profile", "core,auth"], { env: e });
+    expect(dry.stdout).toContain("No tabagent MCP server in Claude Code yet.");
+    expect(dry.stdout).toContain("$ claude mcp add tabagent -s user -- npx -y @nolmak/tabagent@latest mcp --profile core,auth");
+    expect(dry.stdout).toContain("claude --dangerously-load-development-channels server:tabagent");
+    await run(process.execPath, [CLI, "setup", "claude", "--local"], { env: e });
+    expect(readFileSync(join(bin, "calls"), "utf8").trim().split("\n")).toEqual(["mcp get tabagent", "mcp get tabagent", `mcp add tabagent -s user -- node ${CLI} mcp`]);
+    const bad = await run(process.execPath, [CLI, "setup", "cursor"], { env: e }).catch((x) => x);
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toContain("Usage: tabagent setup claude");
+  });
+
   it("--version prints the version", async () => {
     const { stdout } = await run(process.execPath, [CLI, "--version"], { env });
     expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
