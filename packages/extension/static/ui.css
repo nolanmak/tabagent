@@ -21,7 +21,14 @@ button.danger { background:var(--danger); border-color:var(--danger); color:#fff
 button.link { border:0; background:none; color:var(--muted); text-decoration:underline; }
 #pairForm { display:flex; gap:6px; } #pairCode { flex:1; text-transform:uppercase; } #pairPort { width:80px; }
 .kill { display:flex; gap:8px; align-items:center; }
-.list { list-style:none; margin:0; padding:0; } .list li { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line); } .list li:first-child { border-top:0; }
+.list { list-style:none; margin:0; padding:0; } .list li { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line); } .list li:first-child { border-top:0; }
+/* Long origins, URLs and labels must wrap inside the panel instead of widening it. */
+.list li > * { min-width:0; overflow-wrap:anywhere; }
+.card { min-width:0; overflow-wrap:anywhere; }
+select, input:not([type=checkbox]):not([type=radio]) { max-width:100%; min-width:0; }
+button { white-space:nowrap; overflow-wrap:normal; flex-shrink:0; }
+.list li > span:first-child { flex:1 1 12em; }
+.actions { flex-wrap:wrap; }
 .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
 .feed { list-style:none; margin:0; padding:0; max-height:300px; overflow:auto; font:11.5px/1.4 ui-monospace,monospace; }
 .feed li { padding:3px 0; border-top:1px dashed var(--line); word-break:break-word; }
