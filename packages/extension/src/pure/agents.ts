@@ -71,6 +71,8 @@ export interface AgentRowView {
   /** Set when not sendable. */
   reason?: string;
   badges: string[];
+  /** Glossary canDriveTab: a Send with the tab grants it to this agent (AD11). */
+  canDriveTab: boolean;
 }
 
 export function agentRowView(a: Agent, now: number): AgentRowView {
@@ -105,7 +107,13 @@ export function agentRowView(a: Agent, now: number): AgentRowView {
     spawnLabel: a.vendor === "claude" && a.cwd ? `Start a new session in ${cwdBase}${a.linked ? " instead" : ""}` : undefined,
     reason,
     badges,
+    canDriveTab: a.canDriveTab,
   };
+}
+
+/** §7: the Share label says what the agent gets. Only canDriveTab targets get the tab itself (AD11). */
+export function shareTabLabel(v: AgentRowView | null): string {
+  return v?.canDriveTab && (v.route === "piggyback" || v.route === "channel") ? "Share this tab (agent can use it)" : "Share this tab's title and link";
 }
 
 /** One clickable row (a listbox option). Every agent-supplied string goes through esc(). */
@@ -153,7 +161,7 @@ export function sourcesNotes(sources: AgentSources | undefined): string[] {
 // Composer
 // ---------------------------------------------------------------------------
 
-/** The tab fields a send shares (AD12). P1 sends title and URL as text; there is no tab grant yet. */
+/** The tab fields a send shares (AD12). A canDriveTab target is also granted the tab itself (AD11). */
 export interface SharedTab {
   tabId: number;
   title: string;
@@ -197,13 +205,15 @@ export function composerState(c: { agent: AgentRowView | null; prompt: string; s
   return { canSend: v.sendable && ready, label: v.actionLabel, note, spawnLabel, canSpawn: !!spawnLabel && ready };
 }
 
-/** The selection rides with the tab (AD12): the bridge composes it into the page paragraph, never alone. */
 /** The feed line's name and route for a send. A new session is named by its folder, not the agent (#137). */
 export function sendTarget(v: AgentRowView, forceSpawn: boolean): { agentName: string; route: AgentRoute } {
   return forceSpawn ? { agentName: `New session in ${v.cwdBase}`, route: "spawn" } : { agentName: v.title, route: v.route };
 }
 
-/** `forceSpawn` only from the explicit Start a new session button (#137); it is omitted otherwise. */
+/**
+ * The selection rides with the tab (AD12): the bridge composes it into the page paragraph, never alone.
+ * `forceSpawn` only from the explicit Start a new session button (#137); it is omitted otherwise.
+ */
 export function buildAgentSend(c: { requestId: string; agentId: string; prompt: string; share: SharedTab | null; selection?: string | null; forceSpawn?: boolean }) {
   const base = { type: "ui.agent_send" as const, requestId: c.requestId, agentId: c.agentId, prompt: c.prompt, ...(c.forceSpawn ? { forceSpawn: true as const } : {}) };
   if (!c.share) return { ...base, includeTab: false };
@@ -227,7 +237,12 @@ export interface AgentFeedEntry {
   state: AgentDeliveryState | "sending";
   code?: AgentSendCode | string;
   detail?: string;
+  /** AD11: "tab not shared: <code>" when the tab grant was refused or timed out. */
+  tabNote?: string;
 }
+
+/** The prefix of the bridge's agent.sent detail for a refused tab grant (AD11). */
+export const TAB_NOTE = "tab not shared: ";
 
 export type AgentFeedAction =
   | { type: "sending"; requestId: string; ts: number; agentName: string; vendor: AgentVendor; route: AgentRoute }
@@ -253,7 +268,9 @@ export function agentFeedReducer(feed: AgentFeedEntry[], a: AgentFeedAction): Ag
     if (a.msg.code) upd.code = a.msg.code;
   }
   if (RANK[a.msg.state] >= RANK[cur.state]) upd.state = a.msg.state;
-  if (a.msg.detail) upd.detail = a.msg.detail;
+  // AD11: the grant result stays on the line even when a later state brings its own detail.
+  if (a.type === "sent" && a.msg.detail?.startsWith(TAB_NOTE)) upd.tabNote = a.msg.detail;
+  else if (a.msg.detail) upd.detail = a.msg.detail;
   const next = feed.slice();
   next[i] = upd;
   return next;
@@ -264,6 +281,9 @@ const STATE_CLASS: Record<AgentFeedEntry["state"], string> = { sending: "running
 export function agentFeedLineHtml(e: AgentFeedEntry): string {
   const t = new Date(e.ts).toLocaleTimeString();
   const state = `${e.state}${e.code ? ` ${e.code}` : ""}`;
-  const detail = e.detail ? `<br><span class="muted">${esc(e.detail)}</span>` : "";
+  const detail = [e.tabNote, e.detail]
+    .filter(Boolean)
+    .map((d) => `<br><span class="muted">${esc(d!)}</span>`)
+    .join("");
   return `<li data-request-id="${esc(e.requestId)}"><span class="muted">${esc(t)}</span> <b>${esc(e.agentName)}</b> <span class="muted">· ${esc(ROUTE_WORDS[e.route])} ·</span> <span class="agent-state ${STATE_CLASS[e.state]}">${esc(state)}</span>${detail}</li>`;
 }

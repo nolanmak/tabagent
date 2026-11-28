@@ -17,6 +17,7 @@ import {
   ROUTE_WORDS,
   sendTarget,
   shareableTab,
+  shareTabLabel,
   sourcesNotes,
   type AgentFeedEntry,
 } from "../src/pure/agents";
@@ -306,5 +307,38 @@ describe("agent send feed reducer (AD7)", () => {
     expect(html).not.toContain("<i>");
     expect(agentFeedLineHtml({ requestId: "r", ts: 0, agentName: "a", vendor: "codex", route: "queue", state: "sending" })).toContain("sending");
     expect(agentFeedLineHtml({ requestId: "r", ts: 0, agentName: "a", vendor: "claude", route: "spawn", state: "started", detail: "Attach with: claude attach ab12" })).toContain("Attach with: claude attach ab12");
+  });
+});
+
+describe("tab grant in the panel (P2b, AD11, §7)", () => {
+  it("the Share this tab label is truthful per target", () => {
+    expect(shareTabLabel(agentRowView(agent({ linked: true, canDriveTab: true, delivery: "piggyback" }), NOW))).toBe("Share this tab (agent can use it)");
+    expect(shareTabLabel(agentRowView(agent({ linked: true, canDriveTab: false, delivery: "piggyback" }), NOW))).toBe("Share this tab's title and link");
+    expect(shareTabLabel(agentRowView(agent(), NOW))).toBe("Share this tab's title and link");
+    expect(shareTabLabel(agentRowView(agent({ vendor: "codex", delivery: "queue" }), NOW))).toBe("Share this tab's title and link");
+    expect(shareTabLabel(null)).toBe("Share this tab's title and link");
+  });
+
+  it("'Start a new session in <folder> instead' is offered for linked piggyback/channel Claude targets, never for Codex", () => {
+    expect(agentRowView(agent({ linked: true, canDriveTab: true, delivery: "piggyback" }), NOW).spawnLabel).toBe("Start a new session in tabagent instead");
+    expect(agentRowView(agent({ linked: true, delivery: "channel" }), NOW).spawnLabel).toBe("Start a new session in tabagent instead");
+    expect(agentRowView(agent({ vendor: "codex", delivery: "queue" }), NOW).spawnLabel).toBeUndefined();
+  });
+
+  it("buildAgentSend adds forceSpawn only when asked", () => {
+    expect(buildAgentSend({ requestId: "r", agentId: "claude:1:2", prompt: "hi", share: null, forceSpawn: true })).toEqual({ type: "ui.agent_send", requestId: "r", agentId: "claude:1:2", prompt: "hi", includeTab: false, forceSpawn: true });
+    expect(buildAgentSend({ requestId: "r", agentId: "claude:1:2", prompt: "hi", share: null })).not.toHaveProperty("forceSpawn");
+  });
+
+  it("the feed keeps 'tab not shared: <code>' after later states replace the detail", () => {
+    let f = agentFeedReducer([], { type: "sending", requestId: "r1", ts: 1, agentName: "a", vendor: "claude", route: "piggyback" });
+    f = agentFeedReducer(f, { type: "sent", msg: { requestId: "r1", route: "piggyback", state: "held", detail: "tab not shared: TAB_BUSY" } });
+    expect(f[0]).toMatchObject({ state: "held", tabNote: "tab not shared: TAB_BUSY" });
+    expect(f[0].detail).toBeUndefined();
+    f = agentFeedReducer(f, { type: "status", msg: { requestId: "r1", state: "expired", detail: "Not delivered within 30 min" } });
+    expect(f[0]).toMatchObject({ tabNote: "tab not shared: TAB_BUSY", detail: "Not delivered within 30 min" });
+    const html = agentFeedLineHtml(f[0]);
+    expect(html).toContain("tab not shared: TAB_BUSY");
+    expect(html).toContain("Not delivered within 30 min");
   });
 });

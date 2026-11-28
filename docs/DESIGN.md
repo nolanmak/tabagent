@@ -161,6 +161,21 @@ sandbox (D3). See [SECURITY.md](SECURITY.md).
   pre-approved. An attached tab joins the group and on session end is ungrouped
   and left open, never closed. Popups and `target=_blank` tabs opened by a
   session tab join that session; a tab the user drags out of the group leaves it.
+  **Exception: a user-initiated Send is the attach consent** (Send to agent,
+  [agent-inbox spec](specs/agent-inbox.md) AD11). When the user sends a message
+  with "Share this tab" from the side panel to a linked agent that can drive
+  tabs, the bridge sends `agent.grant {requestId, meta, tabId}` and the worker
+  attaches the tab to that agent's session (`attached`, made active) with no
+  `tabs attach` prompt, replying `agent.granted {ok, added?, code?}`. It refuses
+  with `TAB_BUSY` (another session owns the tab, or it is in a handoff),
+  `PERMISSION_DENIED` (a private sign-in tab, or outside a token's `sites`),
+  `NOT_FOUND` (closed) or `PAUSED`; the message then goes without the tab and the
+  panel shows "tab not shared: <code>". The grant path has one caller, the
+  `agent.grant` handler, and only a panel click starts a send (no page, agent or
+  REST route can). If the piggybacked message expires undelivered, the bridge
+  sends `agent.release` and the tab is ungrouped and left open. The grant covers
+  the attach only: site policy, token scope and the D18 gates apply to the
+  agent's first action and every one after.
 - **Active tab and focus (D10).** The session's active tab is the one it last
   created or selected; with none, tab tools return `NOT_FOUND` with hint "call
   tabs new". `tabs select` changes the session's active tab only. TabAgent never
@@ -374,7 +389,10 @@ extract, script (`js.eval`), dev (`console.list`, `network.*`), files
   the accessible name; (c) arbitrary JS: `js.eval`, `nav.wait` with `fn`;
   (d) credential reads: `cookies.get`, `storage.get`, `network.get`;
   (e) local file transfer: `act.upload`, `downloads.read`; (f) `tabs attach`.
-  Pre-approval is per origin per category a–e; f always asks. Choosing `full`
+  Pre-approval is per origin per category a–e; f always asks when an agent
+  calls `tabs attach`. The one exception is the user's own Send to agent with
+  the tab (D9, AD11): that click is the consent, so f is not asked again, and it
+  grants nothing beyond the attach. Choosing `full`
   in the side panel also sets sign-in and all a–e pre-approvals for the origin
   (sign-in skipped, with a reason shown, on auth-deny, vault or denylisted
   hosts); other levels change only the policy (#118). Password and card

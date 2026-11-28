@@ -2,7 +2,7 @@
 // activity feed (audit records only) and settings. A view over worker state.
 import type { Agent, AgentSources } from "@tabagent/protocol";
 import { AUTH_DEFAULT_ON_ORIGINS, authEnabled, type StoredPolicy } from "../background/policy";
-import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
+import { AGENTS_REFRESH_MS, agentFeedLineHtml, agentFeedReducer, agentListHtml, agentRowView, buildAgentSend, composerState, sendTarget, shareableTab, shareTabLabel, sourcesNotes, type AgentFeedAction, type AgentFeedEntry, type SharedTab } from "../pure/agents";
 import { esc } from "../pure/html";
 import { sessionRowHtml, type SessionView } from "../pure/sessionsView";
 import { intentOutcome, parseIntent, RECENT_AGENTS_KEY, reconcileSelection, sanitizeRecent, selectionView, SEND_INTENT_KEY, updateRecent, type HeldSelection, type SendIntent } from "../pure/sendIntent";
@@ -179,10 +179,12 @@ function renderComposer() {
   const btn = $("agentSend") as HTMLButtonElement;
   btn.textContent = c.label;
   btn.disabled = !c.canSend || agentSending;
+  // #137/§7: the separate "Start a new session in <folder>" button (also "… instead" for linked agents).
   const spawn = $("agentSpawn") as HTMLButtonElement;
   spawn.hidden = !c.spawnLabel;
   spawn.textContent = c.spawnLabel ?? "";
   spawn.disabled = !c.canSpawn || agentSending;
+  $("agentShareLabel").textContent = shareTabLabel(v);
   $("agentComposerNote").textContent = c.note;
   const target = $("agentTarget");
   target.hidden = !v && !agentNotice;
@@ -331,6 +333,7 @@ function selectAgent(el: EventTarget | null) {
 async function sendToSelectedAgent(forceSpawn = false) {
   const v = selectedAgentView();
   if (!v || agentSending) return;
+  if (forceSpawn && !v.spawnLabel) return;
   const prompt = agentPrompt().value;
   // AD12: title and url are read at Send time, not from the label shown earlier.
   // AD14: re-check the active tab now too, so a tab switch the panel missed still drops the selection.

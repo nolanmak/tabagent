@@ -1,6 +1,6 @@
 // AD15: the audit record for one send. Origin only, a hash of the typed prompt, never any content. Pure.
 import { createHash } from "node:crypto";
-import { originOf, type AgentDeliveryState, type AgentRoute, type AgentSendCode, type AgentVendor } from "@tabagent/protocol";
+import { originOf, type AgentDeliveryState, type AgentGrantCode, type AgentRoute, type AgentSendCode, type AgentVendor } from "@tabagent/protocol";
 import { parseAgentId } from "./discovery";
 
 export interface AuditInput {
@@ -11,10 +11,19 @@ export interface AuditInput {
   url?: unknown;
 }
 
+/** AD15/AD11: the tab grant result, present only when a grant was asked for. */
+export interface GrantAudit {
+  sessionId: string;
+  tabId: number;
+  ok: boolean;
+  code?: AgentGrantCode;
+}
+
 export function agentSendAudit(
   req: AuditInput,
   agent: { vendor: AgentVendor } | null,
   out: { route: AgentRoute; state: AgentDeliveryState; code?: AgentSendCode },
+  grant?: GrantAudit | null,
 ): Record<string, unknown> {
   return {
     requestId: req.requestId,
@@ -25,5 +34,6 @@ export function agentSendAudit(
     ...(out.code ? { code: out.code } : {}),
     promptSha256: typeof req.prompt === "string" ? createHash("sha256").update(req.prompt).digest("hex") : null,
     tabOrigin: req.includeTab === true && typeof req.url === "string" ? originOf(req.url) : null,
+    ...(grant ? { grant } : {}),
   };
 }
