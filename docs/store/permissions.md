@@ -69,6 +69,13 @@ When the bridge is not running, the service worker can be evicted. A 30-second a
 retry the connection to the local bridge, so the user does not have to reload the extension after
 starting the bridge.
 
+### `contextMenus`
+
+Adds one right-click item, "Send to agent", on pages and text selections. Its submenu lists up to
+five agents the user recently messaged from the side panel, plus "Choose…". Clicking an entry sends
+nothing: it remembers which agent, tab and selected text the user picked (in session storage, for at
+most two minutes) and opens the side panel, where the user writes the message and presses Send.
+
 ### `notifications`
 
 When an agent needs approval (for example to act on a new site or to submit a form with a password
