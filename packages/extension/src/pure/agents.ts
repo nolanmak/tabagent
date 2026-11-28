@@ -1,8 +1,9 @@
 // Send to agent P1c (docs/specs/agent-inbox.md §7, AD6, AD7, AD13): the side panel's Agents section,
 // composer and send feed as plain data in, plain data or escaped HTML out. sidepanel.ts wires it to the DOM.
-import { agentSendOverLimit, isRemoteControlUrl, type Agent, type AgentDeliveryState, type AgentRoute, type AgentSendCode, type AgentSources, type AgentVendor } from "@tabagent/protocol";
+import { agentSendOverLimit, isRemoteControlUrl, type Agent, type AgentBrowser, type AgentDeliveryState, type AgentRoute, type AgentSendCode, type AgentSources, type AgentVendor } from "@tabagent/protocol";
 import { esc } from "./html";
 import { icon } from "./icons";
+import { browserBadgeHtml } from "./liveView";
 
 /** §5: the panel asks when it opens and every 5 s while visible. */
 export const AGENTS_REFRESH_MS = 5_000;
@@ -101,6 +102,8 @@ export interface AgentRowView {
   /** #151: Claude's Remote Control page for this session, when it has one. */
   remoteControlUrl: string | null;
   busy: boolean;
+  /** #164: the agent's tabs and whether it is working in the browser (linked agents, added by the worker). */
+  browser?: AgentBrowser;
 }
 
 export function agentRowView(a: Agent, now: number): AgentRowView {
@@ -140,6 +143,7 @@ export function agentRowView(a: Agent, now: number): AgentRowView {
     connection: connectionState(a),
     remoteControlUrl: remoteUrl(a),
     busy: a.status === "busy",
+    ...(a.browser ? { browser: a.browser } : {}),
   };
 }
 
@@ -170,7 +174,13 @@ export function agentRowHtml(v: AgentRowView, selected: boolean): string {
   // #156: one status dot (connection tone; pulsing amber while the agent works), title, one quiet meta line.
   const dot = `<span class="status-dot tone-${v.connection.tone}${v.busy ? " busy-dot" : ""}" title="${esc(v.busy ? "Working" : v.connection.label)}" aria-hidden="true"></span>`;
   const label = `${v.title} — open chat`;
-  return `<li class="agent${v.sendable ? "" : " agent-none"}${selected ? " selected" : ""}" role="option" tabindex="0" aria-selected="${selected}" aria-label="${esc(label)}" data-agent-id="${esc(v.id)}" title="${esc(v.cwd)}">${dot}<span class="agent-main"><span class="agent-line"><b class="agent-title">${esc(v.title)}</b></span><span class="agent-sub">${vendorShown(v) ? `<span class="vendor-name">${esc(v.vendorLabel)}</span><span class="sep">·</span>` : ""}<span class="agent-conn">${conn}</span><span class="sep">·</span><span class="agent-meta">${meta}</span>${badges}</span></span><span class="agent-actions">${rc}${hint}${quick}<span class="chev" aria-hidden="true">${icon("chevron")}</span></span></li>`;
+  return `<li class="agent${v.sendable ? "" : " agent-none"}${selected ? " selected" : ""}" role="option" tabindex="0" aria-selected="${selected}" aria-label="${esc(label)}" data-agent-id="${esc(v.id)}" title="${esc(v.cwd)}">${dot}<span class="agent-main"><span class="agent-line"><b class="agent-title">${esc(v.title)}</b></span><span class="agent-sub">${vendorShown(v) ? `<span class="vendor-name">${esc(v.vendorLabel)}</span><span class="sep">·</span>` : ""}<span class="agent-conn">${conn}</span><span class="sep">·</span><span class="agent-meta">${meta}</span>${badges}</span>${browserLine(v)}</span><span class="agent-actions">${rc}${hint}${quick}<span class="chev" aria-hidden="true">${icon("chevron")}</span></span></li>`;
+}
+
+/** #164: the "Working in browser" / tab count badge on its own line under the row's meta. */
+function browserLine(v: Pick<AgentRowView, "browser">): string {
+  const b = browserBadgeHtml(v.browser);
+  return b ? `<span class="agent-browser">${b}</span>` : "";
 }
 
 /** #156: the vendor name before the connection words, unless they already start with it ("Codex · queued"). */

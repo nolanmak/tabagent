@@ -112,6 +112,8 @@ export interface AgentLink {
   canDriveTab: boolean;
   /** AD9: the proxy reported `x-tabagent-channels: 1`. */
   channels: boolean;
+  /** #164: the stream's TabAgent session (SessionMeta.id); the extension joins the session's tabs on it. */
+  sessionId?: string;
 }
 export type LinkOf = (a: AgentBase) => AgentLink | null;
 
@@ -121,7 +123,14 @@ export function toAgent(a: AgentBase, link: AgentLink | null = null): Agent {
   const linked = !!link;
   // #137: the title falls back to the vendor name.
   const title = rest.title ?? rest.name ?? undefined;
-  return { ...rest, ...(title ? { title } : {}), linked, canDriveTab: linked && link.canDriveTab, delivery: chooseRoute({ vendor: a.vendor, status: a.status, linked, channels: link?.channels }) };
+  return {
+    ...rest,
+    ...(title ? { title } : {}),
+    linked,
+    canDriveTab: linked && link.canDriveTab,
+    delivery: chooseRoute({ vendor: a.vendor, status: a.status, linked, channels: link?.channels }),
+    ...(link?.sessionId ? { tabagentSessionId: link.sessionId } : {}),
+  };
 }
 
 /** Merge per-source lists: unique ids, newest first (stable for ties). `linkOf` marks linked agents. */

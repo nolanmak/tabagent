@@ -46,10 +46,21 @@ Clicking a session opens `chat.html` in a new tab (or switches to it if it is al
   **Open in Claude** is the main button. The card also explains how to connect the session to TabAgent,
   and offers **Start a new session in \<folder\>**.
 - **Codex.** History isn't available for Codex threads yet; sending still queues the message.
+- **Live view.** When a connected session has tabs, a **Live view** strip sits above the message box and
+  shows the tab it is using, live. With several tabs, pick one; click the picture (or **Larger**) for a
+  bigger view; collapse the strip to stop it. It is view-only: nothing you do on it reaches the page.
+  Side panel rows and the rail show **Working in browser** (with the tab's title) while the session runs
+  a browser command or ran one in the last 10 seconds, and the number of its tabs otherwise.
 
 The conversation is read from Claude Code's own transcript (`~/.claude/projects/…/<session>.jsonl`) by
 your local TabAgent bridge, only for sessions it lists, and only shown in TabAgent's own extension pages.
 It is never sent over the bridge's HTTP API, logged or written to the audit log.
+
+The live view is a Chrome DevTools screencast of the session's own tab, made by the extension and shown
+only in its chat page. Frames never go to the bridge, to disk, to logs or to the audit log. Only tabs the
+session owns are shown, never your other tabs, and never password-manager, Google account, mail or
+browser pages (it stops as soon as the tab goes to one). Sites in Lite mode are not shown, since Lite
+mode does not use the debugger.
 
 ## Remote Control
 

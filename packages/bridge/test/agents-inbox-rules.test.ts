@@ -230,6 +230,16 @@ describe("linking in discovery (AD4)", () => {
     expect(toAgent(base, { canDriveTab: false, channels: false })).toMatchObject({ linked: true, canDriveTab: false, delivery: "piggyback" });
     expect(toAgent(base, null)).toMatchObject({ linked: false, canDriveTab: false, delivery: "none" });
   });
+  it("#164: a linked agent carries its TabAgent session id (the extension joins its tabs on it); unlinked never", () => {
+    const [base] = parseClaudeAgents(JSON.stringify([claudeRecord(10, 1000, { sessionId: "claude-transcript-id" })]));
+    const a = toAgent(base, { canDriveTab: true, channels: false, sessionId: "mcp:local:abc" });
+    expect(a.tabagentSessionId).toBe("mcp:local:abc");
+    expect(AgentSchema.safeParse(a).success).toBe(true);
+    // The Claude transcript session id never reaches the wire.
+    expect(JSON.stringify(a)).not.toContain("claude-transcript-id");
+    expect(toAgent(base, null).tabagentSessionId).toBeUndefined();
+    expect(toAgent(base, { canDriveTab: true, channels: false }).tabagentSessionId).toBeUndefined();
+  });
   it("mergeAgents applies the link lookup per agent", () => {
     const bases = parseClaudeAgents(JSON.stringify([claudeRecord(10, 1000), claudeRecord(11, 2000)]));
     const all = mergeAgents([bases], (a) => (a.pid === 10 ? { canDriveTab: true, channels: false } : null));

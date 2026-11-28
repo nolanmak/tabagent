@@ -21,6 +21,11 @@ the same version (see [docs/release.md](docs/release.md)).
   session when the list refreshes; Quick send for a connected session only offers Send; and
   **Working…** clears as soon as the agent's final reply arrives
   ([#159](https://github.com/nolanmak/tabagent/issues/159)).
+- Live view: while a connected session drives a tab, its chat page shows the tab live (a read-only
+  screencast above the message box, with a tab picker and a larger view). Side panel rows and the chat
+  rail show a pulsing **Working in browser** badge with the tab's title, or the tab count when idle.
+  Frames stay inside the extension; password-manager, mail and browser pages are never shown
+  ([#164](https://github.com/nolanmak/tabagent/issues/164)).
 
 ## 0.2.0 (2026-11-27)
 

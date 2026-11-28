@@ -29,6 +29,7 @@ import {
   type ComposerMode,
 } from "../pure/chat";
 import { keepFocus } from "../pure/focusKeep";
+import { initialLive, liveReducer, liveStripHtml, liveWant, type LiveAction } from "../pure/liveView";
 import { esc } from "../pure/html";
 import { closedPicker, pickerButtonHtml, pickerListHtml, pickerReducer, sessionPickerView, type PickerAction, type PickerView } from "../pure/sessionPicker";
 
@@ -104,6 +105,76 @@ function renderLog() {
       r.el.remove();
       rendered.delete(k);
     }
+}
+
+// ---------------------------------------------------------------------------
+// #164: Live view. The worker screencasts the agent's tab into the "agent-live" port; read-only.
+// ---------------------------------------------------------------------------
+
+let live = initialLive;
+let lastLiveHtml = "";
+/** The newest frame (base64 JPEG) for the tab being shown. Kept in memory only, never stored. */
+let lastFrame: { tabId: number; data: string } | null = null;
+/** What the port was last asked to watch ("" = nothing). */
+let liveWatching = "";
+let livePort: chrome.runtime.Port | null = null;
+
+function liveDo(a: LiveAction) {
+  live = liveReducer(live, a);
+  if (lastFrame && lastFrame.tabId !== live.tabId) lastFrame = null;
+  syncLiveWatch();
+  renderLive();
+}
+
+function syncLiveWatch() {
+  const want = liveWant(live);
+  const sessionId = agent?.tabagentSessionId;
+  const key = want && sessionId ? `${sessionId}|${want.tabId}` : "";
+  if (key === liveWatching) return;
+  if (key && !livePort) connectLivePort();
+  liveWatching = key;
+  try {
+    livePort?.postMessage(key ? { type: "watch", sessionId, tabId: want!.tabId } : { type: "stop" });
+  } catch {
+    liveWatching = "";
+  }
+}
+
+function connectLivePort() {
+  livePort = chrome.runtime.connect({ name: "agent-live" });
+  livePort.onMessage.addListener((m: any) => {
+    if (m?.type === "live.frame" && typeof m.data === "string" && m.tabId === live.tabId) {
+      lastFrame = { tabId: m.tabId, data: m.data };
+      const wasLive = live.state === "live";
+      live = liveReducer(live, { type: "frame", tabId: m.tabId });
+      if (!wasLive) renderLive();
+      else showFrame();
+    } else if (m?.type === "live.state" && typeof m.tabId === "number") liveDo({ type: "state", tabId: m.tabId, state: m.state, reason: m.reason });
+  });
+  livePort.onDisconnect.addListener(() => {
+    // The service worker restarted: ask again.
+    livePort = null;
+    liveWatching = "";
+    setTimeout(() => syncLiveWatch(), 1000);
+  });
+}
+
+function showFrame() {
+  const img = document.getElementById("liveImg") as HTMLImageElement | null;
+  if (!img || !lastFrame || lastFrame.tabId !== live.tabId) return;
+  img.src = `data:image/jpeg;base64,${lastFrame.data}`;
+  img.hidden = false;
+}
+
+function renderLive() {
+  const wrap = $("live");
+  const html = liveStripHtml(live, agent?.browser);
+  wrap.hidden = !html;
+  if (html !== lastLiveHtml) {
+    wrap.innerHTML = html;
+    lastLiveHtml = html;
+  }
+  showFrame();
 }
 
 function renderPending() {
@@ -260,6 +331,7 @@ function render(o: { stick?: boolean; newContent?: boolean } = {}) {
   renderLog();
   renderPending();
   renderNotice();
+  renderLive();
   if (o.stick || wasBottom) {
     sc.scrollTop = sc.scrollHeight;
     $("newPill").hidden = true;
@@ -316,6 +388,8 @@ async function refreshAgent() {
       allAgents = (r?.agents as Agent[] | undefined) ?? [];
       agentsListed = true;
       agent = allAgents.find((a) => a.id === agentId) ?? null;
+      live = liveReducer(live, { type: "agent", browser: agent?.browser });
+      syncLiveWatch();
       if (pendingSpawn) {
         const hit = findSpawnedAgent(pendingSpawn.beforeIds, allAgents, pendingSpawn);
         if (hit) {
@@ -505,6 +579,15 @@ $("pending").addEventListener("click", (e) => {
   }
 });
 $("loadOlder").addEventListener("click", () => void loadOlder());
+$("live").addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest("[data-live-toggle]")) liveDo({ type: "toggle" });
+  else if (t.closest("[data-live-expand]")) liveDo({ type: "expand" });
+});
+$("live").addEventListener("change", (e) => {
+  const sel = (e.target as HTMLElement).closest<HTMLSelectElement>("[data-live-pick]");
+  if (sel) liveDo({ type: "pick", tabId: Number(sel.value) });
+});
 $("log").addEventListener(
   "toggle",
   (e) => {

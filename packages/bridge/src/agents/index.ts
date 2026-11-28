@@ -118,7 +118,7 @@ export class AgentsBridge {
 
   private linkOf(a: AgentBase): AgentLink | null {
     const s = this.streamFor(a);
-    return s ? { canDriveTab: profileCanDriveTab(s.profile), channels: s.channels } : null;
+    return s ? { canDriveTab: profileCanDriveTab(s.profile), channels: s.channels, sessionId: s.sessionId } : null;
   }
 
   /** AD8: everything held for this session, to attach to a successful tool result. */

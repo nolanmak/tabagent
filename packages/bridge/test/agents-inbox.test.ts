@@ -158,10 +158,13 @@ describe("GET /v1/inbox (AD4, AD5)", () => {
   it("stream close -> the agent is unlinked at once", async () => {
     await boot();
     const s = await openInbox(d.cfg.secret);
-    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: true, canDriveTab: true, delivery: "piggyback" });
+    // #164: the session id is the SessionMeta.id the proxy's commands carry, so the extension can join its tabs.
+    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: true, canDriveTab: true, delivery: "piggyback", tabagentSessionId: "mcp:local:100-aaaaaa" });
     s.close();
     await until(() => d.agents.inbox.size === 0);
-    expect((await list()).find((x) => x.id === AGENT)).toMatchObject({ linked: false, canDriveTab: false, delivery: "none" });
+    const gone = (await list()).find((x) => x.id === AGENT);
+    expect(gone).toMatchObject({ linked: false, canDriveTab: false, delivery: "none" });
+    expect(gone.tabagentSessionId).toBeUndefined();
   });
   it("no agent pid header -> registered but links nothing (e.g. Cursor); unlinked streams are not listed", async () => {
     await boot();
