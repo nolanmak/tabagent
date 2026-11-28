@@ -15,6 +15,8 @@ export interface AuditRecord {
   resultSummary: { bytes: number; sha256: string };
   /** #131: a sign-in step was allowed without a prompt because the site signs in without asking. */
   authAuto?: true;
+  /** #158: how long the command took here, validate to envelope. */
+  durationMs?: number;
 }
 
 /** Param keys whose values are always masked. */
@@ -89,7 +91,7 @@ export async function summarizeResult(result: unknown): Promise<{ bytes: number;
   return { bytes: enc.encode(s).length, sha256: await sha256Hex(s) };
 }
 
-export async function buildAudit(a: { tool: string; action?: string; origin: string | null; params: unknown; outcome: Outcome; errorCode?: string; result?: unknown; redact?: RedactOpts; authAuto?: true }): Promise<AuditRecord> {
+export async function buildAudit(a: { tool: string; action?: string; origin: string | null; params: unknown; outcome: Outcome; errorCode?: string; result?: unknown; redact?: RedactOpts; authAuto?: true; durationMs?: number }): Promise<AuditRecord> {
   return {
     tool: a.tool,
     ...(a.action ? { action: a.action } : {}),
@@ -99,6 +101,7 @@ export async function buildAudit(a: { tool: string; action?: string; origin: str
     ...(a.errorCode ? { errorCode: a.errorCode } : {}),
     resultSummary: await summarizeResult(a.result),
     ...(a.authAuto ? { authAuto: true as const } : {}),
+    ...(typeof a.durationMs === "number" && a.durationMs >= 0 ? { durationMs: Math.round(a.durationMs) } : {}),
   };
 }
 

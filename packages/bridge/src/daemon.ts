@@ -33,6 +33,11 @@ import {
   type ErrorCode,
   type OutputResponse,
   type SessionMeta,
+  TASK_LIMITS,
+  TASKS_FEATURE,
+  TasksLabelSchema,
+  TasksListSchema,
+  type TaskOutcome,
 } from "@tabagent/protocol";
 import { AgentsBridge, type AgentsOpts, type Held } from "./agents";
 import { ApprovalsBridge, approveStatus } from "./approvals";
@@ -41,11 +46,12 @@ import { parseInboxHeaders, type InboxConn } from "./agents/inbox";
 import { AuditWriter } from "./audit";
 import { createAuth, type Auth } from "./auth";
 import { createCaptcha, type CaptchaBridge, type CaptchaOpts } from "./captcha";
-import { auditPath, configPath, saveConfig, type Config } from "./config";
+import { auditPath, configPath, saveConfig, taskIdleMs, type Config } from "./config";
 import { readDownload, resolveUploads, SessionDownloads } from "./files";
 import { HandoffBridge, type HandoffBridgeOpts } from "./handoff";
 import { buildMcpServer } from "./mcp";
 import { Pairing } from "./pairing";
+import { TaskTracker, taskLogFromFiles, type AuditLine } from "./tasks";
 import { authenticate, bearerOf, principalMeta, type Principal } from "./tokens";
 import { BRIDGE_VERSION } from "./version";
 
@@ -62,6 +68,8 @@ interface Pending {
   meta: SessionMeta;
   tool: string;
   params: Record<string, unknown>;
+  /** #158: when the bridge sent the command, for durationMs when an old extension sends none. */
+  startedAt: number;
 }
 
 interface ExtConn {
@@ -103,10 +111,12 @@ export interface DaemonOpts {
    * defaultPresenceProvider() (platform-chosen). No CLI flag, env var or config key reaches this.
    */
   presence?: PresenceProvider;
+  /** #158: idle gap that ends an implicit task (default: config taskIdleMin, else 5 min). */
+  taskIdleMs?: number;
 }
 
 /** Optional capabilities the bridge advertises in welcome (AD16). */
-export const BRIDGE_FEATURES = [AGENTS_FEATURE, APPROVALS_FEATURE];
+export const BRIDGE_FEATURES = [AGENTS_FEATURE, APPROVALS_FEATURE, TASKS_FEATURE];
 
 /**
  * Commands that only read, so re-running one is harmless. When a newer socket from the same extension
@@ -167,6 +177,8 @@ export class Daemon {
   readonly agents: AgentsBridge;
   readonly approvals: ApprovalsBridge;
   readonly downloads = new SessionDownloads();
+  /** #158: task summaries rebuilt from the audit log, and the tracker that opens/ends tasks. */
+  readonly tasks: TaskTracker;
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
   private pending = new Map<string, Pending>();
@@ -185,7 +197,8 @@ export class Daemon {
     this.log = opts.log ?? ((m) => process.stderr.write(m + "\n"));
     this.now = opts.now ?? Date.now;
     this.pairing = new Pairing(this.now);
-    this.audit = opts.audit ?? new AuditWriter(auditPath());
+    this.audit = opts.audit ?? new AuditWriter(auditPath(), { now: () => new Date(this.now()) });
+    this.tasks = this.initTasks();
     this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
     this.captcha = createCaptcha({ log: this.log, now: this.now, ...opts.captcha, inFlight: (id) => this.pending.get(id), audit: this.audit });
     this.port = cfg.port;
@@ -218,6 +231,59 @@ export class Daemon {
       now: this.now,
     });
     this.handoff.attachApprovals(this.approvals);
+  }
+
+  private initTasks(): TaskTracker {
+    // Rebuild recent tasks from the live log only: cheap at startup, and the panel shows recent work.
+    const log = taskLogFromFiles([this.audit.path], TASK_LIMITS.tasks);
+    const tracker = new TaskTracker({
+      log,
+      event: (name, data, who) => this.audit.event(name, data, who),
+      now: this.now,
+      idleMs: () => this.opts.taskIdleMs ?? taskIdleMs(this.cfg),
+    });
+    this.audit.onWrite = (line) => {
+      if (log.apply(line as AuditLine)) this.tasksChanged();
+    };
+    this.audit.stamp = (who, rec) => {
+      const taskId = tracker.stamp(who, rec);
+      return taskId ? { taskId } : undefined;
+    };
+    tracker.recover();
+    return tracker;
+  }
+
+  /** #158: tell the panel to re-list tasks (only an extension that asked for tasks gets it). */
+  private tasksChanged() {
+    if (this.extensionConnected && this.ext!.features.has(TASKS_FEATURE)) this.sendTo(this.ext!.ws, { type: "tasks.changed" });
+  }
+
+  /** #158: tasks.list / tasks.label from the paired extension. */
+  private onTasksMessage(ws: WebSocket, msg: unknown): boolean {
+    const list = TasksListSchema.safeParse(msg);
+    if (list.success) {
+      this.sendTo(ws, { type: "tasks.listed", id: list.data.id, tasks: this.tasks.log.list(list.data.limit ?? TASK_LIMITS.tasks) });
+      return true;
+    }
+    const label = TasksLabelSchema.safeParse(msg);
+    if (label.success) {
+      const r = this.tasks.label(label.data.taskId, label.data.outcome);
+      this.sendTo(ws, { type: "tasks.labeled", id: label.data.id, ok: r === "ok", ...(r === "ok" ? {} : { code: r }) });
+      return true;
+    }
+    return false;
+  }
+
+  /** #158: tools the bridge answers itself (task.start / task.end). */
+  private bridgeTool(meta: SessionMeta, tool: string, params: Record<string, unknown>): OutputResponse {
+    const who = { caller: meta.label, session: meta.id };
+    switch (tool) {
+      case "task.start":
+        return { ok: true, result: this.tasks.start(who, String(params.goal ?? "")) };
+      case "task.end":
+        return { ok: true, result: this.tasks.end(who, { outcome: params.outcome as TaskOutcome, note: params.note as string | undefined }) };
+    }
+    throw new TabAgentError("UNSUPPORTED", `${tool} is not handled by the bridge`);
   }
 
   get extensionConnected() {
@@ -270,6 +336,7 @@ export class Daemon {
     this.timers.push(setInterval(() => this.gcRestSessions(), 60_000));
     this.timers.push(setInterval(() => this.handoff.sweep(), 15_000));
     this.timers.push(setInterval(() => this.checkSilent(), this.opts.heartbeatCheckMs ?? 5_000));
+    this.timers.push(setInterval(() => this.tasks.sweep(), 15_000));
     for (const t of this.timers) t.unref();
     await this.auth.start();
   }
@@ -458,6 +525,7 @@ export class Daemon {
     if (this.approvals.onExtMessage(msg, this.ext?.ws === ws, (m) => this.sendTo(ws, m as BridgeToExt))) return;
     // AD2/AD14: agents.* only on the current paired extension socket.
     if (this.ext?.ws === ws && this.agents.onExtMessage(msg, (m) => this.sendTo(ws, m))) return;
+    if (this.ext?.ws === ws && this.onTasksMessage(ws, msg)) return;
     switch (msg?.type) {
       case "ping":
         this.sendTo(ws, { type: "pong" });
@@ -466,6 +534,8 @@ export class Daemon {
         return this.onResult(msg);
       case "event":
         this.audit.event(String(msg.event), msg.data && typeof msg.data === "object" ? msg.data : undefined, { caller: "extension" });
+        // The user ended a session from the side panel: its open task ends with it.
+        if (msg.event === "session.ended" && typeof msg.data?.sessionId === "string") this.tasks.sessionEnded(msg.data.sessionId);
         this.log(`extension event: ${msg.event}`);
         return;
       case "files.resolve":
@@ -498,11 +568,11 @@ export class Daemon {
     this.handoff.commandEnded(raw.id);
     const who = { caller: p.meta.label, session: p.meta.id };
     const env = ResultEnvelopeSchema.safeParse(raw);
-    if (env.success) this.audit.record(env.data.audit, who);
+    if (env.success) this.audit.record({ ...env.data.audit, durationMs: env.data.audit.durationMs ?? Math.max(0, this.now() - p.startedAt) }, who);
     else {
       // Legacy extension (no audit record): log a minimal record without params (D20).
       const code = raw?.error?.code;
-      this.audit.minimal(p.tool, raw?.ok ? "ok" : code === "PERMISSION_DENIED" ? "denied" : "error", who, raw?.ok ? undefined : TabAgentError.from(raw?.error ?? {}).code, "extension sent no audit record");
+      this.audit.minimal(p.tool, raw?.ok ? "ok" : code === "PERMISSION_DENIED" ? "denied" : "error", who, raw?.ok ? undefined : TabAgentError.from(raw?.error ?? {}).code, "extension sent no audit record", this.now() - p.startedAt);
     }
     const out: OutputResponse = { ok: !!raw.ok };
     if (raw.ok) out.result = raw.result;
@@ -543,9 +613,11 @@ export class Daemon {
   async dispatchRaw(meta: SessionMeta, toolName: string, rawParams: unknown): Promise<OutputResponse> {
     const who = { caller: meta.label, session: meta.id };
     const tool = getTool(toolName);
+    const started = this.now();
     try {
       if (!tool) throw new TabAgentError("BAD_REQUEST", `Unknown tool "${toolName}"`, "GET /v1/tools lists tools.");
       const params = validateParams(tool, rawParams);
+      if (tool.handledBy === "bridge") return this.bridgeTool(meta, tool.name, params);
       // Never route to a socket already past the silence limit: drop it now and wait for the reconnect.
       this.checkSilent();
       if (!this.extensionConnected && !(await this.waitForExtension(this.opts.extWaitMs ?? 3000))) {
@@ -554,11 +626,12 @@ export class Daemon {
       // Legacy extensions can't ask for path validation after approval; validate up front for them only.
       if (tool.name === "act.upload" && !this.ext!.features.has("files.resolve")) params.paths = resolveUploads(params.paths as string[], this.cfg.uploadDirs);
       const resp = await this.send(meta, tool.name, params);
+      if (resp.ok && tool.name === "session.end") this.tasks.sessionEnded(meta.id);
       if (resp.ok) return this.afterResult(meta, tool.name, resp);
       return resp;
     } catch (e) {
       const err = toTabAgentError(e);
-      this.audit.minimal(tool?.name ?? String(toolName).slice(0, 64), err.code === "PERMISSION_DENIED" ? "denied" : "error", who, err.code);
+      this.audit.minimal(tool?.name ?? String(toolName).slice(0, 64), err.code === "PERMISSION_DENIED" ? "denied" : "error", who, err.code, undefined, this.now() - started);
       return { ok: false, error: err.toJSON() };
     }
   }
@@ -608,13 +681,14 @@ export class Daemon {
         this.handoff.commandEnded(id);
         resolve({ ok: false, error: { code: "TIMEOUT", message: `${tool} did not finish in ${Math.round(ms / 1000)}s` } });
       }, ms);
-      this.pending.set(id, { resolve, timer, ws, meta, tool, params });
+      this.pending.set(id, { resolve, timer, ws, meta, tool, params, startedAt: this.now() });
       this.sendTo(ws, { type: "command", id, session: meta, tool, params });
     });
   }
 
   endSession(sessionId: string) {
     this.downloads.drop(sessionId);
+    this.tasks.sessionEnded(sessionId);
     if (this.extensionConnected) this.sendTo(this.ext!.ws, { type: "session.closed", sessionId });
   }
 
@@ -643,7 +717,7 @@ export class Daemon {
     return this.cfg.extensionIds.some((id) => origin === `chrome-extension://${id}`);
   }
 
-  /** Live reload of tokens (and newly paired IDs) when the CLI edits config.json. */
+  /** Live reload of tokens, upload dirs and the task idle gap (#158) when the CLI edits config.json. */
   private refreshConfig() {
     try {
       const m = statSync(configPath()).mtimeMs;
@@ -652,6 +726,7 @@ export class Daemon {
       const raw = JSON.parse(readFileSync(configPath(), "utf8"));
       this.cfg.tokens = raw.tokens ?? [];
       if (Array.isArray(raw.uploadDirs)) this.cfg.uploadDirs = raw.uploadDirs;
+      this.cfg.taskIdleMin = raw.taskIdleMin;
     } catch {
       /* keep current */
     }

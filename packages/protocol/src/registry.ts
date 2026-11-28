@@ -6,6 +6,7 @@ import { TIMEOUTS } from "./messages";
 import { AUTH_TOOLS, OPT_IN_GROUPS } from "./auth";
 import { CAPTCHA_TOOLS } from "./captcha";
 import { PREFERENCE_CHANGES, SETTINGS_SNAPSHOT } from "./settings";
+import { TASK_END_OUTCOMES, TASK_LIMITS } from "./tasks";
 
 export type Level = "read" | "act" | "full";
 /** "none" = not site-scoped (no origin is involved). */
@@ -25,7 +26,7 @@ export const SENSITIVE_CATEGORIES: Record<SensitiveCategory, string> = {
   r: "Accepting a proposed workflow repair",
 };
 
-export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth" | "policy" | "settings" | "workflow";
+export type Group = "tabs" | "nav" | "page" | "act" | "form" | "extract" | "dialog" | "dev" | "files" | "session" | "auth" | "policy" | "settings" | "workflow" | "task";
 export type Profile = "core" | "forms" | "data" | "dev" | "full" | "auth";
 export const PROFILES: Profile[] = ["core", "forms", "data", "dev", "full", "auth"];
 
@@ -904,6 +905,31 @@ export const TOOLS = [
     profiles: [],
     lite: "supported",
     handledBy: "extension",
+  }),
+  // ---------------- task (#158) ----------------
+  def({
+    name: "task.start",
+    group: "task",
+    description: "Start a timed task for the user's request; later calls are logged under it.",
+    params: z.object({ goal: z.string().min(1).max(TASK_LIMITS.goal) }),
+    result: loose({ taskId: z.string() }),
+    level: "none",
+    pageContent: [],
+    profiles: ["core"],
+    lite: "supported",
+    handledBy: "bridge",
+  }),
+  def({
+    name: "task.end",
+    group: "task",
+    description: "End the open task.",
+    params: z.object({ outcome: z.enum(TASK_END_OUTCOMES), note: z.string().max(TASK_LIMITS.note).optional() }),
+    result: loose({ taskId: z.string(), durationMs: z.number(), callCount: z.number() }),
+    level: "none",
+    pageContent: [],
+    profiles: ["core"],
+    lite: "supported",
+    handledBy: "bridge",
   }),
   // ---------------- settings ----------------
   def({

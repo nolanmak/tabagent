@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_PORT, type Cap } from "@tabagent/protocol";
+import { DEFAULT_PORT, TASK_LIMITS, type Cap } from "@tabagent/protocol";
 
 export interface TokenRec {
   name: string;
@@ -24,6 +24,14 @@ export interface Config {
   uploadDirs: string[];
   /** Max bytes downloads.read may return (D31: 5 MB). */
   maxReadBytes: number;
+  /** #158: minutes of idle time that end an implicit task (default 5). */
+  taskIdleMin?: number;
+}
+
+/** #158: the implicit-task idle gap in ms; a missing or bad value falls back to 5 min. */
+export function taskIdleMs(cfg: Pick<Config, "taskIdleMin">): number {
+  const m = Number(cfg.taskIdleMin);
+  return Number.isFinite(m) && m >= 1 && m <= 24 * 60 ? m * 60_000 : TASK_LIMITS.idleMs;
 }
 
 export const MAX_READ_BYTES = 5 * 1024 * 1024;

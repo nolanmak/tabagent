@@ -1,7 +1,7 @@
 // TabAgent service worker: wires the bridge client, the command router, the
 // permission gate, the kill switch, the badge and the UI API together.
 // Decisions live in pure modules (policy, prompts, router, audit, badge, bridgeClient).
-import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, APPROVALS_FEATURE, ApprovalsLinkResultSchema, getTool, PROTOCOL_VERSION, TabAgentError, validateParams, type SessionMeta } from "@tabagent/protocol";
+import { AgentGrantSchema, AgentReleaseSchema, AGENTS_FEATURE, APPROVALS_FEATURE, ApprovalsLinkResultSchema, getTool, PROTOCOL_VERSION, TabAgentError, TASKS_FEATURE, validateParams, type SessionMeta } from "@tabagent/protocol";
 import { grantTab, releaseGrantedTab } from "./agentGrant";
 import { authTaint, credentialGuard } from "./authTaint";
 import { authTaintReady } from "./authTaintStore";
@@ -9,6 +9,7 @@ import { badgeState, BADGE } from "./badge";
 import { createBridgeClient, type Status, type WsLike } from "./bridgeClient";
 import { agentHistory, agentSendRequest, agentsSupported, listAgents, onAgentsBridgeMessage, rewatchAgents, sendToAgent, setAgentsSender, setAgentStatusListener, watchAgent, watchedAgents as watchedAgentsList } from "./bridgeAgents";
 import { onFilesResolved, rejectAllFiles, setFilesSender } from "./bridgeFiles";
+import { labelTask, listTasks, onTasksBridgeMessage, setTasksChangedListener, setTasksSender, tasksSupported } from "./bridgeTasks";
 import { menuItemsBuilt, onMenuClick, rebuildMenus, wireContextMenu, type CurrentAgents } from "./contextMenu";
 import { agentRowView, chatPageUrl } from "../pure/agents";
 import { findChatTab } from "../pure/chatTabs";
@@ -33,7 +34,7 @@ import { handlers } from "./tools";
 import { captureAgentStep, discardAllCaptures, discardCapture, listActiveCaptures, listWorkflows, onWorkflowEdit, parameterizeWorkflowStep, recordAgent, recordManual, recordManualNavigation, removeWorkflowStep, reviewWorkflow, runDueSchedules, startCapture, stopCapture } from "./workflows";
 
 const VERSION = chrome.runtime.getManifest().version;
-const FEATURES = ["files.resolve", AGENTS_FEATURE, APPROVALS_FEATURE];
+const FEATURES = ["files.resolve", AGENTS_FEATURE, APPROVALS_FEATURE, TASKS_FEATURE];
 
 // ---------------------------------------------------------------------------
 // Bridge connection (D4, D5, D11)
@@ -69,6 +70,9 @@ const bridge = createBridgeClient({
 });
 setFilesSender((m) => bridge.send(m));
 setAgentsSender((m) => bridge.send(m));
+setTasksSender((m) => bridge.send(m));
+// #158: the panel re-lists tasks when the bridge says one changed.
+setTasksChangedListener(() => broadcast({ type: "tasks.changed" }));
 // AD7: later delivery states go to the side panel feed, keyed by requestId.
 setAgentStatusListener((m) => broadcast(m));
 setAuthSender((m) => bridge.send(m));
@@ -91,6 +95,7 @@ onWorkflowEdit((e) => sendEvent("workflow.edit", e));
 
 function onBridgeMessage(msg: any) {
   if (onAgentsBridgeMessage(msg)) return;
+  if (onTasksBridgeMessage(msg)) return;
   switch (msg?.type) {
     case "command":
       router.handle(msg).then((env) => bridge.send(env));
@@ -456,7 +461,7 @@ function stoppedTabs() {
 async function uiState() {
   const s = await getSettings();
   const workflowTabs = (await chrome.tabs.query({})).filter((tab) => tab.id != null && /^https?:/i.test(tab.pendingUrl || tab.url || "")).map((tab) => ({ id: tab.id!, title: tab.title || tab.url || `Tab ${tab.id}`, url: tab.pendingUrl || tab.url || "" }));
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: await sessionsView(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id, authRestartLockedUntil: authTaint.restartLockedUntil() };
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: await sessionsView(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), tasksSupported: tasksSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id, authRestartLockedUntil: authTaint.restartLockedUntil() };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -502,6 +507,16 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         // AD1/AD16: the panel lists agents through the worker; the bridge answers only on this socket.
         if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return { supported: false, agents: [], sources: { claude: "unavailable", codex: "unavailable" } };
         return { supported: true, ...(await listAgents()) };
+      }
+      case "ui.tasks_list": {
+        // #158: the panel's Tasks section; the bridge builds summaries from the audit log.
+        if (!tasksSupported(FEATURES, bridge.bridgeFeatures())) return { supported: false, tasks: [] };
+        return { supported: true, tasks: await listTasks(typeof msg.limit === "number" ? msg.limit : undefined) };
+      }
+      case "ui.tasks_label": {
+        if (!tasksSupported(FEATURES, bridge.bridgeFeatures())) return { ok: false, code: "UNSUPPORTED" };
+        if (msg.outcome !== "success" && msg.outcome !== "failed") return { ok: false, code: "BAD_REQUEST" };
+        return labelTask(String(msg.taskId ?? ""), msg.outcome);
       }
       case "ui.agent_send": {
         // AD14: only extension pages reach here (gate above). AD17: paused -> PAUSED, nothing is sent.

@@ -69,6 +69,8 @@ Page-derived result fields are wrapped as untrusted page data at the bridge outp
 | [`session.permissions`](#sessionpermissions) | `session_permissions` | none | — | full only | supported | extension |
 | [`session.end`](#sessionend) | `session_end` | none | — | full only | supported | extension |
 | [`session.kill_all`](#sessionkill_all) | `session_kill_all` | none | — | full only | supported | extension |
+| [`task.start`](#taskstart) | `task_start` | none | — | core | supported | bridge |
+| [`task.end`](#taskend) | `task_end` | none | — | core | supported | bridge |
 | [`settings.get`](#settingsget) | `settings_get` | none | — | full only | supported | extension |
 | [`settings.change`](#settingschange) | `settings_change` | act | — | full only | supported | extension |
 | [`auth.status`](#authstatus) | `auth_status` | read | — | auth | supported | both |
@@ -783,6 +785,29 @@ Stop every agent now (the kill switch). Needs no session or approval. Only the u
 MCP name `session_kill_all` · level none · profiles full only · lite supported · handled by extension
 
 No parameters.
+
+## task
+
+### task.start
+
+Start a timed task for the user's request; later calls are logged under it.
+
+MCP name `task_start` · level none · profiles core · lite supported · handled by bridge
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `goal` | string | yes |  |
+
+### task.end
+
+End the open task.
+
+MCP name `task_end` · level none · profiles core · lite supported · handled by bridge
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `outcome` | "success" \| "failed" \| "abandoned" | yes |  |
+| `note` | string |  |  |
 
 ## settings
 

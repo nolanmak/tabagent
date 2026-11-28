@@ -20,6 +20,10 @@ export class AuditWriter {
   readonly maxBytes: number;
   readonly keep: number;
   private now: () => Date;
+  /** #158: extra fields for a tool record about to be written (the task it belongs to). */
+  stamp?: (who: Caller, rec: { tool: string; durationMs?: number }) => Record<string, unknown> | undefined;
+  /** #158: every line written (or that would have been, when the disk refuses it), in order. */
+  onWrite?: (obj: Record<string, unknown>) => void;
   constructor(
     readonly path: string,
     o: AuditOpts = {},
@@ -38,11 +42,14 @@ export class AuditWriter {
       return;
     }
     const a: AuditRecord = r.data;
-    this.write({ ts: this.now().toISOString(), caller: who.caller, ...(who.session ? { session: who.session } : {}), ...a });
+    const extra = this.stamp?.(who, a);
+    this.write({ ts: this.now().toISOString(), caller: who.caller, ...(who.session ? { session: who.session } : {}), ...a, ...extra });
   }
 
   /** Bridge-built record for calls that never reached the extension (or a legacy extension). No params. */
-  minimal(tool: string, outcome: "ok" | "error" | "denied", who: Caller, errorCode?: ErrorCode, note?: string): void {
+  minimal(tool: string, outcome: "ok" | "error" | "denied", who: Caller, errorCode?: ErrorCode, note?: string, durationMs?: number): void {
+    const dur = typeof durationMs === "number" && durationMs >= 0 ? { durationMs: Math.round(durationMs) } : {};
+    const extra = this.stamp?.(who, { tool, ...dur });
     this.write({
       ts: this.now().toISOString(),
       caller: who.caller,
@@ -53,6 +60,8 @@ export class AuditWriter {
       ...(errorCode ? { errorCode } : {}),
       source: "bridge",
       ...(note ? { note } : {}),
+      ...dur,
+      ...extra,
     });
   }
 
@@ -69,6 +78,11 @@ export class AuditWriter {
       chmodSync(this.path, 0o600);
     } catch {
       /* audit is best effort; never fail a command because the disk is full */
+    }
+    try {
+      this.onWrite?.(obj);
+    } catch {
+      /* a listener never breaks the audit */
     }
   }
 
