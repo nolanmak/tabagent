@@ -16,6 +16,10 @@ test("side panel never scrolls horizontally with long content", async ({ h }) =>
     document.getElementById("manualCaptureTab")!.innerHTML = `<option>A very long tab title ${long}</option>`;
     document.querySelectorAll("details").forEach((d) => ((d as HTMLDetailsElement).open = true));
   }, LONG);
+  // The Sites search toolbar (#117), with a long query, a count and the clear button showing.
+  await panel.getByLabel("Search sites").fill(LONG);
+  await expect(panel.locator("#siteCount")).toHaveText("0 of 1 sites");
+  await expect(panel.getByRole("button", { name: "Clear site search" })).toBeVisible();
   const { scrollWidth, clientWidth } = await panel.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
   await panel.close();
