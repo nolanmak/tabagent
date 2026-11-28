@@ -73,6 +73,7 @@ export async function authServer(opts: { https?: { names: string[] }; password?:
         return html(page("Password", `<h1>Hi ${fields.username ?? ""}</h1><form method="post" action="/auth/login"><input type="hidden" name="username" value="${fields.username ?? ""}"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password"><button>Sign in</button></form>`));
       }
       if (u.pathname === "/auth/code") return html(page("Welcome", `<h1>Verified</h1>`), 200, { "set-cookie": "session=1; Path=/" });
+      if (u.pathname === "/auth/signup") return html(page("Check your email", `<h1>Account created. Check your email to confirm it.</h1>`));
       return html(page("ok", "ok"));
     }
     if (u.pathname === "/auth/human") {

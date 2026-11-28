@@ -522,3 +522,106 @@ describe("Bitwarden rememberUnlock (Keychain)", () => {
     expect(a.stored()).toBeNull();
   });
 });
+
+describe("nodeRunner input (#112)", () => {
+  it("pipes input to the child's stdin and closes it; without input stdin stays closed", async () => {
+    const r = nodeRunner();
+    expect((await r.run("cat", [], { input: "encoded-item" })).stdout).toBe("encoded-item");
+    expect((await r.run("cat", [])).stdout).toBe("");
+  });
+});
+
+describe("Bitwarden createLogin (#112 auth.signup)", () => {
+  const KEY = "C".repeat(12) + randomBytes(12).toString("base64url");
+  const NEW_ID = "new-item-000042";
+  function setup(o: { createFails?: boolean; userEmail?: string | null } = {}) {
+    const pw = marker("GENPW");
+    const calls: { args: string[]; env: Record<string, string | undefined>; input?: string }[] = [];
+    const events: string[] = [];
+    let created: Record<string, any> | null = null;
+    const runner: Runner = {
+      async run(_bin, args, ro) {
+        calls.push({ args, env: ro?.env ?? {}, input: ro?.input });
+        const a = args.filter((x) => x !== "--nointeraction" && x !== "--response");
+        const has = ro?.env?.BW_SESSION === KEY;
+        const r = (x: { stdout: string; code?: number }) => ({ code: x.code ?? 0, stdout: x.stdout, stderr: "" });
+        if (a[0] === "status") return r(ok({ object: "template", template: { status: has ? "unlocked" : "locked", ...(o.userEmail === null ? {} : { userEmail: o.userEmail ?? "owner@example.invalid" }) } }));
+        if (a[0] === "lock") return r(ok({}));
+        if (!has) return r(bad());
+        if (a[0] === "sync") return r(ok({ object: "message", title: "Syncing complete." }));
+        if (a.join(" ") === "list items") return r(ok({ object: "list", data: created ? [created] : [] }));
+        if (a.join(" ") === "generate -ulns --length 24") return r(ok({ object: "string", data: pw }));
+        if (a.join(" ") === "create item") {
+          if (o.createFails) return r(bad("Something went wrong"));
+          const item = JSON.parse(Buffer.from(ro?.input ?? "", "base64").toString("utf8"));
+          created = { ...item, id: NEW_ID, object: "item", deletedDate: null };
+          return r(ok(created));
+        }
+        if (a.join(" ") === `get password ${NEW_ID}`) return r(ok({ object: "string", data: created?.login.password }));
+        if (a.join(" ") === `get username ${NEW_ID}`) return r(ok({ object: "string", data: created?.login.username }));
+        return r(bad());
+      },
+    };
+    const p = new BitwardenProvider({ bin: "bw", dataDir: "/tmp/x", runner, enabled: () => true, now: () => 0, event: (e, d) => events.push(`${e}:${JSON.stringify(d)}`) });
+    return { p, pw, calls, events, created: () => created };
+  }
+
+  it("generates with bw generate, creates the item through stdin with the session, returns only id + masked account", async () => {
+    const m = setup();
+    await m.p.setSession(KEY);
+    const acct = await m.p.createLogin({ origin: "https://github.com", username: "nolan@gmail.com" });
+    expect(acct).toEqual({ id: `bitwarden:${NEW_ID}`, provider: "bitwarden", accountMasked: "n•••@gmail.com", hasTotp: false, passkeyOnly: false, reprompt: false, uris: [{ uri: "https://github.com", match: "domain" }] });
+    const gen = m.calls.find((c) => c.args[0] === "generate");
+    const create = m.calls.find((c) => c.args[0] === "create");
+    expect(gen?.args).toEqual(["generate", "-ulns", "--length", "24", "--nointeraction", "--response"]);
+    expect(gen?.env.BW_SESSION).toBe(KEY);
+    expect(create?.args).toEqual(["create", "item", "--nointeraction", "--response"]);
+    expect(create?.env.BW_SESSION).toBe(KEY);
+    // The item: login type, the site's URI with match=domain, named after the host, the generated password.
+    expect(m.created()).toMatchObject({ type: 1, name: "github.com", reprompt: 0, login: { username: "nolan@gmail.com", password: m.pw, uris: [{ uri: "https://github.com", match: 0 }] } });
+    // The password is never in argv, the result or an event; only the create call's stdin carries it.
+    for (const c of m.calls) expect(c.args.join(" ")).not.toContain(m.pw);
+    for (const c of m.calls) if (c !== create) expect(c.input).toBeUndefined();
+    expect(JSON.stringify(acct)).not.toContain(m.pw);
+    expect(m.events.join("\n")).not.toContain(m.pw);
+    // The new item is usable right away through the normal secret path.
+    expect(await m.p.secret(NEW_ID, "password")).toBe(m.pw);
+  });
+
+  it("without a username it uses the Bitwarden account email", async () => {
+    const m = setup({ userEmail: "owner@example.invalid" });
+    await m.p.setSession(KEY);
+    expect(await m.p.accountEmail()).toBe("owner@example.invalid");
+    const acct = await m.p.createLogin({ origin: "https://github.com" });
+    expect(acct.accountMasked).toBe("o•••@example.invalid");
+    expect(m.created()?.login.username).toBe("owner@example.invalid");
+  });
+
+  it("no username and no account email → BAD_REQUEST, nothing generated", async () => {
+    const m = setup({ userEmail: null });
+    await m.p.setSession(KEY);
+    await expect(m.p.createLogin({ origin: "https://github.com" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(m.calls.some((c) => c.args[0] === "generate")).toBe(false);
+  });
+
+  it("locked → NOT_FOUND with the unlock hint; no bw generate or create", async () => {
+    const m = setup();
+    await expect(m.p.createLogin({ origin: "https://github.com", username: "a@b.example" })).rejects.toMatchObject({ code: "NOT_FOUND", hint: BW_HINTS.locked });
+    expect(m.calls.some((c) => c.args[0] === "generate" || c.args[0] === "create")).toBe(false);
+  });
+
+  it("http origins are refused", async () => {
+    const m = setup();
+    await m.p.setSession(KEY);
+    await expect(m.p.createLogin({ origin: "http://github.com", username: "a@b.example" })).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("a failed create → INTERNAL without the CLI's text or the password", async () => {
+    const m = setup({ createFails: true });
+    await m.p.setSession(KEY);
+    const e = await m.p.createLogin({ origin: "https://github.com", username: "a@b.example" }).catch((x) => x);
+    expect(e.code).toBe("INTERNAL");
+    expect(String(e.message)).not.toContain(m.pw);
+    expect(String(e.message)).not.toContain("Something went wrong");
+  });
+});

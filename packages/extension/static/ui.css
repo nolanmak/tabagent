@@ -62,3 +62,7 @@ button { white-space:nowrap; overflow-wrap:normal; flex-shrink:0; }
 .composer-actions { justify-content:space-between; } .composer-actions > span { flex:1 1 10em; min-width:0; }
 .agent-feed:not(:empty) { margin-top:8px; }
 .yolo-banner { margin:8px 12px 0; padding:8px 10px; border-radius:8px; background:#db2777; color:#fff; font-size:13px; }
+.sitesearch { flex-wrap:nowrap; } .searchbox { position:relative; display:flex; flex:1 1 auto; min-width:0; }
+.searchbox input { width:100%; padding-right:26px; } .searchbox input::-webkit-search-cancel-button { display:none; }
+.searchbox button { position:absolute; right:2px; top:50%; transform:translateY(-50%); border:0; background:none; padding:2px 6px; color:var(--muted); }
+#siteCount { white-space:nowrap; flex-shrink:0; }

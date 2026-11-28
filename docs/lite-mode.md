@@ -9,7 +9,7 @@ per origin in the extension settings and never switches on its own; `session.inf
 - **degraded**: works, with a documented difference (for example synthetic events with `isTrusted=false`).
 - **unsupported**: returns `UNSUPPORTED` without touching the page.
 
-Totals: 42 supported, 4 degraded, 12 unsupported.
+Totals: 42 supported, 4 degraded, 14 unsupported.
 
 | Tool | Lite mode | Notes |
 |---|---|---|
@@ -68,6 +68,8 @@ Totals: 42 supported, 4 degraded, 12 unsupported.
 | `session.end` | supported |  |
 | `auth.status` | supported |  |
 | `auth.login` | unsupported |  |
+| `auth.signup` | unsupported |  |
 | `auth.code` | unsupported |  |
+| `auth.confirm_link` | unsupported |  |
 | `auth.handoff` | supported |  |
 | `captcha.solve` | unsupported |  |
