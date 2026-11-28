@@ -75,7 +75,9 @@ describe("sessionRowHtml", () => {
     expect(html).toContain('data-view-tab="1"');
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
-    expect(html).not.toContain("y".repeat(TITLE_MAX));
+    const shown = [...html.matchAll(/class="session-tab[^"]*"[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+    expect(shown[1].endsWith("…")).toBe(true);
+    expect(shown[1].length).toBeLessThan(TITLE_MAX + 20); // escaping adds a few characters
     expect(html).toMatch(/class="session-tab active"[^>]*data-view-tab="2"/);
     expect(html).toContain('aria-current="true"');
   });

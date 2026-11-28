@@ -20,7 +20,7 @@ import type { PromptInfo } from "./prompts";
 import { policyPrecheck } from "./handlers/policy";
 import { createRouter } from "./router";
 import { attachTarget, sessionHandlers } from "./sessionTools";
-import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, type Session } from "./sessions";
+import { endAllHandoffs, endHandoff, endSession, getSession, listHandoffs, listSessions, onSessionsChanged, resolveTab, restoreSessions, focusSessionTab, sessionsView, type Session } from "./sessions";
 import { getSettings, isPaused, updateSettings, type Settings } from "./settings";
 import { migrateSettings, settingsAuditEvents } from "./settingsModel";
 import { handlers } from "./tools";
@@ -344,7 +344,7 @@ function stoppedTabs() {
 async function uiState() {
   const s = await getSettings();
   const workflowTabs = (await chrome.tabs.query({})).filter((tab) => tab.id != null && /^https?:/i.test(tab.pendingUrl || tab.url || "")).map((tab) => ({ id: tab.id!, title: tab.title || tab.url || `Tab ${tab.id}`, url: tab.pendingUrl || tab.url || "" }));
-  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: listSessions(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id };
+  return { status: bridge.status(), error: bridge.lastError(), paired: !!s.secret, settings: publicSettings(s), sessions: await sessionsView(), prompts: pendingPrompts(), feed: feedAll(), workflows: await listWorkflows(), activeCaptures: listActiveCaptures(), workflowTabs, stoppedTabs: stoppedTabs(), handoffs: listHandoffs(), agentsSupported: agentsSupported(FEATURES, bridge.bridgeFeatures()), version: VERSION, extensionId: chrome.runtime.id };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -379,6 +379,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await endSession(msg.id);
         sendEvent("session.ended", { sessionId: msg.id });
         return { ok: true };
+      case "ui.focusTab":
+        return focusSessionTab(msg.tabId);
       case "ui.agents_list": {
         // AD1/AD16: the panel lists agents through the worker; the bridge answers only on this socket.
         if (!agentsSupported(FEATURES, bridge.bridgeFeatures())) return { supported: false, agents: [], sources: { claude: "unavailable", codex: "unavailable" } };

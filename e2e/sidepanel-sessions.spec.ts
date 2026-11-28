@@ -17,8 +17,8 @@ async function activateOther(h: Harness, panel: Page) {
 test("clicking a session row activates its tab", async ({ h }) => {
   await h.trustFixtures();
   const c = await h.mcp({ label: "viewer" });
-  const r = await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
-  const tabId: number = r.json.tabId;
+  await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
+  const tabId: number = (await h.ok(c, "session.info")).json.tabs.find((t: any) => t.active).tabId;
   const panel = await h.openPanel();
   await activateOther(h, panel);
   expect(await isActive(h, tabId)).toBe(false);
