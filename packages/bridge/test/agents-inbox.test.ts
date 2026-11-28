@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 async function boot(agents: Record<string, unknown> = {}) {
-  ({ d, base } = await startDaemon({ agents: { claudeBin: claude.bin, cacheMs: 0, ...agents } }));
+  ({ d, base } = await startDaemon({ agents: { claudeBin: claude.bin, codexSocket: `${claude.dir}/no-codex.sock`, cacheMs: 0, ...agents } }));
   ext = await pairedExt(d, undefined, ["agents"]);
   // Tool calls succeed unless a test says otherwise.
   ext.onCommand = (cmd) => okEnvelope({ tabs: [], echo: cmd.params?.n ?? null }, cmd.tool);
@@ -153,7 +153,7 @@ describe("GET /v1/inbox (AD4, AD5)", () => {
     expect(b.events[0].data.sessionId).toBe("mcp:ci:100-aaaaaa");
     expect(a.isEnded()).toBe(false);
     const agents = await list();
-    expect(agents.filter((x) => x.linked).map((x) => x.pid).sort()).toEqual([77, PID]);
+    expect(agents.filter((x) => x.linked).map((x) => x.pid).sort((a, b) => a - b)).toEqual([77, PID]);
   });
   it("stream close -> the agent is unlinked at once", async () => {
     await boot();

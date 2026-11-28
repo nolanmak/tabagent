@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import type { Agent, AgentSources } from "@tabagent/protocol";
 import { CodexRpc, defaultCodexSocket, loadedThreadIds, readThread } from "./codex";
-import { codexThreadToAgent, mergeAgents, parseAgentId, parseClaudeAgents, toAgent, type AgentBase } from "./discovery";
+import { codexThreadToAgent, mergeAgents, parseAgentId, parseClaudeAgents, toAgent, type AgentBase, type LinkOf } from "./discovery";
 
 export interface DiscoveryOpts {
   /** `claude` executable; default $TABAGENT_CLAUDE_BIN, else `claude` on PATH. */
@@ -14,10 +14,17 @@ export interface DiscoveryOpts {
   /** Display cache (§5). */
   cacheMs?: number;
   now?: () => number;
+  /** AD4: live inbox link for an agent, applied on every list and resolve (never cached). */
+  linkOf?: LinkOf;
 }
 
 export interface AgentList {
   agents: Agent[];
+  sources: AgentSources;
+}
+
+interface SourceLists {
+  lists: AgentBase[][];
   sources: AgentSources;
 }
 
@@ -34,8 +41,10 @@ export class AgentDiscovery {
   readonly codexTimeoutMs: number;
   private cacheMs: number;
   private now: () => number;
-  private cache: { at: number; value: AgentList } | null = null;
-  private inflight: Promise<AgentList> | null = null;
+  /** The vendor sources only; links are applied on read, so a link or unlink shows at once. */
+  private cache: { at: number; value: SourceLists } | null = null;
+  private inflight: Promise<SourceLists> | null = null;
+  linkOf: LinkOf;
 
   constructor(o: DiscoveryOpts = {}) {
     this.claudeBin = o.claudeBin ?? defaultClaudeBin();
@@ -44,13 +53,18 @@ export class AgentDiscovery {
     this.codexTimeoutMs = o.codexTimeoutMs ?? 5_000;
     this.cacheMs = o.cacheMs ?? 5_000;
     this.now = o.now ?? Date.now;
+    this.linkOf = o.linkOf ?? (() => null);
   }
 
   /** Cached for display only; concurrent callers share one run. A send never uses this (AD3). */
-  list(): Promise<AgentList> {
+  async list(): Promise<AgentList> {
+    return this.linked(await this.sources());
+  }
+
+  private sources(): Promise<SourceLists> {
     if (this.cache && this.now() - this.cache.at < this.cacheMs) return Promise.resolve(this.cache.value);
     if (this.inflight) return this.inflight;
-    const p: Promise<AgentList> = this.listFresh()
+    const p: Promise<SourceLists> = this.sourcesFresh()
       .then((value) => {
         this.cache = { at: this.now(), value };
         return value;
@@ -67,8 +81,16 @@ export class AgentDiscovery {
   }
 
   async listFresh(): Promise<AgentList> {
+    return this.linked(await this.sourcesFresh());
+  }
+
+  private linked(l: SourceLists): AgentList {
+    return { agents: mergeAgents(l.lists, this.linkOf), sources: l.sources };
+  }
+
+  private async sourcesFresh(): Promise<SourceLists> {
     const [cl, cx] = await Promise.all([this.claudeAgents().then(ok, unavailable), this.codexAgents().then(ok, unavailable)]);
-    return { agents: mergeAgents([cl.agents, cx.agents]), sources: { claude: cl.state, codex: cx.state } };
+    return { lists: [cl.agents, cx.agents], sources: { claude: cl.state, codex: cx.state } };
   }
 
   /** AD3: re-resolve one id with no cache. null when it is gone (or its source is down). */
@@ -78,13 +100,13 @@ export class AgentDiscovery {
     if (p.vendor === "claude") {
       const all = await this.claudeAgents().catch(() => [] as AgentBase[]);
       const hit = all.find((a) => a.id === id);
-      return hit ? toAgent(hit) : null;
+      return hit ? toAgent(hit, this.linkOf(hit)) : null;
     }
     const rpc = await CodexRpc.connect(this.codexSocket, this.codexTimeoutMs).catch(() => null);
     if (!rpc) return null;
     try {
       const a = codexThreadToAgent(await readThread(rpc, p.threadId));
-      return a ? toAgent(a) : null;
+      return a ? toAgent(a, this.linkOf(a)) : null;
     } catch {
       return null;
     } finally {

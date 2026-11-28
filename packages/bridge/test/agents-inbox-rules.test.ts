@@ -1,7 +1,7 @@
 // Pure rules for linking and piggyback (spec AD4, AD5, AD8): the ancestor walk over an injected `ps`,
 // the inbox stream registry, the hold queue, SSE parsing and backoff in the proxy, and rendering.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentSchema, PIGGYBACK_LIMITS, type ToolDef } from "@tabagent/protocol";
+import { AgentSchema, PIGGYBACK_LIMITS, wrapText, type ToolDef } from "@tabagent/protocol";
 import { findAgentPid, isAgentComm, parsePsLine, type PsInfo } from "../src/agents/ancestry";
 import { HoldQueue, type HeldMessage } from "../src/agents/hold";
 import { InboxRegistry, parseInboxHeaders, profileCanDriveTab, type InboxConn } from "../src/agents/inbox";
@@ -228,10 +228,11 @@ describe("hold queue (AD8)", () => {
   it("TTL: a held message expires after ttlMs and is never handed out", () => {
     q.hold("k", msg(1));
     now = 500;
+    vi.advanceTimersByTime(500);
     q.hold("k", msg(2));
     now = 1000;
-    vi.advanceTimersByTime(1000);
-    expect(expired).toEqual([["r1", expect.stringContaining("30")]]);
+    vi.advanceTimersByTime(500);
+    expect(expired).toEqual([["r1", expect.stringContaining("Not delivered within 1 s")]]);
     expect(q.take("k").map((m) => m.n)).toEqual([2]);
   });
   it("take skips anything past its TTL even before its timer fires", () => {
@@ -312,11 +313,16 @@ describe("proxy: SSE parsing and reconnect backoff (AD5)", () => {
 describe("rendering userMessages (AD8)", () => {
   const H = "[TabAgent: message from the user via the side panel]";
   it("each message is its own text block before the tool output, outside any PAGE_DATA wrapper", () => {
-    const r = renderMcp({ ok: true, result: { tabId: 3, text: "<<<PAGE_DATA n\nhello\nPAGE_DATA n>>>" }, userMessages: [`${H}\nfirst`, `${H}\nsecond`] });
+    const page = wrapText("hello\nworld", "n0nce");
+    const r = renderMcp({ ok: true, result: { tabId: 3, text: page }, userMessages: [`${H}\nfirst`, `${H}\nsecond`] });
     expect(r.content.map((c) => (c.type === "text" ? c.text.split("\n")[0] : c.type))).toEqual([H, H, '{"tabId":3}']);
     expect(r.content[0]).toEqual({ type: "text", text: `${H}\nfirst` });
     expect(r.content[1]).toEqual({ type: "text", text: `${H}\nsecond` });
-    expect(r.content[2].type === "text" && r.content[2].text).not.toContain(H);
+    const tool = r.content[2].type === "text" ? r.content[2].text : "";
+    expect(tool).not.toContain(H);
+    expect(tool).toContain(page);
+    // The messages are not inside the page wrapper.
+    expect(r.content[0].type === "text" && r.content[0].text).not.toContain("PAGE_DATA");
   });
   it("before an image too; never on an error result; non-strings ignored", () => {
     const img = renderMcp({ ok: true, result: { dataBase64: "AAA", mime: "image/png" }, userMessages: [`${H}\nx`] });

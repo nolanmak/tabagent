@@ -48,7 +48,9 @@ export function renderMcp(resp: OutputResponse): { content: Content[]; isError?:
   } else line = typeof r === "string" ? r : JSON.stringify(r);
   if (resp.snapshotDiff) blocks.push(`snapshotDiff:\n${resp.snapshotDiff}`);
   out.unshift({ type: "text", text: [line, ...blocks].join("\n") });
-  return { content: out };
+  // AD8: panel messages go first, each its own block, outside any PAGE_DATA wrapper. Never on errors (above).
+  const user = (resp.userMessages ?? []).filter((m): m is string => typeof m === "string" && m.length > 0);
+  return { content: [...user.map((text) => ({ type: "text" as const, text })), ...out] };
 }
 
 /** CLI text: the same text as MCP; images are described (the CLI writes them to a file first). */
