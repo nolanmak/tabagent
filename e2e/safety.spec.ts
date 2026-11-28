@@ -106,10 +106,14 @@ test("#67 policy.denylist_change shows the exact diff and cannot weaken hard sig
   expect(change.summary).toContain("test a reviewed statement workflow");
   expect((change.result as any).json.status).toBe("applied");
   expect((await settings(h)).denylist).not.toContain("*.chase.com");
-  // Removing an editable rule never unlocks the hard automated-auth boundary.
-  await h.setPolicies({ [h.A]: "full", [h.B]: "full", "https://www.chase.com": "full" }, { devAllowSensitive: false });
+  // Removing a bank from the denylist alone does not turn sign-in on (#101): the origin still needs it enabled.
+  await h.setPolicies({ [h.A]: "full", [h.B]: "full", "https://www.chase.com": "full", "https://my.1password.com": "full" }, { devAllowSensitive: false });
   const login = await h.call(c, "auth.login", { tabId: (await h.ok(c, "tabs", { action: "new", url: "https://www.chase.com/" })).json.tabId });
-  expect(login.text).toContain("never signs in");
+  expect(login.text).toContain("Sign-in is not enabled");
+  // Password managers stay behind the hard automated-auth boundary even after leaving the denylist.
+  await h.answerPrompt("once", () => h.ok(c, "policy.denylist_change", { changes: [{ op: "remove", glob: "*.1password.com" }], reason: "hard block check" }));
+  const vault = await h.call(c, "tabs", { action: "new", url: "https://my.1password.com/" });
+  expect(vault.text).toContain("never lets agents open");
 });
 
 test("#67 rejecting a denylist change leaves extension policy unchanged", async ({ h }) => {
