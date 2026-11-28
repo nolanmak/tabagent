@@ -207,6 +207,98 @@ test("#104 an approval is refused when the site settings changed while the promp
   await h.trustFixtures();
 });
 
+test("#105 settings.get and `tabagent settings show` return policy and preferences, never the secret, tokens or account ids", async ({ h }) => {
+  await h.trustFixtures({ devAllowSensitive: false, sites: { [h.A]: { auth: true, authAlways: ["acct-e2e-NEVER-LEAK-1"], lite: true } } });
+  const { execFileSync } = await import("node:child_process");
+  const cli = join(process.cwd(), "packages/bridge/dist/cli.js");
+  const env = { ...process.env, TABAGENT_HOME: h.home };
+  const tok = execFileSync(process.execPath, [cli, "token", "create", "--name", "settings-reader", "--cap", "read"], { env }).toString().trim();
+  const bridgeSecret = JSON.parse(readFileSync(join(h.home, "config.json"), "utf8")).secret as string;
+  const extSecret = (await settings(h)).secret as string;
+  expect(bridgeSecret && extSecret).toBeTruthy();
+
+  const c = await h.mcp({ label: "settings-get", token: tok });
+  const r = await h.ok(c, "settings.get");
+  const before = await settings(h);
+  expect(r.json).toMatchObject({ denylist: before.denylist, yolo: false, devAllowSensitive: false, onSessionEnd: before.onSessionEnd, beforeUnload: before.beforeUnload, showOverlay: before.showOverlay, forceLite: false });
+  expect(r.json.sites[h.A]).toEqual({ policy: "full", auth: true, lite: true, alwaysAccounts: 1 });
+  expect(r.json.sites[h.B]).toEqual({ policy: "full", auth: false, lite: false });
+  expect(r.json.authDenyHosts).toContain("*.chase.com");
+  expect(r.json.vaultDenyHosts).toContain("passwords.google.com");
+  for (const leak of [bridgeSecret, extSecret, tok, "acct-e2e-NEVER-LEAK-1"]) expect(r.text).not.toContain(leak);
+
+  const show = execFileSync(process.execPath, [cli, "settings", "show"], { env }).toString();
+  expect(show).toContain(h.A);
+  expect(show).toContain("Denylist");
+  const raw = execFileSync(process.execPath, [cli, "settings", "show", "--json"], { env }).toString();
+  expect(JSON.parse(raw)).toEqual(r.json);
+  for (const leak of [bridgeSecret, extSecret, tok, "acct-e2e-NEVER-LEAK-1"]) expect(show + raw).not.toContain(leak);
+  await h.trustFixtures();
+});
+
+test("#106 settings.change applies an allowed preference (audited) and rejects yolo with a hint", async ({ h }) => {
+  await h.trustFixtures({ showOverlay: true, onSessionEnd: "collapse" });
+  const c = await h.mcp({ label: "settings-change" });
+  const r = await h.ok(c, "settings.change", { changes: { showOverlay: false, onSessionEnd: "keep" } });
+  expect(r.json).toMatchObject({ status: "applied", applied: [{ key: "showOverlay", from: true, to: false }, { key: "onSessionEnd", from: "collapse", to: "keep" }] });
+  expect(await h.pendingPrompts()).toHaveLength(0);
+  expect(await settings(h)).toMatchObject({ showOverlay: false, onSessionEnd: "keep" });
+
+  for (const [changes, hint] of [
+    [{ yolo: true }, "policy.mode_change"],
+    [{ devAllowSensitive: true }, "policy.mode_change"],
+    [{ denylist: [] }, "policy.denylist_change"],
+    [{ paused: false }, "panel-only"],
+  ] as const) {
+    const bad = await h.call(c, "settings.change", { changes });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain("PERMISSION_DENIED");
+    expect(bad.text).toContain(hint);
+  }
+  const after = await settings(h);
+  expect(after).toMatchObject({ yolo: false, devAllowSensitive: true, showOverlay: false, paused: false });
+  const audit = readFileSync(join(h.home, "audit.jsonl"), "utf8");
+  expect(audit).toMatch(/"tool":"settings\.change".*"showOverlay":false/);
+  await h.trustFixtures({ showOverlay: true, onSessionEnd: "collapse" });
+});
+
+test("#106 `tabagent kill` stops every agent with no session and no prompt; tools return KILLED; nothing but the panel resumes", async ({ h }) => {
+  await h.trustFixtures();
+  const { execFileSync } = await import("node:child_process");
+  const cli = join(process.cwd(), "packages/bridge/dist/cli.js");
+  const env = { ...process.env, TABAGENT_HOME: h.home };
+  const c = await h.mcp({ label: "victim" });
+  await h.ok(c, "nav.goto", { url: `${h.A}/index.html` });
+  const long = h.call(c, "nav.wait", { for: "text", value: "never appears on this page", timeout: 60000 });
+  await expect.poll(() => h.sw.evaluate(() => (globalThis as any).__tabagent.inflight()), { timeout: 10000 }).toBeGreaterThan(0);
+  try {
+    const out = execFileSync(process.execPath, [cli, "kill"], { env }).toString();
+    expect(out).toContain("Stopped all agents");
+    expect((await long).text).toContain("KILLED");
+    expect((await settings(h)).paused).toBe(true);
+    expect(await h.pendingPrompts()).toHaveLength(0);
+    expect((await h.call(c, "page.snapshot")).text).toContain("KILLED");
+    // the MCP tool is idempotent and works from any session
+    const again = await h.ok(await h.mcp({ label: "second-killer" }), "session.kill_all");
+    expect(again.json).toMatchObject({ status: "killed", alreadyPaused: true });
+
+    // resume cannot be reached from the bridge: no tool, no REST route, no settings key
+    const cfg = JSON.parse(readFileSync(join(h.home, "config.json"), "utf8"));
+    for (const path of ["/v1/ui.resume", "/v1/resume", "/v1/session.resume"]) {
+      const r = await fetch(`http://127.0.0.1:${h.port}${path}`, { method: "POST", headers: { authorization: `Bearer ${cfg.secret}`, "content-type": "application/json" }, body: "{}" });
+      expect(r.status, path).toBe(404);
+    }
+    expect((await h.call(c, "settings.change", { changes: { paused: false } })).text).toContain("KILLED");
+    expect((await h.call(c, "tabs", { action: "list" })).text).toContain("KILLED");
+    expect((await settings(h)).paused).toBe(true);
+    const audit = readFileSync(join(h.home, "audit.jsonl"), "utf8");
+    expect(audit).toContain('"tool":"session.kill_all"');
+  } finally {
+    await h.sw.evaluate(() => (globalThis as any).__tabagent.resume());
+  }
+  await h.ok(c, "tabs", { action: "list" });
+});
+
 test("#13 login form: submit with a password prompts; deny leaves the page unchanged; feed masks the password", async ({ h }) => {
   await h.trustFixtures({ devAllowSensitive: false });
   const c = await h.mcp({ label: "login" });

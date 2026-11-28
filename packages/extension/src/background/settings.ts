@@ -73,6 +73,12 @@ export async function getSettings(): Promise<Settings> {
   return view(cache);
 }
 
+/** The stored settings as persisted (no derived fields, liteSites exactly as stored). A copy. */
+export async function getStoredSettings(): Promise<StoredSettings> {
+  await getSettings();
+  return structuredClone(cache!);
+}
+
 export async function updateSettings(patch: Partial<Settings> & Record<string, unknown>): Promise<Settings> {
   await getSettings();
   const { paused: p, autoAcceptBeforeUnload: aa, sensitiveAllowed: _sa, ...rest } = patch;

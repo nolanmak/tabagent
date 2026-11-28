@@ -12,6 +12,7 @@ import { formHandlers } from "./handlers/forms";
 import { navHandlers } from "./handlers/nav";
 import { pageHandlers } from "./handlers/page";
 import { policyHandlers } from "./handlers/policy";
+import { settingsHandlers } from "./handlers/settings";
 import { workflowHandlers } from "./handlers/workflow";
 import type { Ctx } from "./tabctx";
 
@@ -30,5 +31,6 @@ export const handlers: Record<string, Handler> = {
   ...fileHandlers,
   ...dialogHandlers,
   ...policyHandlers,
+  ...settingsHandlers,
   ...workflowHandlers,
 };
