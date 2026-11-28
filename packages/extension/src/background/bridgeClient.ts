@@ -46,6 +46,8 @@ export function createBridgeClient(d: BridgeClientDeps) {
   let reconnectTimer: unknown = null;
   let backoff = 500;
   let welcomed = false;
+  /** AD16: optional capabilities the bridge listed in its welcome; empty until welcomed. */
+  let bridgeFeatures: string[] = [];
 
   function setStatus(s: Status, err = "") {
     status = s;
@@ -91,6 +93,7 @@ export function createBridgeClient(d: BridgeClientDeps) {
     const old = ws;
     ws = null;
     welcomed = false;
+    bridgeFeatures = [];
     stopHeartbeat();
     try {
       old?.close();
@@ -117,6 +120,7 @@ export function createBridgeClient(d: BridgeClientDeps) {
     }
     ws = sock;
     welcomed = false;
+    bridgeFeatures = [];
     sock.onopen = () => {
       const hello = {
         type: "hello",
@@ -140,6 +144,7 @@ export function createBridgeClient(d: BridgeClientDeps) {
       if (ws !== sock) return;
       ws = null;
       welcomed = false;
+      bridgeFeatures = [];
       stopHeartbeat();
       if (status !== "pair-failed" && status !== "unpaired" && status !== "version-mismatch") setStatus("disconnected", ev?.reason || "");
       scheduleReconnect();
@@ -170,6 +175,7 @@ export function createBridgeClient(d: BridgeClientDeps) {
       case "welcome":
         backoff = 500;
         welcomed = true;
+        bridgeFeatures = Array.isArray(msg.features) ? msg.features.filter((f: unknown): f is string => typeof f === "string") : [];
         if (msg.secret) {
           await d.saveSecret(msg.secret);
           pairCode = null;
@@ -244,5 +250,6 @@ export function createBridgeClient(d: BridgeClientDeps) {
     status: () => status,
     lastError: () => lastError,
     connected: () => status === "connected",
+    bridgeFeatures: () => (welcomed ? [...bridgeFeatures] : []),
   };
 }

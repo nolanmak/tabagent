@@ -24,7 +24,7 @@ export const EXTENSION_PURE = [
   "packages/extension/src/**/pure/**/*.ts",
   // DOM extractors unit-tested under happy-dom
   "packages/extension/src/pagelib/{forms,extract}.ts",
-  "packages/extension/src/background/{snapshot,keys,refs,autowait,router,authTaint,diff,collapse,frames,screenshot-plan,dialogs,policy,sensitive,redact,wait,find,form,lite}.ts",
+  "packages/extension/src/background/{snapshot,keys,refs,autowait,router,authTaint,bridgeAgents,diff,collapse,frames,screenshot-plan,dialogs,policy,sensitive,redact,wait,find,form,lite}.ts",
 ];
 
 export default defineConfig({
