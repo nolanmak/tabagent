@@ -30,6 +30,9 @@ let state = initialChat();
 let agent: Agent | null = null;
 /** Every running session, for the left rail (#156). */
 let allAgents: Agent[] = [];
+/** The bridge listed the sessions at least once (an empty rail means none, not unknown). */
+let agentsListed = false;
+let lastRailHtml = "";
 let agentsLoaded = false;
 let bridgeNote = "";
 let spawnChosen = false;
@@ -177,9 +180,11 @@ function renderComposer() {
 
 /** #156: the rail of sessions; rewritten only when it changed, so a hover or focus survives the 5 s refresh. */
 function renderRail() {
-  const html = agentsLoaded ? chatRailHtml(allAgents.map((a) => agentRowView(a, Date.now())), agentId) : "";
-  const list = $("railList");
-  if (html && list.innerHTML !== html) list.innerHTML = html;
+  const html = agentsListed ? chatRailHtml(allAgents.map((a) => agentRowView(a, Date.now())), agentId) : agentsLoaded ? `<li class="rail-empty">Sessions unavailable.</li>` : "";
+  if (html && html !== lastRailHtml) {
+    $("railList").innerHTML = html;
+    lastRailHtml = html;
+  }
 }
 
 /** Re-render everything; keep the view pinned to the bottom when it was there, else offer the pill. */
@@ -246,6 +251,7 @@ async function refreshAgent() {
     else {
       bridgeNote = "";
       allAgents = (r?.agents as Agent[] | undefined) ?? [];
+      agentsListed = true;
       agent = allAgents.find((a) => a.id === agentId) ?? null;
     }
   } catch (e) {
@@ -413,6 +419,13 @@ $("newPill").addEventListener("click", () => {
   scroller().scrollTo({ top: scroller().scrollHeight, behavior: "smooth" });
   $("newPill").hidden = true;
 });
+// #156: the current session's rail row keeps you here (no reload, the draft stays); the others navigate.
+$("railList").addEventListener("click", (e) => {
+  if (!(e.target as HTMLElement).closest("a[aria-current='page']")) return;
+  e.preventDefault();
+  if (!$("composer").hidden) input().focus();
+});
+if (!/Mac|iPhone|iPad/.test(navigator.platform)) $("focusKey").textContent = "Ctrl+K";
 // #156: Cmd/Ctrl+K or / focuses the composer; Esc leaves it.
 document.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
