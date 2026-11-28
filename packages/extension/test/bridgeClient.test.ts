@@ -131,6 +131,23 @@ describe("bridge client", () => {
     ws.onmessage({ data: "not json" });
     expect(onMessage.mock.calls.map((x) => x[0].type)).toEqual(["command", "files.resolved"]);
   });
+  it("records the bridge's welcome features (AD16) and forgets them when the socket closes", async () => {
+    const { c } = client();
+    await c.connect();
+    const ws = FakeWs.all[0];
+    ws.open();
+    expect(c.bridgeFeatures()).toEqual([]);
+    ws.msg({ type: "welcome", protocolVersion: 1, bridgeVersion: "x", features: ["agents", 7] });
+    await flush();
+    expect(c.bridgeFeatures()).toEqual(["agents"]);
+    ws.close();
+    expect(c.bridgeFeatures()).toEqual([]);
+    await c.connect();
+    FakeWs.all.at(-1)!.open();
+    FakeWs.all.at(-1)!.msg({ type: "welcome", protocolVersion: 1, bridgeVersion: "old" });
+    await flush();
+    expect(c.bridgeFeatures()).toEqual([]);
+  });
   it("UNAUTHORIZED about the secret clears it and stops reconnecting", async () => {
     const { c, secret } = client();
     await c.connect();

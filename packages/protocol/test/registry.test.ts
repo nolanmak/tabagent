@@ -112,6 +112,7 @@ const LEVELS: Record<string, string> = {
   "auth.login": "act",
   "auth.code": "act",
   "auth.signup": "act",
+  "auth.confirm_link": "act",
   "auth.handoff": "read",
   "captcha.solve": "act",
 };
@@ -175,7 +176,7 @@ const D29: Record<string, string[]> = {
   dev: [...CORE, "js.eval", "console.list", "network.list", "network.get", "network.waitFor", "cookies.get", "storage.get"],
   // DA10: full is everything except the opt-in auth group.
   full: tools.filter((t) => t.group !== "auth").map((t) => t.name),
-  auth: [...CORE, "auth.status", "auth.login", "auth.signup", "auth.code", "auth.handoff", "captcha.solve"],
+  auth: [...CORE, "auth.status", "auth.login", "auth.signup", "auth.code", "auth.confirm_link", "auth.handoff", "captcha.solve"],
 };
 
 describe("D29 profiles", () => {

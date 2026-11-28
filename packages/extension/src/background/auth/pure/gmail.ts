@@ -10,7 +10,8 @@ export const GMAIL_FEED_URL = "https://mail.google.com/mail/u/0/feed/atom";
 
 export type FeedRead = { ok: true; messages: CodeMessage[] } | { ok: false; code: "NOT_FOUND" | "UNSUPPORTED"; reason: string };
 
-function decode(s: string): string {
+/** Undo XML/HTML escaping (CDATA, named and numeric entities); `&amp;` last so nothing decodes twice. */
+export function decode(s: string): string {
   return s
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(/&lt;/g, "<")
