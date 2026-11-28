@@ -71,3 +71,7 @@ Sign in with Google (user has removed `accounts.google.com` from the denylist an
 ## Tool profiles
 
 `tabagent mcp` exposes `core` by default; add `--profile forms,data,dev,auth` or `full`. forms: `form.describe`, `form.blockers`, `act.fill`, `act.upload`. data: `page.text`, `extract.links`, `extract.schema`, `downloads.read`. dev: `js.eval`, `network.get`, `cookies.get`. auth: sign-in tools. full: everything.
+
+## Working on TabAgent itself
+
+After changing extension code, load it yourself: `npm run build`, then sync `packages/extension/dist/` into the folder Chrome loads (chrome://extensions → TabAgent → "Loaded from"). Reload: TabAgent can't open chrome:// pages, so on macOS run `open -a "Google Chrome" 'chrome://extensions/?id=<extension id>'` (it targets the user's main Chrome; AppleScript's `front window` can attach to an automation Chrome instead), take a screenshot, and click the ↻ on the TabAgent card with a CGEvent mouse click. Run `open -a` again right before clicking so Chrome is frontmost. Verify that the built bundle in the loaded folder has your change and that the bridge log shows the extension reconnecting. Another session building TabAgent can overwrite that folder; if your change disappears, build their branch plus your commit together. Don't drive the screen while the user is typing in another app.
