@@ -23,6 +23,8 @@ export interface Settings {
   forceLite: boolean;
   /** @deprecated host globs in lite mode; use sites[origin].lite. Still honoured by liteForUrl. */
   liteSites: string[];
+  /** #108: answers from Touch ID and the phone page (panel-only, default off). */
+  outsideApprovals: boolean;
   /** @deprecated derived from beforeUnload === "accept"; read by older cdp.ts. */
   autoAcceptBeforeUnload: boolean;
   /** @deprecated derived: origins with any pre-approval. */

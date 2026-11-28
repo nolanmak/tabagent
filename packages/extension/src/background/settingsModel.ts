@@ -38,6 +38,8 @@ export interface StoredShape {
   showOverlay: boolean;
   forceLite: boolean;
   liteSites: string[];
+  /** #108: accept answers from Touch ID (`tabagent approve`) and the phone page. Panel-only, off by default. */
+  outsideApprovals: boolean;
 }
 
 export const DEFAULTS: StoredShape = {
@@ -52,6 +54,7 @@ export const DEFAULTS: StoredShape = {
   showOverlay: true,
   forceLite: false,
   liteSites: [],
+  outsideApprovals: false,
 };
 
 const POLICIES = new Set(["read", "act", "full", "deny"]);
@@ -111,11 +114,12 @@ export function migrateSettings(raw: Record<string, unknown> | undefined | null)
     showOverlay: typeof r.showOverlay === "boolean" ? r.showOverlay : DEFAULTS.showOverlay,
     forceLite: r.forceLite === true,
     liteSites: Array.isArray(r.liteSites) ? r.liteSites.filter((x: unknown) => typeof x === "string") : [],
+    outsideApprovals: r.outsideApprovals === true,
   };
 }
 
 /** Settings whose change is written to the bridge audit log (review M1). */
-const AUDITED = ["devAllowSensitive", "yolo"] as const;
+const AUDITED = ["devAllowSensitive", "yolo", "outsideApprovals"] as const;
 
 /** Audit events for a settings change: one settings.changed with the new value of each risky toggle that moved. */
 export function settingsAuditEvents(before: Partial<StoredShape>, after: Partial<StoredShape>): { event: "settings.changed"; data: Record<string, boolean> }[] {

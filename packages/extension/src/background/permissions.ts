@@ -4,7 +4,7 @@
 import { TabAgentError, type SessionMeta } from "@tabagent/protocol";
 import { broadcast } from "./feed";
 import { applySensitiveAnswer, applySiteAnswer, clearSessionGrants, effectiveLevel, originOf, resolve, type Answer, type Level, type PolicyState, type SensitiveCategory, type SessionGrant } from "./policy";
-import { CATEGORY_TEXT, PromptQueue, type PromptInfo, type PromptKind, type PromptOutcome } from "./prompts";
+import { CATEGORY_TEXT, PromptQueue, type PromptEvent, type PromptInfo, type PromptKind, type PromptOutcome } from "./prompts";
 import { getSettings, updateSettings } from "./settings";
 
 export type { Answer, PromptInfo, PromptKind };
@@ -52,7 +52,7 @@ export const prompts = new PromptQueue({
   newId: () => crypto.randomUUID(),
 });
 
-type PromptHook = (ev: { type: "added" | "removed"; info: PromptInfo; outcome?: PromptOutcome }) => void;
+type PromptHook = (ev: PromptEvent) => void;
 const hooks = new Set<PromptHook>();
 /** index.ts registers delivery (badge, notification, banner, bridge events). */
 export function onPrompt(fn: PromptHook) {

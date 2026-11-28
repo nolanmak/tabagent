@@ -75,18 +75,27 @@ export class Harness {
   ctx!: BrowserContext;
   sw!: Worker;
   clients: Client[] = [];
+  /** In-process bridge (only with `inProcess`): tests inject seams the built CLI never exposes. */
+  daemon: any = null;
+  private prevHome: string | undefined;
 
-  async start() {
-    const a = await fixtureServer("localhost");
-    const b = await fixtureServer("127.0.0.1");
-    this.servers.push(a.server, b.server);
-    this.A = a.origin;
-    this.B = b.origin;
-    this.home = mkdtempSync(join(tmpdir(), "tabagent-e2e-"));
-    mkdirSync(join(this.home, "uploads"), { recursive: true });
-    this.port = await freePort();
-    // Write config up-front so uploads dir is our temp dir.
-    writeFileSync(join(this.home, "config.json"), JSON.stringify({ port: this.port, uploadDirs: [join(this.home, "uploads")] }));
+  /**
+   * `inProcess`: run the bridge in this test process from source, with injected DaemonOpts (e.g. a
+   * test-only presence provider, a loopback "tailnet" listener). The production CLI has no way to set these.
+   */
+  constructor(private o: { inProcess?: () => Promise<Record<string, unknown>> } = {}) {}
+
+  private async startBridge() {
+    if (this.o.inProcess) {
+      this.prevHome = process.env.TABAGENT_HOME;
+      process.env.TABAGENT_HOME = this.home;
+      const { Daemon } = await import("../packages/bridge/src/daemon");
+      const { loadConfig } = await import("../packages/bridge/src/config");
+      this.daemon = new Daemon(loadConfig(), { log: (m: string) => (this.bridgeLog += m + "\n"), ...(await this.o.inProcess()) });
+      await this.daemon.start();
+      this.pairCode = this.daemon.pairCode;
+      return;
+    }
     this.bridge = spawn(process.execPath, [CLI, "serve"], { env: { ...process.env, TABAGENT_HOME: this.home }, stdio: ["ignore", "pipe", "pipe"] });
     this.pairCode = await new Promise<string>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("bridge did not start: " + this.bridgeLog)), 10000);
@@ -101,6 +110,20 @@ export class Harness {
       this.bridge.stdout!.on("data", on);
       this.bridge.stderr!.on("data", on);
     });
+  }
+
+  async start() {
+    const a = await fixtureServer("localhost");
+    const b = await fixtureServer("127.0.0.1");
+    this.servers.push(a.server, b.server);
+    this.A = a.origin;
+    this.B = b.origin;
+    this.home = mkdtempSync(join(tmpdir(), "tabagent-e2e-"));
+    mkdirSync(join(this.home, "uploads"), { recursive: true });
+    this.port = await freePort();
+    // Write config up-front so uploads dir is our temp dir.
+    writeFileSync(join(this.home, "config.json"), JSON.stringify({ port: this.port, uploadDirs: [join(this.home, "uploads")] }));
+    await this.startBridge();
 
     const userDir = mkdtempSync(join(tmpdir(), "tabagent-chrome-"));
     this.ctx = await chromium.launchPersistentContext(userDir, {
@@ -246,6 +269,11 @@ export class Harness {
     for (const c of this.clients) await c.close().catch(() => {});
     await this.ctx?.close().catch(() => {});
     this.bridge?.kill();
+    if (this.daemon) {
+      await this.daemon.stop().catch(() => {});
+      if (this.prevHome === undefined) delete process.env.TABAGENT_HOME;
+      else process.env.TABAGENT_HOME = this.prevHome;
+    }
     for (const s of this.servers) s.close();
   }
 }

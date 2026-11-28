@@ -84,7 +84,7 @@ describe("approvals: listing", () => {
     expect((await rest(c.base, "/v1/approvals/phone", tok, {})).status).toBe(403);
     expect(c.presence.calls).toHaveLength(0);
   });
-  it("ignores prompts.sync from an extension that did not pair (no socket, no mirror)", async () => {
+  it("needs a bearer credential", async () => {
     const c = await boot();
     expect((await rest(c.base, "/v1/approvals", null)).status).toBe(401);
   });

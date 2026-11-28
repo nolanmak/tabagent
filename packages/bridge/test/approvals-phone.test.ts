@@ -184,6 +184,14 @@ describe("phone page", () => {
     expect((await http(s.port, "GET", `${s.path}/prompts`, { headers: { cookie: s.cookie } })).status).toBe(403);
     expect((await http(s.port, "GET", `${s.path}/prompts`, { headers: s.h, host: `evil.example:${s.port}` })).status).toBe(403);
   });
+  it("an unknown or wrong-token link shows the ended page", async () => {
+    const c = await boot();
+    const l = await link(c);
+    const bad = await http(l.port, "GET", `${l.path}?t=wrong`);
+    expect(bad.status).toBe(404);
+    expect(bad.text).toMatch(/not valid/);
+    expect((await http(l.port, "GET", `/approve/${"0".repeat(32)}?t=${l.token}`)).status).toBe(404);
+  });
   it("the link token claims once", async () => {
     const c = await boot();
     const s = await claimed(c);

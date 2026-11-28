@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { PROFILES, TabAgentError, toolsForProfiles, type OutputResponse, type SettingsSnapshot } from "@tabagent/protocol";
+import { answerLabel, PROFILES, TabAgentError, toolsForProfiles, type MirroredPrompt, type OutputResponse, type PromptAnswer, type SettingsSnapshot } from "@tabagent/protocol";
 import type { Flags } from "./args";
 import { auditPath, configPath, loadConfig, saveConfig } from "./config";
 import { renderCli } from "./format";
@@ -248,6 +248,8 @@ Usage:
   tabagent audit tail [-n 50] [--follow]
   tabagent settings show [--json]      Denylist, site policies, YOLO and preferences (never secrets)
   tabagent kill                        Stop every agent now (resume only from the side panel)
+  tabagent approve [<n> once|always|deny]   List or answer pending prompts with Touch ID (macOS)
+  tabagent approve --phone [--ttl 60]  One-time phone page for prompts (Touch ID first; needs handoff.remote)
   tabagent skill install [--claude] [--codex] [--force] | uninstall | print
   tabagent config [show] | add-upload-dir <dir> | set port <n>
   tabagent config auth.sms on|off      SMS/iMessage one-time codes for auth.code (macOS)
@@ -265,4 +267,77 @@ Examples:
   tabagent page.snapshot
   tabagent act.click --ref e7
   tabagent page.screenshot --out shot.png`;
+}
+
+// ---------------------------------------------------------------------------
+// #108: tabagent approve
+// ---------------------------------------------------------------------------
+export interface ApproveDeps {
+  platform: NodeJS.Platform;
+  /** Authenticated call to the running bridge (local owner). */
+  api: (path: string, method?: string, body?: unknown) => Promise<any>;
+  now?: () => number;
+}
+
+const CLI_ORDER: PromptAnswer[] = ["once", "always", "deny"];
+const answersOf = (p: MirroredPrompt) => CLI_ORDER.filter((a) => p.answers.includes(a));
+const NOT_MAC =
+  "tabagent approve needs macOS: it confirms it is you with Touch ID or your login password (LocalAuthentication). On this system, answer in the TabAgent side panel, or open a one-time phone approval link from the side panel (Settings → Phone link for approvals; needs `tabagent config handoff.remote on`).";
+const OUTCOME_TEXT: Record<string, string> = {
+  expired: "The prompt expired before the answer arrived; nothing was applied.",
+  not_found: "That prompt is no longer pending.",
+  not_offered: "That answer is not offered for this prompt.",
+  disabled: "Answering outside the side panel is off. Turn on “Answer prompts outside this panel” in the TabAgent side panel settings.",
+  busy: "Another approval is in progress.",
+  no_extension: "The TabAgent extension is not connected.",
+};
+
+function promptLines(p: MirroredPrompt, n: number, now: number): string[] {
+  const left = Math.max(0, Math.round((p.expires - now) / 1000));
+  return [
+    `${n}. ${p.title}`,
+    `   ${p.detail}`,
+    ...(p.summary ? [`   ${p.summary}`] : []),
+    ...p.reasons.map((r) => `   - ${r}`),
+    `   Tool: ${p.tool} · ${left}s left · answers: ${answersOf(p).join(" | ")}${p.alwaysLabel && p.answers.includes("always") ? ` (always = “${p.alwaysLabel}”)` : ""}`,
+  ];
+}
+
+/**
+ * List pending prompts, or answer one. The bridge runs the presence check (Touch ID / password) itself
+ * before it relays the answer; this command sends only {promptId, answer}, so no flag can skip it.
+ */
+export async function approveCommand(pos: string[], f: Flags, d: ApproveDeps): Promise<Out> {
+  if (d.platform !== "darwin") return fail(NOT_MAC);
+  const now = (d.now ?? Date.now)();
+  if (f.phone) {
+    const ttl = typeof f.ttl === "string" && Number.isFinite(Number(f.ttl)) ? Number(f.ttl) : undefined;
+    const r = await d.api("/v1/approvals/phone", "POST", ttl === undefined ? {} : { ttlMin: ttl });
+    if (!r?.ok) return fail(`No phone link: ${r?.error?.message ?? "the bridge refused"}${r?.error?.hint ? `\n${r.error.hint}` : ""}`);
+    return ok([
+      r.url,
+      `One-time link: the first device to open it gets it. Valid until ${new Date(r.expiresAt).toLocaleTimeString()}, while outside approvals stay on.`,
+      "Open it on your phone (on your tailnet). Anyone with this link can answer your prompts: do not paste it anywhere an agent can read.",
+    ]);
+  }
+  const list = await d.api("/v1/approvals");
+  if (!list?.ok) return fail(`Could not list prompts: ${list?.error?.message ?? "the bridge did not answer"}`);
+  if (!list.enabled) return fail(OUTCOME_TEXT.disabled);
+  const prompts = (list.prompts ?? []) as MirroredPrompt[];
+  if (!pos.length) {
+    if (!prompts.length) return ok(["No pending TabAgent prompts."]);
+    const out = ["Pending TabAgent prompts:", ""];
+    prompts.forEach((p, i) => out.push(...promptLines(p, i + 1, now), ""));
+    out.push("Answer one (asks for Touch ID or your login password):", "  tabagent approve <number> once|always|deny");
+    return ok(out);
+  }
+  const [which, answer] = pos;
+  const p = /^\d+$/.test(which) ? prompts[Number(which) - 1] : prompts.find((x) => x.promptId === which);
+  if (!p) return fail(`No pending prompt ${JSON.stringify(which)}. Run \`tabagent approve\` to list them.`);
+  if (!(CLI_ORDER as string[]).includes(answer ?? "")) return fail("Usage: tabagent approve <number> once|always|deny");
+  if (!p.answers.includes(answer as PromptAnswer)) return fail(`This prompt offers ${answersOf(p).join(" | ")}.`);
+  const r = await d.api("/v1/approvals/answer", "POST", { promptId: p.promptId, answer });
+  if (r?.ok) return ok([`${answerLabel(answer as PromptAnswer, p.alwaysLabel)}: ${p.title}`, "Confirmed with Touch ID or your password."]);
+  if (r?.outcome === "already_answered") return fail(`Already answered${r.by ? ` (${r.by === "panel" ? "in the side panel" : r.by === "phone" ? "on the phone page" : "with tabagent approve"})` : ""}; nothing changed.`);
+  return fail(r?.error?.message ?? OUTCOME_TEXT[r?.outcome] ?? "The answer was not applied.");
 }
