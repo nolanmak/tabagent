@@ -73,6 +73,7 @@ function onBridgeMessage(msg: any) {
       onFilesResolved(msg);
       break;
     case "auth.accounts.result":
+    case "auth.signup.result":
     case "secret":
       onAuthBridgeMessage(msg);
       break;

@@ -1,4 +1,4 @@
-// auth.status / auth.login / auth.code orchestration (#33, #34). Chrome, CDP and the bridge sit behind
+// auth.status / auth.login / auth.code / auth.signup orchestration (#33, #34, #112). Chrome, CDP and the bridge sit behind
 // AuthPage and AuthEnv so the whole flow, including the no-leak property, is unit-tested with fakes.
 //
 // Each step of auth.login is a refusal point (#33):
@@ -11,7 +11,7 @@
 // A secret lives in one local variable between the channel and page.type(); nothing else sees it.
 import { CODE_SINCE_SLACK_MS, CODE_MAX_AGE_MS, httpsOrigin, itemMatches, maskAccount, selectTotpAccount, TabAgentError, type AuthAccount, type AuthProviderName, type CodeSourceName, type ProviderStatus, type CodeSourceStatus } from "@tabagent/protocol";
 import type { AuthChannel } from "./channel";
-import { detectCodeField, detectLogin, type FieldDesc } from "./fields";
+import { detectCodeField, detectLogin, detectSignup, type FieldDesc } from "./fields";
 import { classifyNext, type Next } from "./next";
 
 export interface PageField extends FieldDesc {
@@ -48,8 +48,9 @@ export interface AuthEnv {
   /** Step 1: auth enabled for this origin and the host is not on the banking/password-manager list. No prompt. */
   siteCheck(url: string): Promise<void>;
   /** Category g gate (requireSensitive(meta, url, "g", …)). Throws PERMISSION_DENIED / PROMPT_TIMEOUT. */
-  consent(url: string, who: { accountId: string; accountMasked: string; provider: string }, summary: string): Promise<void>;
-  channel: Pick<AuthChannel, "accounts" | "secret" | "smsCode">;
+  /** `signup`: a sign-up prompt (#112), asked every time; "Always" never skips or stores it. */
+  consent(url: string, who: { accountId: string; accountMasked: string; provider: string; signup?: boolean }, summary: string): Promise<void>;
+  channel: Pick<AuthChannel, "accounts" | "secret" | "smsCode" | "createLogin">;
   email?: EmailReader;
   /**
    * DA1 (review H1): called just before a credential reaches the page, so the tab is tainted
@@ -392,4 +393,118 @@ export async function authCode(
   }
   env.event("auth.code", { origin, source: order[order.length - 1], outcome: "error", errorCode: (lastErr as TabAgentError)?.code ?? "INTERNAL" });
   throw lastErr;
+}
+
+export interface SignupResult {
+  created: boolean;
+  account?: string;
+  accountId?: string;
+  source?: "bitwarden";
+  filled: boolean;
+  submitted: boolean;
+  next: Next;
+}
+
+/** Placeholder id for the sign-up prompt: the item does not exist yet, and "Always" never applies (#112 D1). */
+export const SIGNUP_CONSENT_ID = "bitwarden:new-login";
+
+/**
+ * #112 auth.signup. Refusal points, in order:
+ *  (1) https + auth enabled for the origin, not denylisted / AUTH_DENY_HOSTS   → PERMISSION_DENIED
+ *  (2) a sign-up form (detectSignup), with the values it needs                 → NOT_FOUND / BAD_REQUEST
+ *  (3) Bitwarden unlocked (only Bitwarden creates items, D2)                   → NOT_FOUND / UNSUPPORTED
+ *  (4) the user's consent, every time (D1: "Always" does not apply)            → PERMISSION_DENIED
+ *  (5) the tab is still on the origin and form; then the bridge creates the item
+ *  (6) fill email/username, then the password into every new-password field; submit; classify.
+ * Once the item exists, any later failure keeps it and the error names it, so the user can find or
+ * delete it. The password lives in one local between the channel and page.type().
+ */
+export async function authSignup(env: AuthEnv, page: AuthPage, p: { email?: string; username?: string; submit?: boolean }): Promise<SignupResult> {
+  const url0 = await page.url();
+  const origin = originOrDeny(url0);
+  await env.siteCheck(url0); // (1)
+  assertClean(env);
+  const form0 = detectSignup(await page.fields()); // (2)
+  if (!form0.ok) throw new TabAgentError("NOT_FOUND", form0.reason, "Navigate to the site's sign-up page first. auth.signup never fills sign-in or change-password forms.");
+  if (form0.email !== undefined && form0.username !== undefined && !p.username) throw new TabAgentError("BAD_REQUEST", "This sign-up form asks for a username as well as an email", "Pass username= (and email=) to auth.signup.");
+  if (form0.email !== undefined && !p.email && p.username && !p.username.includes("@")) throw new TabAgentError("BAD_REQUEST", "This sign-up form asks for an email", "Pass email= to auth.signup.");
+  const itemUser = p.email ?? p.username;
+
+  const res = await env.channel.accounts(env.cmdId, origin); // (3)
+  const bw = (res.providers ?? []).find((x) => x.name === "bitwarden");
+  if (!bw || bw.state === "disabled") {
+    throw new TabAgentError("UNSUPPORTED", "Only Bitwarden can create logins, and it is not turned on", "The user can turn it on with `tabagent bitwarden enable`, or sign up themselves (auth.handoff).");
+  }
+  if (bw.state !== "unlocked") throw new TabAgentError("NOT_FOUND", `Bitwarden is ${bw.state}`, bw.hint ?? "See auth.status.");
+  const shown = itemUser ? maskAccount(itemUser) : bw.userMasked;
+  if (!shown) throw new TabAgentError("BAD_REQUEST", "No email for the new account", "Pass email= to auth.signup.");
+
+  const host = new URL(origin).host;
+  await env.consent(url0, { accountId: SIGNUP_CONSENT_ID, accountMasked: shown, provider: "bitwarden", signup: true }, `Create an account on ${host} as ${shown} and save it to Bitwarden?`); // (4)
+
+  // (5) the tab may have navigated during the prompt; nothing is created unless it is still here.
+  const url1 = await sameOrigin(page, origin, "sign-up form");
+  assertClean(env);
+  const form = detectSignup(await page.fields());
+  if (!form.ok) throw new TabAgentError("NOT_FOUND", "The sign-up form went away during the prompt; nothing was created", "Take a page.snapshot and call auth.signup again.");
+  const acct = await env.channel.createLogin(env.cmdId, origin, itemUser);
+
+  try {
+    const fields = await page.fields();
+    const refOf = (i?: number) => (i === undefined ? undefined : fields.find((f) => f.i === i)?.ref);
+    const emailRef = refOf(form.email);
+    const userRef = refOf(form.username);
+    const pwRefs = form.passwords.map((i) => refOf(i)).filter((r): r is string => !!r);
+    if (!pwRefs.length) throw new TabAgentError("REF_STALE", "The password fields went away");
+    // Identity first: what the agent passed, else the new item's username (the Bitwarden account email).
+    const emailVal = p.email ?? (p.username?.includes("@") ? p.username : undefined);
+    const userVal = p.username ?? (emailRef === undefined ? itemUser : undefined);
+    let fromItem: string | null = null;
+    if ((emailRef && !emailVal) || (userRef && !userVal)) fromItem = await env.channel.secret(env.cmdId, acct.id, "username");
+    for (const [ref, v] of [
+      [emailRef, emailVal ?? fromItem],
+      [userRef, userVal ?? fromItem],
+    ] as const) {
+      if (!ref || !v) continue;
+      await sameOrigin(page, origin, "email");
+      await page.markFilled(ref);
+      assertClean(env);
+      env.filled?.("username", null);
+      await page.type(ref, v);
+    }
+    fromItem = null;
+    let pw: string | null = await env.channel.secret(env.cmdId, acct.id, "password");
+    try {
+      await sameOrigin(page, origin, "password");
+      assertClean(env);
+      env.filled?.("password", pw);
+      for (const ref of pwRefs) {
+        await page.markFilled(ref);
+        await page.type(ref, pw);
+      }
+    } finally {
+      pw = null;
+    }
+
+    let submitted = false;
+    if (p.submit !== false) {
+      await sameOrigin(page, origin, "form");
+      await page.submit(pwRefs[pwRefs.length - 1]);
+      submitted = true;
+      await page.settle();
+    }
+    let next: Next = "unknown";
+    if (submitted) {
+      const after = await readAfter(page);
+      // The sign-up form still there (a validation error, a taken name) is not a handoff.
+      next = detectSignup(after.fields).ok ? "unknown" : classifyNext(url1, after);
+    }
+    env.event("auth.signup", { origin, provider: "bitwarden", account: acct.accountMasked, outcome: "filled", submitted, next });
+    return { created: true, account: acct.accountMasked, accountId: acct.id, source: "bitwarden", filled: true, submitted, next };
+  } catch (e) {
+    const code = (e instanceof TabAgentError ? e.code : (e as { code?: TabAgentError["code"] })?.code) ?? "INTERNAL";
+    const msg = String((e as Error)?.message ?? e).slice(0, 200);
+    env.event("auth.signup", { origin, provider: "bitwarden", account: acct.accountMasked, outcome: "error", errorCode: code });
+    throw new TabAgentError(code, `${msg}. The new Bitwarden login was kept: ${acct.accountMasked} (${acct.id}, named ${host})`, `Finish with auth.login account=${acct.id}, or auth.handoff. If the site did not create the account, the user can delete that item in Bitwarden.`);
+  }
 }

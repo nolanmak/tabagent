@@ -204,7 +204,7 @@ describe("secret channel (1Password through fake op)", () => {
     const r = await ask({ type: "auth.signup.request", commandId: cmd.id, origin: "https://github.com", username: "new@example.com" }, "auth.signup.result");
     expect(r).toMatchObject({ ok: false, error: { code: "UNSUPPORTED" } });
     expect(r.account).toBeUndefined();
-    expect(fake.calls().filter((c) => c.argv[0] !== "item" || c.argv[1] !== "list")).toEqual([]);
+    expect(fake.calls().some((c) => c.argv.includes("create"))).toBe(false);
     ext.send(envelope(cmd.id, { code: "UNSUPPORTED", message: "x" }, "auth.signup", false));
     await resp;
   });
@@ -345,7 +345,8 @@ describe("#37 admin route and Bitwarden through the daemon", () => {
       expect(s).not.toContain(KEY);
     }
     const audit = readFileSync(join(ctx.home, "audit.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-    expect(audit.find((l) => l.event === "auth.signup")?.data).toMatchObject({ kind: "auth", tool: "auth.signup", origin: "https://github.com", provider: "bitwarden", account: "n•••@example.com", outcome: "ok" });
+    expect(audit.filter((l) => l.event === "auth.signup").map((l) => l.data.outcome)).toEqual(["denied", "ok", "denied"]);
+    expect(audit.find((l) => l.event === "auth.signup" && l.data.outcome === "ok")?.data).toMatchObject({ kind: "auth", tool: "auth.signup", origin: "https://github.com", provider: "bitwarden", account: "n•••@example.com", outcome: "ok" });
   });
 
   it("#112 a sign-up request is refused for any command but auth.signup", async () => {

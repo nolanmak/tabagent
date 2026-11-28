@@ -3,12 +3,12 @@
 // look-alike). The fixture server asserts it received the right secret; the MCP transcript, the
 // bridge log and the audit log are searched for it and must not contain it.
 import { chromium, expect, test as base } from "@playwright/test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Harness } from "./harness";
 import { authServer, type AuthServer } from "./fixtures/auth/server";
 import { seedPassword, spkiOf } from "./spikes/pwm";
-import { fakeCliDir, opItem, opScenario } from "../packages/bridge/test/auth-fakes";
+import { bwItem, bwScenario, fakeCliDir, opItem, opScenario } from "../packages/bridge/test/auth-fakes";
 
 const HOST = "tabagent-fixture.com";
 const EVIL = "tabagent-fixture.com.evil-example.com";
@@ -17,6 +17,11 @@ const USERNAME = "alice@example.com";
 const ITEM = "abcdefghijklmnopqrstuvwxyz";
 const CHROME_PW = `chrome-pw-${Math.random().toString(36).slice(2, 12)}`;
 const CODE = String(100000 + Math.floor(Math.random() * 899999));
+// #112: the fake `bw` session key and the password its `bw generate` hands out.
+const BW_KEY = `K${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+const GEN_PW = `gen-marker-${Math.random().toString(36).slice(2, 12)}`;
+const NEW_ITEM = "bw-new-item-0001";
+const SIGNUP_EMAIL = "newuser@example.com";
 
 interface W {
   h: Harness;
@@ -35,6 +40,9 @@ const test = base.extend<{}, { w: W }>({
       const fake = fakeCliDir();
       fake.bin("op");
       fake.scenario("op", opScenario({ items: [opItem(ITEM, [`https://${HOST}`], USERNAME)], secrets: { [ITEM]: { username: USERNAME, password: PASSWORD, otp: CODE } } }));
+      // Fake Bitwarden CLI too (#112 auth.signup); the provider stays off until a test turns it on.
+      fake.bin("bw");
+      fake.scenario("bw", bwScenario({ key: BW_KEY, items: [], create: bwItem({ id: NEW_ITEM, uris: [{ uri: `https://${HOST}`, match: 0 }], username: SIGNUP_EMAIL, password: GEN_PW, name: HOST }) }));
       process.env.PATH = `${fake.dir}:${process.env.PATH}`;
       // The harness launches Chromium; add host mapping + trust for the fixture cert (test-only flags).
       const orig = chromium.launchPersistentContext.bind(chromium);
@@ -281,4 +289,38 @@ test("chrome-autofill (#32): Chrome pre-fills its saved password on the https pa
   expect(title ?? "").toContain("chrome-autofill");
   expect(w.srv.received.find((x) => x.path === "/auth/login")?.fields).toEqual({ username: "carol@example.com", password: CHROME_PW });
   noLeak(w, CHROME_PW);
+});
+
+test("auth.signup (#112): consent every time (Always does not skip it), Bitwarden creates the login, both password fields get it, the agent never sees it", async ({ w }) => {
+  // Turn the Bitwarden provider on (config is read live) and unlock it through the admin route.
+  const cfgPath = join(w.h.home, "config.json");
+  const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+  writeFileSync(cfgPath, JSON.stringify({ ...cfg, auth: { providers: ["1password", "bitwarden"] } }));
+  try {
+    const unlock = await fetch(`http://127.0.0.1:${w.h.port}/v1/admin/bitwarden/session`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${cfg.secret}` }, body: JSON.stringify({ key: BW_KEY }) });
+    expect(unlock.status).toBe(204);
+    // An Always for the prompt's placeholder id must not let a sign-up through without asking.
+    await enable(w, { [w.site]: { auth: true, authAlways: ["bitwarden:new-login"] } });
+    w.srv.received.length = 0;
+    const c = await w.h.mcp({ profile: "core,auth" });
+    await w.h.ok(c, "nav.goto", { url: `${w.site}/signup.html` });
+    const { result, title } = await w.h.answerPrompt("once", () => call(w, c, "auth.signup", { email: SIGNUP_EMAIL }));
+    const r = result as any;
+    expect(r.isError, r.text).toBe(false);
+    expect(r.json).toEqual({ created: true, account: "new•••er@example.com", accountId: `bitwarden:${NEW_ITEM}`, source: "bitwarden", filled: true, submitted: true, next: "done" });
+    expect(title).toBe(`Create an account on ${HOST}:${w.srv.port} as new•••er@example.com and save it to Bitwarden?`);
+    expect(w.srv.received.find((x) => x.path === "/auth/signup")?.fields).toEqual({ email: SIGNUP_EMAIL, password: GEN_PW, confirm: GEN_PW });
+    const snap = await call(w, c, "page.snapshot");
+    expect(snap.isError).toBe(false);
+    noLeak(w, GEN_PW);
+    noLeak(w, BW_KEY);
+
+    // A login page is refused before any prompt.
+    await w.h.ok(c, "nav.goto", { url: `${w.site}/login.html` });
+    const no = await call(w, c, "auth.signup", { email: SIGNUP_EMAIL });
+    expect(no.isError).toBe(true);
+    expect(no.text).toContain("NOT_FOUND");
+  } finally {
+    writeFileSync(cfgPath, JSON.stringify(cfg));
+  }
 });

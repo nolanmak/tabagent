@@ -523,6 +523,14 @@ describe("Bitwarden rememberUnlock (Keychain)", () => {
   });
 });
 
+describe("nodeRunner input (#112)", () => {
+  it("pipes input to the child's stdin and closes it; without input stdin stays closed", async () => {
+    const r = nodeRunner();
+    expect((await r.run("cat", [], { input: "encoded-item" })).stdout).toBe("encoded-item");
+    expect((await r.run("cat", [])).stdout).toBe("");
+  });
+});
+
 describe("Bitwarden createLogin (#112 auth.signup)", () => {
   const KEY = "C".repeat(12) + randomBytes(12).toString("base64url");
   const NEW_ID = "new-item-000042";

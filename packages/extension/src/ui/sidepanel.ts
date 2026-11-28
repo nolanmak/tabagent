@@ -43,7 +43,7 @@ function promptHtml(p: any) {
         ? `${p.sensitive.description} · on ${p.origin}`
         : `on ${p.origin}`;
   const isAuth = p.sensitive?.category === "g";
-  const oneShot = p.kind === "attach" || p.sensitive?.category === "p" || p.sensitive?.category === "r";
+  const oneShot = p.kind === "attach" || p.sensitive?.category === "p" || p.sensitive?.category === "r" || !!p.auth?.signup;
   const always = oneShot ? "" : `<button data-a="always" data-id="${esc(p.promptId)}">${p.kind === "site" ? `Always allow ${esc(p.level)}` : isAuth ? "Always for this account" : "Always allow on this site"}</button>`;
   const left = Math.max(0, Math.round((p.expires - Date.now()) / 1000));
   return `<li class="prompt-item" data-prompt-id="${esc(p.promptId)}">
