@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { WebSocketServer, type WebSocket } from "ws";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
+  AGENTS_FEATURE,
   authExtraTimeout,
   captchaExtraTimeout,
   defaultTimeout,
@@ -27,6 +28,7 @@ import {
   type OutputResponse,
   type SessionMeta,
 } from "@tabagent/protocol";
+import { AgentsBridge, type AgentsOpts } from "./agents";
 import { AuditWriter } from "./audit";
 import { createAuth, type Auth } from "./auth";
 import { createCaptcha, type CaptchaBridge, type CaptchaOpts } from "./captcha";
@@ -85,7 +87,12 @@ export interface DaemonOpts {
   /** #61 remote handoff: tests bind the phone listener on loopback and capture the webhook. */
   handoffListen?: HandoffBridgeOpts["listen"];
   postWebhook?: HandoffBridgeOpts["postWebhook"];
+  /** Send to agent: stub `claude` binary, Codex socket path, timeouts (tests). */
+  agents?: AgentsOpts;
 }
+
+/** Optional capabilities the bridge advertises in welcome (AD16). */
+export const BRIDGE_FEATURES = [AGENTS_FEATURE];
 
 /**
  * Commands that only read, so re-running one is harmless. When a newer socket from the same extension
@@ -138,6 +145,7 @@ export class Daemon {
   readonly auth: Auth;
   readonly captcha: CaptchaBridge;
   readonly handoff: HandoffBridge;
+  readonly agents: AgentsBridge;
   readonly downloads = new SessionDownloads();
   private wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private ext: ExtConn | null = null;
@@ -161,6 +169,7 @@ export class Daemon {
     this.auth = opts.auth ?? createAuth({ inFlight: (id) => this.pending.get(id), audit: this.audit, log: this.log, now: this.now });
     this.captcha = createCaptcha({ log: this.log, now: this.now, ...opts.captcha, inFlight: (id) => this.pending.get(id), audit: this.audit });
     this.port = cfg.port;
+    this.agents = new AgentsBridge({ now: this.now, ...opts.agents });
     this.handoff = new HandoffBridge({
       inFlight: (id) => this.pending.get(id),
       sendTo: (ws, m) => this.sendTo(ws as WebSocket, m as unknown as BridgeToExt),
@@ -308,7 +317,7 @@ export class Daemon {
     const known = this.cfg.extensionIds.includes(extId);
     if (hello.secret && hello.secret === this.cfg.secret && known) {
       this.attachExt(ws, extId, hello.extensionVersion, hello.features);
-      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION });
+      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION, features: BRIDGE_FEATURES });
       return true;
     }
     if (hello.pairCode) {
@@ -326,7 +335,7 @@ export class Daemon {
       if (!known) this.cfg.extensionIds.push(extId);
       saveConfig(this.cfg);
       this.attachExt(ws, extId, hello.extensionVersion, hello.features);
-      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION, secret: this.cfg.secret });
+      this.sendTo(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, bridgeVersion: BRIDGE_VERSION, secret: this.cfg.secret, features: BRIDGE_FEATURES });
       this.log(`Paired with extension ${extId}`);
       return true;
     }
@@ -400,6 +409,8 @@ export class Daemon {
     if (this.auth.bridge.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     if (this.captcha.onExtMessage(msg, ws, (m) => this.sendTo(ws, m as unknown as BridgeToExt))) return;
     if (this.handoff.onExtMessage(msg, ws)) return;
+    // AD2/AD14: agents.* only on the current paired extension socket.
+    if (this.ext?.ws === ws && this.agents.onExtMessage(msg, (m) => this.sendTo(ws, m))) return;
     switch (msg?.type) {
       case "ping":
         this.sendTo(ws, { type: "pong" });

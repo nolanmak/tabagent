@@ -8,6 +8,8 @@ export interface SiteCheckState {
   sites: Record<string, { auth?: boolean; policy?: string } | undefined>;
   denylist: string[];
   authDenyHosts: string[];
+  /** YOLO turns sign-in on for every origin without an explicit choice (#110). */
+  yolo?: boolean;
 }
 
 export function checkAuthSite(st: SiteCheckState, url: string): string {
@@ -23,6 +25,6 @@ export function checkAuthSite(st: SiteCheckState, url: string): string {
   if (st.denylist.some((g) => hostMatches(g, host))) throw new TabAgentError("PERMISSION_DENIED", `${host} is on the TabAgent denylist`, "The user can remove it from the denylist in the side panel.");
   const e = st.sites[u.origin];
   if (e?.policy === "deny") throw new TabAgentError("PERMISSION_DENIED", `${u.origin} is denied`);
-  if (!authEnabled(e, u.origin)) throw new TabAgentError("PERMISSION_DENIED", `Sign-in is not enabled for ${u.origin}`, "The user can enable sign-in for this site in the TabAgent side panel.");
+  if (!authEnabled(e, u.origin, st.yolo)) throw new TabAgentError("PERMISSION_DENIED", `Sign-in is not enabled for ${u.origin}`, "The user can enable sign-in for this site in the TabAgent side panel.");
   return u.origin;
 }
